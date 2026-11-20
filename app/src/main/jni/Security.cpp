@@ -384,7 +384,7 @@ Java_com_android_support_SecurityNative_verifySessionToken(
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_android_support_SecurityNative_getUpdateUrl(JNIEnv* env, jclass) {
     std::string url;
-    url += OBF_STR("https://modx-lab-5a6ee");
+    url += OBF_STR("https://modx-lab-a5e41");
     url += OBF_STR("-default-rtdb.firebaseio.com");
     url += OBF_STR("/update.json");
     return env->NewStringUTF(url.c_str());
