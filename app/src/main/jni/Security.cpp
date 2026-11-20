@@ -400,10 +400,10 @@ Java_com_android_support_SecurityNative_getAppwriteEndpoint(JNIEnv* env, jclass)
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_android_support_SecurityNative_getAppwriteProjectId(JNIEnv* env, jclass) {
-    return env->NewStringUTF(OBF_STR("modxlab"));
+    return env->NewStringUTF(OBF_STR("6b00580c000a55b46807"));
 }
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_android_support_SecurityNative_getVerifyLoginFunctionId(JNIEnv* env, jclass) {
-    return env->NewStringUTF(OBF_STR("6ab760b0200276b627cbe"));
+    return env->NewStringUTF(OBF_STR("6b005c0f000b971d589f"));
 }

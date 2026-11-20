@@ -2,18 +2,26 @@
 'use strict';
 
 /**
- * One-time migration & key generation utility:
+ * One-time migration, key generation & user creation utility:
  *
  * 1) Generate an Ed25519 keypair (never touches Firebase):
  *      node scripts/migrate-passwords.js --gen-keys
  *
- * 2) Dry-run password migration (shows what would be hashed):
- *      FIREBASE_DB_URL="https://modx-lab-5a6ee-default-rtdb.firebaseio.com" \
+ * 2) Hash a single password (for pasting into Firebase Console):
+ *      node scripts/migrate-passwords.js --hash "YourPassword"
+ *
+ * 3) Add a new user directly to Firebase RTDB /User (with salted scrypt hash):
+ *      FIREBASE_DB_URL="https://modx-lab-a5e41-default-rtdb.firebaseio.com" \
+ *      FIREBASE_SERVICE_ACCOUNT_FILE="./service-account.json" \
+ *      node scripts/migrate-passwords.js --add-user testuser TestPass123 30
+ *
+ * 4) Dry-run password migration (shows what would be hashed):
+ *      FIREBASE_DB_URL="https://modx-lab-a5e41-default-rtdb.firebaseio.com" \
  *      FIREBASE_SERVICE_ACCOUNT_FILE="./service-account.json" \
  *      node scripts/migrate-passwords.js --dry-run
  *
- * 3) Execute password migration (writes passHash and deletes plaintext pass):
- *      FIREBASE_DB_URL="https://modx-lab-5a6ee-default-rtdb.firebaseio.com" \
+ * 5) Execute password migration (writes passHash and deletes plaintext pass):
+ *      FIREBASE_DB_URL="https://modx-lab-a5e41-default-rtdb.firebaseio.com" \
  *      FIREBASE_SERVICE_ACCOUNT_FILE="./service-account.json" \
  *      node scripts/migrate-passwords.js
  *
@@ -121,9 +129,49 @@ async function getFirebaseAuth() {
 }
 
 async function main() {
-  const args = new Set(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const args = new Set(argv);
   if (args.has('--gen-keys')) {
     generateEd25519Keypair();
+    return;
+  }
+
+  const hashIdx = argv.indexOf('--hash');
+  if (hashIdx !== -1) {
+    const pw = argv[hashIdx + 1];
+    if (!pw) throw new Error('Usage: node scripts/migrate-passwords.js --hash "<password>"');
+    console.log(await hashPasswordScrypt(pw));
+    return;
+  }
+
+  const addIdx = argv.indexOf('--add-user');
+  if (addIdx !== -1) {
+    const rawUser = argv[addIdx + 1];
+    const rawPass = argv[addIdx + 2];
+    const days = Number(argv[addIdx + 3] || 30);
+    if (!rawUser || !rawPass || !Number.isFinite(days) || days <= 0) {
+      throw new Error('Usage: node scripts/migrate-passwords.js --add-user <username> <password> [days]');
+    }
+    const dbUrl = (process.env.FIREBASE_DB_URL || '').trim().replace(/\/+$/, '');
+    if (!dbUrl) throw new Error('FIREBASE_DB_URL is required');
+    const { headers: authHeaders, queryAuth } = await getFirebaseAuth();
+    const buildUrl = (p) => (queryAuth ? `${dbUrl}${p}?${queryAuth}` : `${dbUrl}${p}`);
+    const username = rawUser.trim().toLowerCase();
+    const safeNode = username.replace(/[.#$\[\]\/]/g, '_');
+    const passHash = await hashPasswordScrypt(rawPass);
+    const putRes = await fetch(buildUrl(`/User/${encodeURIComponent(safeNode)}.json`), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({
+        user: username,
+        passHash,
+        status: 'true',
+        rgtime: Date.now(),
+        duration_days: days,
+      }),
+    });
+    if (!putRes.ok) throw new Error(`Failed to create user: HTTP ${putRes.status}`);
+    console.log(`[CREATED] /User/${safeNode} (user=${username}, duration_days=${days})`);
     return;
   }
 

@@ -1,9 +1,9 @@
 {
-  "projectId": "modxlab",
+  "projectId": "6b00580c000a55b46807",
   "endpoint": "https://sgp.cloud.appwrite.io/v1",
   "functions": [
     {
-      "$id": "6ab760b0200276b627cbe",
+      "$id": "6b005c0f000b971d589f",
       "execute": [
         "users"
       ],
