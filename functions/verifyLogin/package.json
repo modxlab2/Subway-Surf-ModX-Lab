@@ -1,0 +1,9 @@
+{
+  "name": "verify-login",
+  "version": "1.0.0",
+  "description": "Server-side login verification and Ed25519 token issuer for ModXLab",
+  "main": "main.js",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

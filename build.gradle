@@ -11,7 +11,7 @@ buildscript {
     }
     dependencies {
         // Android Gradle Plugin
-        classpath 'com.android.tools.build:gradle:8.6.1'
+        classpath 'com.android.tools.build:gradle:9.1.1'
 
         // (Optional) Firebase / Google Services — only if you add them later
         // classpath 'com.google.gms:google-services:4.4.2'

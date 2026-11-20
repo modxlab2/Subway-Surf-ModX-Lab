@@ -24,6 +24,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.text.method.PasswordTransformationMethod;
@@ -53,6 +54,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONObject;
+
+import java.util.UUID;
 
 public class LoginHelper {
 
@@ -121,6 +124,7 @@ public class LoginHelper {
         this.callback = cb;
         this.save = context.getSharedPreferences("save", Context.MODE_PRIVATE);
         this.KEY = context.getSharedPreferences("KEY", Context.MODE_PRIVATE);
+        this.save.edit().remove("edittext2").apply();
         this.tfRegular = Typeface.create("sans-serif", Typeface.NORMAL);
         this.tfMedium  = Typeface.create("sans-serif-medium", Typeface.NORMAL);
         this.tfBold    = Typeface.create("sans-serif", Typeface.BOLD);
@@ -248,12 +252,20 @@ public class LoginHelper {
         rememberCb.setListener(new CheckListener() {
             @Override
             public void onChanged(boolean checked) {
+                save.edit().remove("edittext2").apply();
                 if (checked) {
-                    save.edit().putString("edittext1", editUser.getText().toString()).apply();
-                    save.edit().putString("edittext2", editPass.getText().toString()).apply();
+                    String u = editUser.getText().toString().trim().toLowerCase();
+                    if (!TextUtils.isEmpty(u)) {
+                        save.edit().putString("edittext1", u).apply();
+                    }
                 } else {
                     save.edit().remove("edittext1").apply();
-                    save.edit().remove("edittext2").apply();
+                    KEY.edit()
+                            .remove("token")
+                            .remove("User")
+                            .remove("Status")
+                            .remove("expiry")
+                            .apply();
                 }
             }
         });
@@ -325,12 +337,27 @@ public class LoginHelper {
             }
         });
 
-        String u = save.getString("edittext1", "");
-        String p = save.getString("edittext2", "");
-        if (!u.isEmpty() && !p.isEmpty()) {
-            editUser.setText(u);
-            editPass.setText(p);
+        save.edit().remove("edittext2").apply();
+        final String savedUser = save.getString("edittext1", "");
+        final String savedToken = KEY.getString("token", "");
+        final String tokenUser = KEY.getString("User", "");
+        if (!savedUser.isEmpty()) {
+            editUser.setText(savedUser);
             rememberCb.setChecked(true);
+            if (!TextUtils.isEmpty(savedToken) && !TextUtils.isEmpty(tokenUser)) {
+                final String devId = getOrCreateDeviceId();
+                if (SecurityNative.verifySessionToken(savedToken, tokenUser, devId)) {
+                    wrapper.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            setStatus("Resuming session...", COLOR_SUCCESS);
+                            checkUpdateAfterLogin();
+                        }
+                    });
+                }
+            }
+        } else {
+            KEY.edit().remove("token").remove("User").remove("Status").remove("expiry").apply();
         }
 
         wrapper.addView(root, new FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
@@ -829,6 +856,33 @@ public class LoginHelper {
         }
     }
 
+    private String getOrCreateDeviceId() {
+        String cached = KEY.getString("device_id", "");
+        if (!TextUtils.isEmpty(cached)) return cached;
+
+        String raw = "";
+        try {
+            raw = Settings.Secure.getString(ctx.getContentResolver(), Settings.Secure.ANDROID_ID);
+        } catch (Exception ignored) { }
+
+        StringBuilder clean = new StringBuilder();
+        if (raw != null) {
+            for (int i = 0; i < raw.length() && clean.length() < 64; i++) {
+                char c = raw.charAt(i);
+                if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')
+                        || (c >= 'A' && c <= 'Z') || c == '_' || c == '-') {
+                    clean.append(c);
+                }
+            }
+        }
+        String id = clean.toString();
+        if (TextUtils.isEmpty(id)) {
+            id = UUID.randomUUID().toString().replace("-", "");
+        }
+        KEY.edit().putString("device_id", id).apply();
+        return id;
+    }
+
     private void performLogin() {
         if (loginInProgress) return;
 
@@ -845,33 +899,46 @@ public class LoginHelper {
         loginBtn.setText("SIGNING IN...");
         setStatus("Verifying credentials...", COLOR_ACCENT_HI);
 
-        save.edit().putString("edittext1", inputUser).apply();
-        save.edit().putString("edittext2", inputPass).apply();
+        save.edit().remove("edittext2").apply();
+        if (rememberCb != null && rememberCb.isChecked()) {
+            save.edit().putString("edittext1", inputUser).apply();
+        } else {
+            save.edit().remove("edittext1").apply();
+        }
+
+        final String deviceId = getOrCreateDeviceId();
 
         new Thread(new Runnable() {
             @Override
             public void run() {
-                JSONObject matched = ModFirebase.fetchUserByUsername(inputUser);
-                final String userJson = (matched == null) ? "" : matched.toString();
-                final String resultJson = SecurityNative.verifyLogin(inputUser, inputPass, userJson);
+                final JSONObject r = ModFirebase.login(ctx, inputUser, inputPass, deviceId);
 
                 boolean ok = false;
                 String reason = "network";
                 String token = "", userOut = "", statusOut = "", expiryOut = "";
-                try {
-                    JSONObject r = new JSONObject(resultJson);
+                int retryAfterSec = 0;
+
+                if (r != null) {
                     ok = r.optBoolean("ok", false);
                     reason = r.optString("reason", "unknown");
                     token = r.optString("token", "");
                     userOut = r.optString("user", "");
                     statusOut = r.optString("status", "");
                     expiryOut = r.optString("expiry", "");
-                } catch (Exception e) {
-                    ok = false; reason = "network";
+                    retryAfterSec = r.optInt("retryAfterSec", 0);
+                }
+
+                if (ok) {
+                    if (TextUtils.isEmpty(token) || TextUtils.isEmpty(userOut)
+                            || !SecurityNative.verifySessionToken(token, userOut, deviceId)) {
+                        ok = false;
+                        reason = "session_invalid";
+                    }
                 }
 
                 if (!ok) {
                     final String fReason = reason;
+                    final int fRetry = retryAfterSec;
                     loginInProgress = false;
                     new Handler(Looper.getMainLooper()).post(new Runnable() {
                         @Override
@@ -884,9 +951,22 @@ public class LoginHelper {
                             } else if ("blocked".equals(fReason)) {
                                 setStatus("Account blocked", COLOR_DANGER);
                                 showKeyExpiredDialog();
+                            } else if ("device_mismatch".equals(fReason)) {
+                                setStatus("Registered to another device", COLOR_DANGER);
+                            } else if ("rate_limited".equals(fReason)) {
+                                if (fRetry >= 60) {
+                                    int mins = (fRetry + 59) / 60;
+                                    setStatus("Too many attempts. Try again in " + mins + " min", COLOR_DANGER);
+                                } else if (fRetry > 0) {
+                                    setStatus("Too many attempts. Try again in " + fRetry + "s", COLOR_DANGER);
+                                } else {
+                                    setStatus("Too many attempts. Try again later", COLOR_DANGER);
+                                }
                             } else if ("no_match".equals(fReason)
                                     || "invalid_credentials".equals(fReason)) {
                                 setStatus("Invalid username or password", COLOR_DANGER);
+                            } else if ("session_invalid".equals(fReason)) {
+                                setStatus("Invalid server signature", COLOR_DANGER);
                             } else if ("network".equals(fReason)) {
                                 setStatus("Connection failed", COLOR_DANGER);
                             } else {
@@ -898,10 +978,12 @@ public class LoginHelper {
                 }
 
                 try {
-                    KEY.edit().putString("User",     userOut).apply();
-                    KEY.edit().putString("Status",   statusOut).apply();
-                    KEY.edit().putString("expiry",   expiryOut).apply();
-                    KEY.edit().putString("token",    token).apply();
+                    KEY.edit()
+                            .putString("User", userOut)
+                            .putString("Status", statusOut)
+                            .putString("expiry", expiryOut)
+                            .putString("token", token)
+                            .apply();
                 } catch (Exception ignored) { }
 
                 loginInProgress = false;
@@ -950,8 +1032,7 @@ public class LoginHelper {
     private void proceedToMenu() {
         final String token = KEY.getString("token", "");
         final String user = KEY.getString("User", "");
-        final String pass = save.getString("edittext2", "");
-        final String expiry = KEY.getString("expiry", "");
+        final String deviceId = getOrCreateDeviceId();
 
         if (token == null || token.isEmpty()) {
             new Handler(Looper.getMainLooper()).post(new Runnable() {
@@ -959,9 +1040,9 @@ public class LoginHelper {
             });
             return;
         }
-        if (!SecurityNative.verifySessionToken(token, user, pass, expiry)) {
+        if (!SecurityNative.verifySessionToken(token, user, deviceId)) {
             new Handler(Looper.getMainLooper()).post(new Runnable() {
-                @Override public void run() { setStatus("Session tampered", COLOR_DANGER); }
+                @Override public void run() { setStatus("Session invalid or expired", COLOR_DANGER); }
             });
             return;
         }

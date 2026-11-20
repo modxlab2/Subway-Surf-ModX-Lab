@@ -59,8 +59,10 @@ import android.view.animation.DecelerateInterpolator;
 import android.view.animation.LinearInterpolator;
 import android.view.animation.OvershootInterpolator;
 import android.view.inputmethod.InputMethodManager;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -396,17 +398,12 @@ if (initH < loginMinH && screenH() > loginMinH + effectivePosY) {
         startimage.setImageBitmap(BitmapFactory.decodeByteArray(decode, 0, decode.length));
         startimage.setOnTouchListener(onTouchListener());
 
-        WebView wView = new WebView(context);
-        wView.setLayoutParams(new FrameLayout.LayoutParams(iconPx, iconPx, Gravity.CENTER));
-        wView.loadData("<html><head></head><body style=\"margin:0;padding:0\">" + "<img src=\"" + IconWebViewData() + "\" width=\"" + ICON_SIZE + "\" height=\"" + ICON_SIZE + "\"></body></html>", "text/html", "utf-8");
-        wView.setBackgroundColor(0x00000000);
-        wView.setAlpha(ICON_ALPHA);
-        wView.getSettings().setCacheMode(WebSettings.LOAD_NO_CACHE);
-        wView.setOnTouchListener(onTouchListener());
-
+        final String iconWebData = IconWebViewData();
+        WebView wView = null;
+        ViewOutlineProvider iconOutline = null;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             final float iconRadius = iconPx * ICON_CORNER_FRACTION;
-            ViewOutlineProvider iconOutline = new ViewOutlineProvider() {
+            iconOutline = new ViewOutlineProvider() {
                 @Override
                 public void getOutline(View view, Outline outline) {
                     outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), iconRadius);
@@ -414,8 +411,33 @@ if (initH < loginMinH && screenH() > loginMinH + effectivePosY) {
             };
             startimage.setOutlineProvider(iconOutline);
             startimage.setClipToOutline(true);
-            wView.setOutlineProvider(iconOutline);
-            wView.setClipToOutline(true);
+        }
+
+        if (iconWebData != null && !iconWebData.isEmpty()) {
+            wView = new WebView(context);
+            wView.setLayoutParams(new FrameLayout.LayoutParams(iconPx, iconPx, Gravity.CENTER));
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                wView.setWebViewClient(new WebViewClient() {
+                    @Override
+                    public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                        ViewParent parent = view.getParent();
+                        if (parent instanceof ViewGroup) {
+                            ((ViewGroup) parent).removeView(view);
+                        }
+                        view.destroy();
+                        return true;
+                    }
+                });
+            }
+            wView.loadData("<html><head></head><body style=\"margin:0;padding:0\">" + "<img src=\"" + iconWebData + "\" width=\"" + ICON_SIZE + "\" height=\"" + ICON_SIZE + "\"></body></html>", "text/html", "utf-8");
+            wView.setBackgroundColor(0x00000000);
+            wView.setAlpha(ICON_ALPHA);
+            wView.getSettings().setCacheMode(WebSettings.LOAD_NO_CACHE);
+            wView.setOnTouchListener(onTouchListener());
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && iconOutline != null) {
+                wView.setOutlineProvider(iconOutline);
+                wView.setClipToOutline(true);
+            }
         }
 
         FrameLayout iconHolder = new FrameLayout(context);
@@ -625,7 +647,7 @@ mExpanded.addView(shimmer);
         mRootContainer.addView(mCollapsed);
         mRootContainer.addView(menuFrame);
 
-        if (IconWebViewData() != null) {
+        if (wView != null) {
             iconHolder.addView(wView);
         } else {
             iconHolder.addView(startimage);
@@ -3798,6 +3820,19 @@ private void TextView(LinearLayout linLayout, int featNum, String text, boolean 
 
     private void WebTextView(LinearLayout linLayout, String text) {
         WebView wView = new WebView(getContext);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            wView.setWebViewClient(new WebViewClient() {
+                @Override
+                public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                    ViewParent parent = view.getParent();
+                    if (parent instanceof ViewGroup) {
+                        ((ViewGroup) parent).removeView(view);
+                    }
+                    view.destroy();
+                    return true;
+                }
+            });
+        }
         wView.loadData(text, "text/html", "utf-8");
         wView.setBackgroundColor(0x00000000);
         wView.setPadding(0, dp(4), 0, dp(4));

@@ -15,12 +15,6 @@ import java.util.zip.ZipFile;
 
 /**
  * SecurityNative — silent security bridge to libModXLab.so
- *
- * Design:
- *   - Single entry point: preload(ctx, isDebug)
- *   - No descriptive strings anywhere
- *   - No user-visible messages
- *   - Returns boolean only
  */
 public final class SecurityNative {
 
@@ -31,16 +25,6 @@ public final class SecurityNative {
         }
     }
 
-    // =================================================================
-    // SILENT ENTRY POINT
-    // =================================================================
-
-    /**
-     * Compute signature + DEX hashes in Java, then pass them to native
-     * for constant-time comparison against embedded expected values.
-     *
-     * Returns true only if all checks pass.
-     */
     public static boolean preload(Context ctx, boolean isDebug) {
         try {
             String s = sigHash(ctx);
@@ -53,14 +37,9 @@ public final class SecurityNative {
         }
     }
 
-    /** Native: verify signature + dex hashes + environment. */
     private static native boolean verifyHashes(String sigHash,
                                                String dexHash,
                                                boolean isDebug);
-
-    // =================================================================
-    // HASH COMPUTATION (Java side)
-    // =================================================================
 
     private static String sigHash(Context ctx) {
         try {
@@ -98,7 +77,6 @@ public final class SecurityNative {
 
             MessageDigest md = MessageDigest.getInstance("SHA-256");
 
-            // Collect .dex names, sort for deterministic order
             List<String> names = new ArrayList<>();
             Enumeration<? extends ZipEntry> en = z.entries();
             while (en.hasMoreElements()) {
@@ -108,7 +86,6 @@ public final class SecurityNative {
             Collections.sort(names);
             if (names.isEmpty()) return null;
 
-            // Hash each dex in sorted order
             byte[] buf = new byte[16384];
             for (String n : names) {
                 ZipEntry e = z.getEntry(n);
@@ -146,17 +123,15 @@ public final class SecurityNative {
     }
 
     // =================================================================
-    // Login APIs (used by LoginHelper / ModFirebase)
+    // Ed25519 Session Token & Obfuscated Config APIs
     // =================================================================
-    public static native String  verifyLogin(String inputUser,
-                                             String inputPass,
-                                             String userJson);
     public static native boolean verifySessionToken(String token,
                                                     String user,
-                                                    String pass,
-                                                    String expiry);
-    public static native String  getQueryUrl(String username);
-    public static native String  getUpdateUrl();
+                                                    String deviceId);
+    public static native String getUpdateUrl();
+    public static native String getAppwriteEndpoint();
+    public static native String getAppwriteProjectId();
+    public static native String getVerifyLoginFunctionId();
 
     private SecurityNative() { }
 }
