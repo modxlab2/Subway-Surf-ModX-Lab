@@ -1,0 +1,9 @@
+{
+  "name": "admin-panel",
+  "version": "1.0.0",
+  "description": "Private mobile-friendly Admin Panel Appwrite function for managing ModXLab users in Firebase RTDB",
+  "main": "main.js",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
