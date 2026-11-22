@@ -30,18 +30,15 @@ public final class PinnedHttp {
 
     private static final boolean ENFORCE_PINS = true;
 
-    // Endpoint-specific SPKI SHA-256 pins (Base64): leaf or intermediate + 1 backup pin.
-    // Obtain live pins before release build with:
-    //   openssl s_client -servername <host> -connect <host>:443 -showcerts </dev/null 2>/dev/null \
-    //     | openssl x509 -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64
+    // Endpoint-specific SPKI SHA-256 pins (Base64): intermediate CA + leaf backup pin.
     private static final String[] FIREBASE_PINS = {
-            "__FIREBASE_SPKI_PIN_1__",
-            "__FIREBASE_SPKI_BACKUP_PIN__"
+            "yDu9og255NN5GEf+Bwa9rTrqFQ0EydZ0r1FCh9TdAW4=",
+            "GCcSISJfxoi/efNtgJJf9PIBy99dfmaA59y/dH2niKs="
     };
 
     private static final String[] APPWRITE_PINS = {
-            "__APPWRITE_SPKI_PIN_1__",
-            "__APPWRITE_SPKI_BACKUP_PIN__"
+            "oW7smChMJRcnzTObF7K+HzInReAPTxB/L1h6eZTmw9Q=",
+            "5GonF/tvwb2QR5Xx1FH50B8Ek/Lc15olTW82TEkdwTs="
     };
 
     private static volatile SSLSocketFactory sFirebaseFactory = null;
