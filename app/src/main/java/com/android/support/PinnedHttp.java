@@ -1,13 +1,13 @@
 package com.android.support;
 
 import android.util.Base64;
-import android.util.Log;
 
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.URL;
+import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.security.cert.CertificateException;
@@ -20,35 +20,32 @@ import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509TrustManager;
 
 /**
- * PinnedHttp — HTTPS client.
- *
- * - get(): performs pinned HTTPS GET for Firebase RTDB (/update.json)
- * - postJson(): performs standard system-verified HTTPS POST for Appwrite Functions
+ * PinnedHttp — Certificate-pinned HTTPS client with system trust-chain validation.
  */
 public final class PinnedHttp {
 
-    private static final String TAG = "ModXLab_Http";
-
-    // Set to false temporarily if Google rotates certs and pins fail
     private static final boolean ENFORCE_PINS = true;
 
-    private static final String[] PINS = {
-            // Google Trust Services Root R1
-            "hxqRlPTu1bMS/0DITB1SSu0vd4u/8l8TjPgfaAp63Gc=",
-            // Google Trust Services Root R2
-            "Vfd95BwDeSQo+NUYxVEEIlvkOlWY2SalKK1lPhzOx78=",
-            // Google Trust Services Root R3
-            "QXnt2YHvdHR3tJYmQIr0Paosp6t/nggsEGD4QJZ3Q0g=",
-            // Google Trust Services Root R4
-            "mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c=",
-            // GlobalSign Root CA - R2 (older Firebase chains)
-            "iie1VXtL7HzAMF+/PVPR9xzT80kQxdZeJ+zduCB3uj0=",
+    // Endpoint-specific SPKI SHA-256 pins (Base64): leaf or intermediate + 1 backup pin.
+    // Obtain live pins before release build with:
+    //   openssl s_client -servername <host> -connect <host>:443 -showcerts </dev/null 2>/dev/null \
+    //     | openssl x509 -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64
+    private static final String[] FIREBASE_PINS = {
+            "__FIREBASE_SPKI_PIN_1__",
+            "__FIREBASE_SPKI_BACKUP_PIN__"
     };
 
-    private static volatile SSLSocketFactory sFactory = null;
+    private static final String[] APPWRITE_PINS = {
+            "__APPWRITE_SPKI_PIN_1__",
+            "__APPWRITE_SPKI_BACKUP_PIN__"
+    };
+
+    private static volatile SSLSocketFactory sFirebaseFactory = null;
+    private static volatile SSLSocketFactory sAppwriteFactory = null;
     private static final Object sLock = new Object();
 
     private PinnedHttp() { }
@@ -73,13 +70,14 @@ public final class PinnedHttp {
 
         HttpsURLConnection conn = null;
         try {
-            SSLSocketFactory factory = getFactory();
-
             URL url = new URL(urlStr);
             if (!"https".equalsIgnoreCase(url.getProtocol())) return null;
 
+            SSLSocketFactory factory = getFactoryForHost(url.getHost());
+            if (factory == null) return null;
+
             conn = (HttpsURLConnection) url.openConnection();
-            if (factory != null) conn.setSSLSocketFactory(factory);
+            conn.setSSLSocketFactory(factory);
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(10000);
             conn.setReadTimeout(10000);
@@ -89,13 +87,11 @@ public final class PinnedHttp {
 
             int code = conn.getResponseCode();
             if (code != 200) {
-                Log.w(TAG, "HTTP " + code + " for GET");
                 return null;
             }
 
             return readStream(conn.getInputStream());
         } catch (Exception e) {
-            Log.e(TAG, "get failed: " + e.getMessage());
             return null;
         } finally {
             if (conn != null) try { conn.disconnect(); } catch (Exception ignored) { }
@@ -103,7 +99,7 @@ public final class PinnedHttp {
     }
 
     /**
-     * Performs a system-CA-verified HTTPS POST with a JSON body.
+     * Performs a pinned HTTPS POST with a JSON body.
      */
     public static HttpResponse postJson(String urlStr, String jsonBody, Map<String, String> headers) {
         if (urlStr == null || urlStr.isEmpty()) return null;
@@ -113,7 +109,11 @@ public final class PinnedHttp {
             URL url = new URL(urlStr);
             if (!"https".equalsIgnoreCase(url.getProtocol())) return null;
 
+            SSLSocketFactory factory = getFactoryForHost(url.getHost());
+            if (factory == null) return null;
+
             conn = (HttpsURLConnection) url.openConnection();
+            conn.setSSLSocketFactory(factory);
             conn.setRequestMethod("POST");
             conn.setConnectTimeout(15000);
             conn.setReadTimeout(15000);
@@ -156,7 +156,6 @@ public final class PinnedHttp {
             }
             return new HttpResponse(code, body, cookies);
         } catch (Exception e) {
-            Log.e(TAG, "postJson failed: " + e.getMessage());
             return null;
         } finally {
             if (conn != null) try { conn.disconnect(); } catch (Exception ignored) { }
@@ -172,50 +171,94 @@ public final class PinnedHttp {
         return sb.toString();
     }
 
-    private static SSLSocketFactory getFactory() {
-        if (sFactory != null) return sFactory;
-        synchronized (sLock) {
-            if (sFactory != null) return sFactory;
-            try {
-                SSLContext ctx = SSLContext.getInstance("TLS");
-                ctx.init(null,
-                        new TrustManager[]{ new PinTrustManager() },
-                        new SecureRandom());
-                sFactory = ctx.getSocketFactory();
-            } catch (Exception e) {
-                Log.e(TAG, "SSLContext init failed: " + e.getMessage());
+    private static SSLSocketFactory getFactoryForHost(String host) {
+        if (host == null) return null;
+        String lower = host.toLowerCase();
+        boolean isAppwrite = lower.endsWith(".appwrite.io") || lower.equals("appwrite.io");
+        if (isAppwrite) {
+            if (sAppwriteFactory != null) return sAppwriteFactory;
+            synchronized (sLock) {
+                if (sAppwriteFactory == null) {
+                    sAppwriteFactory = buildFactory(APPWRITE_PINS);
+                }
+                return sAppwriteFactory;
             }
-            return sFactory;
+        }
+        if (sFirebaseFactory != null) return sFirebaseFactory;
+        synchronized (sLock) {
+            if (sFirebaseFactory == null) {
+                sFirebaseFactory = buildFactory(FIREBASE_PINS);
+            }
+            return sFirebaseFactory;
+        }
+    }
+
+    private static SSLSocketFactory buildFactory(String[] pins) {
+        try {
+            TrustManagerFactory tmf = TrustManagerFactory.getInstance(
+                    TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init((KeyStore) null);
+            X509TrustManager systemTm = null;
+            for (TrustManager tm : tmf.getTrustManagers()) {
+                if (tm instanceof X509TrustManager) {
+                    systemTm = (X509TrustManager) tm;
+                    break;
+                }
+            }
+            if (systemTm == null) return null;
+
+            SSLContext ctx = SSLContext.getInstance("TLS");
+            ctx.init(null,
+                    new TrustManager[]{ new PinTrustManager(systemTm, pins) },
+                    new SecureRandom());
+            return ctx.getSocketFactory();
+        } catch (Exception e) {
+            return null;
         }
     }
 
     private static final class PinTrustManager implements X509TrustManager {
+        private final X509TrustManager delegate;
+        private final String[] pins;
+
+        PinTrustManager(X509TrustManager delegate, String[] pins) {
+            this.delegate = delegate;
+            this.pins = pins;
+        }
 
         @Override
         public void checkClientTrusted(X509Certificate[] chain, String authType)
                 throws CertificateException {
+            delegate.checkClientTrusted(chain, authType);
         }
 
         @Override
         public void checkServerTrusted(X509Certificate[] chain, String authType)
                 throws CertificateException {
+            delegate.checkServerTrusted(chain, authType);
             if (!ENFORCE_PINS) return;
-            if (chain == null || chain.length == 0) {
-                throw new CertificateException("Empty certificate chain");
+            if (chain == null || chain.length == 0 || pins == null || pins.length == 0) {
+                throw new CertificateException("Empty certificate chain or pin set");
             }
             for (X509Certificate cert : chain) {
                 String spki = spkiSha256Base64(cert);
                 if (spki == null) continue;
-                for (String pin : PINS) {
-                    if (pin.equals(spki)) return;
+                for (String pin : pins) {
+                    if (isValidPin(pin) && pin.equals(spki)) {
+                        return;
+                    }
                 }
             }
-            throw new CertificateException("No matching pin in certificate chain");
+            throw new CertificateException("No matching endpoint SPKI pin in chain");
         }
 
         @Override
         public X509Certificate[] getAcceptedIssuers() {
-            return new X509Certificate[0];
+            return delegate.getAcceptedIssuers();
+        }
+
+        private static boolean isValidPin(String pin) {
+            return pin != null && !pin.isEmpty() && !pin.startsWith("__") && pin.length() >= 40;
         }
 
         private static String spkiSha256Base64(X509Certificate cert) {

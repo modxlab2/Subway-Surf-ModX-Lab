@@ -2,13 +2,22 @@
 #include "Menu/Jni.hpp"
 #include "Menu/Menu.hpp"
 #include "Includes/Utils.hpp"
+#include "SecurityGuard.hpp"
 #include <jni.h>
+#include <unistd.h>
 
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_android_support_Main_setNativeCrashDir(JNIEnv*, jclass, jstring);
 
 void Init(JNIEnv *env, jobject thiz, jobject ctx, jobject title, jobject subtitle) {
+    (void)thiz;
+    if (!SecurityGuard::verifyPathMenuInit(env, ctx)) {
+        setText(env, title, OBFUSCATE(""));
+        setText(env, subtitle, OBFUSCATE(""));
+        return;
+    }
+
     //Set title
     setText(env, title, OBFUSCATE("<b>ModX Lab</b>"));
 
@@ -85,8 +94,12 @@ int RegisterMain(JNIEnv *env) {
 extern "C"
 JNIEXPORT jint JNICALL
 JNI_OnLoad(JavaVM *vm, void *reserved) {
-    JNIEnv *env;
-    vm->GetEnv((void **) &env, JNI_VERSION_1_6);
+    (void)reserved;
+    JNIEnv *env = nullptr;
+    if (vm->GetEnv((void **) &env, JNI_VERSION_1_6) != JNI_OK || !env)
+        return JNI_ERR;
+    if (!SecurityGuard::verifyPathOnLoad(vm, env))
+        return JNI_ERR;
     if (RegisterMenu(env) != 0)
         return JNI_ERR;
     if (RegisterPreferences(env) != 0)

@@ -53,7 +53,7 @@ LOCAL_LDFLAGS += \
     -Wl,-z,noexecstack \
     -llog
 
-LOCAL_LDLIBS := -llog -landroid -lEGL -lGLESv2 -ldl
+LOCAL_LDLIBS := -llog -landroid -lEGL -lGLESv2 -ldl -lz
 
 LOCAL_ARM_MODE := arm
 

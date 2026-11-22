@@ -28,6 +28,7 @@
 #include <unwind.h>
 
 #include "Chams.h"
+#include "SecurityGuard.hpp"
 
 #define LIB OBFUSCATE("libil2cpp.so")
 #define LOG_TAG "MODXLAB"
@@ -614,13 +615,53 @@ static bool new_HasAdAvailable(void* s, int adUnit) {
 }
 
 // ================================================================
-//  HEARTBEAT & PHASES
+//  LOCKDOWN RESET & HEARTBEAT
 // ================================================================
+static void resetAllFeaturesOnLockdown() {
+    g_JumpLimit.store(0);
+    g_JumpHeight.store(0);
+    g_AutoRevive.store(false);
+    g_PowerDuration.store(0);
+    g_FastLaneChange.store(false);
+    g_ScoreMultiplier.store(0);
+    g_UnlimitedCoins.store(false);
+    g_NoCollision.store(false);
+    g_NoImpact.store(false);
+    g_NoWall.store(false);
+    g_NoGravity.store(false);
+    g_FreezeCharacter.store(false);
+    g_CharacterSpeed.store(0);
+    g_AirJumpHeight.store(0);
+    g_CameraMode.store(0);
+    g_HideJetpack.store(false);
+    g_HidePogostick.store(false);
+    g_HideMagnet.store(false);
+    g_HideHoverboard.store(false);
+    g_StopTrains.store(false);
+    g_AddCoinsBonus.store(0);
+    g_AddKeysBonus.store(0);
+    g_AddScoreBonus.store(0);
+    g_UnlimitedPowerTime.store(false);
+    g_UnlimitedJetpackTime.store(false);
+    g_ReviveReward.store(false);
+    g_FreezeCoins.store(false);
+    g_FreezeScore.store(false);
+    g_ChamsEnabled = false;
+    enableRainbow = false;
+    if (g_UnlimitedShop.exchange(false)) {
+        applyIsIAPPatch(false);
+    }
+}
+
 static void* heartbeat_thread(void*) {
     int n = 0;
     while (true) {
-        sleep(60); n++;
+        sleep(20); n++;
         if (n == 1) markStartupComplete();
+        if (!SecurityGuard::periodicReverify() || !SecurityGuard::isReadyForHooks()) {
+            resetAllFeaturesOnLockdown();
+            _exit(1);
+        }
     }
     return nullptr;
 }
@@ -825,7 +866,11 @@ static void installPhase6() {
 void* hack_thread(void*) {
     g_BootStep = 3;
     while (!isLibraryLoaded(LIB)) sleep(1);
-    sleep(3);
+    sleep(2);
+
+    while (!SecurityGuard::isReadyForHooks()) {
+        sleep(1);
+    }
     g_BootStep = 4;
 
     g_BootStep = 5;
@@ -839,6 +884,12 @@ void* hack_thread(void*) {
     g_BootStep = 9;  installPhase4(); usleep(500*1000);
     g_BootStep = 10; installPhase5(); usleep(500*1000);
     g_BootStep = 11; installPhase6(); usleep(500*1000);
+
+    if (!SecurityGuard::isReadyForHooks()) {
+        resetAllFeaturesOnLockdown();
+        markStartupComplete();
+        _exit(1);
+    }
 
     g_BootStep = 13;
     RenderHook();
@@ -855,6 +906,9 @@ void* hack_thread(void*) {
 //  FEATURE LIST — REORDERED as requested
 // ================================================================
 jobjectArray GetFeatureList(JNIEnv* env, jobject) {
+    if (!SecurityGuard::verifyPathFeatureGate(env)) {
+        return (jobjectArray) env->NewObjectArray(0, env->FindClass(OBFUSCATE("java/lang/String")), env->NewStringUTF(""));
+    }
     jobjectArray ret;
     const char* features[] = {
         // ===== MAIN TAB =====
@@ -932,7 +986,11 @@ jobjectArray GetFeatureList(JNIEnv* env, jobject) {
 // ================================================================
 //  FEATURE CHANGES — with updated MODE logic
 // ================================================================
-void Changes(JNIEnv*, jclass, jobject, jint featNum, jstring, jint value, jlong, jboolean boolean, jstring) {
+void Changes(JNIEnv* env, jclass, jobject ctx, jint featNum, jstring, jint value, jlong, jboolean boolean, jstring) {
+    if (!SecurityGuard::verifyPathToggle(env, ctx, featNum)) {
+        resetAllFeaturesOnLockdown();
+        return;
+    }
     switch (featNum) {
         case 102: g_JumpLimit.store(value);        break;
         case 103: g_JumpHeight.store(value);       break;
@@ -1093,6 +1151,7 @@ void lib_main() {
     initLogging();
     g_BootStep = 2;
     installCrashHandler();
+    SecurityGuard::registerLockdownCallback(resetAllFeaturesOnLockdown);
     pthread_t ptid;
     pthread_create(&ptid, NULL, hack_thread, NULL);
 }

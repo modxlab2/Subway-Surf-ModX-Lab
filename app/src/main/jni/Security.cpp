@@ -1,16 +1,25 @@
 // ================================================================
-// Security.cpp — Silent Security & Ed25519 Token Verifier
+// Security.cpp — Native Multi-Path Integrity, APK/DEX Verifier & Ed25519 Gate
 //
-// Design:
-//   - NO user-visible strings
-//   - NO password comparison or signing secrets in client binary
-//   - Verifies server-issued Ed25519 tokens using ONLY public key
-//   - Appwrite endpoint / project / function IDs obfuscated at compile time
+// Security properties:
+//   - Debug vs Release decided strictly at compile time via -DDEBUG_BUILD
+//     (never passed from Java)
+//   - Release builds (!DEBUG_BUILD) FAIL CLOSED on all-zero or unreplaced hashes
+//   - Computes APK signing cert (APK Sig Block v2/v3 + PackageManager cross-check)
+//     and sorted .dex SHA-256 natively in C++ from ApplicationInfo.sourceDir /
+//     getPackageCodePath() / /proc/self/maps
+//   - Multi-path checks with split obfuscated state words and periodic background
+//     re-verification thread
+//   - Feature hooks and toggles gated behind BOTH native verified state and a
+//     valid Ed25519 server token
 // ================================================================
 
 #include <jni.h>
 #include <string>
 #include <vector>
+#include <algorithm>
+#include <atomic>
+#include <mutex>
 #include <cstring>
 #include <cstdint>
 #include <cstdio>
@@ -21,31 +30,110 @@
 #include <fcntl.h>
 #include <dirent.h>
 #include <dlfcn.h>
+#include <pthread.h>
+#include <sys/stat.h>
+#include <zlib.h>
 
 #include "Includes/obfuscate.h"
 #include "Ed25519.hpp"
+#include "SecurityGuard.hpp"
 
 #define OBF_STR(s) (static_cast<const char*>(OBFUSCATE(s)))
 
 // ================================================================
-// CONFIGURATION (injected at build time)
+// CONFIGURATION (injected at CI release build time)
 // ================================================================
-
-// APK signing cert SHA-256 (64 lowercase hex, no colons)
 static const char* SHA256_PRIMARY() {
     return OBF_STR("__CERT_SHA256__");
 }
 static const char* SHA256_ALT1() { return OBF_STR(""); }
 static const char* SHA256_ALT2() { return OBF_STR(""); }
 
-// Ed25519 PUBLIC key (64 lowercase hex = 32 bytes; NOT a secret)
 static const char* ED25519_PUBLIC_KEY() {
     return OBF_STR("__ED25519_PUBLIC_KEY__");
 }
 
-// DEX integrity hash (64 lowercase hex)
 static const char* EXPECTED_DEX_HASH() {
     return OBF_STR("__DEX_HASH__");
+}
+
+// ================================================================
+// Split Integrity & Token State
+// ================================================================
+static constexpr uint32_t kSeedA1 = 0x9A7C5E31u;
+static constexpr uint32_t kSeedA2 = 0x11223344u;
+static constexpr uint32_t kSeedB1 = 0x4B8D2F69u;
+static constexpr uint32_t kSeedB2 = 0x55667788u;
+static constexpr uint32_t kSeedC1 = 0x71E93A4Du;
+static constexpr uint32_t kSeedT1 = 0x7E3A9C51u;
+
+static std::atomic<bool>     g_Verified{false};
+static std::atomic<uint32_t> g_IntegrityWordA{0x13572468u};
+static std::atomic<uint32_t> g_IntegrityWordB{0x24681357u};
+static std::atomic<uint32_t> g_IntegrityWordC{0xABCDEF01u};
+
+static std::atomic<bool>     g_TokenVerified{false};
+static std::atomic<uint32_t> g_TokenWord{0x01020304u};
+static std::atomic<int64_t>  g_TokenExpiryMs{0};
+static std::atomic<uint32_t> g_ToggleCounter{0};
+
+static std::mutex g_SecMutex;
+static JavaVM* g_JavaVm = nullptr;
+static std::string g_CachedApkPath;
+static bool g_HasExpectedApkStat = false;
+static uint64_t g_ExpectedApkSize = 0;
+static uint64_t g_ExpectedApkInode = 0;
+
+static std::string g_ActiveToken;
+static std::string g_ActiveUser;
+static std::string g_ActiveDeviceId;
+
+static std::atomic<bool> g_WatchdogStarted{false};
+static std::atomic<SecurityGuard::LockdownCallback> g_LockdownCb{nullptr};
+
+static inline void markWordA(bool ok) {
+    g_IntegrityWordA.store(ok ? (kSeedA1 ^ kSeedA2) : 0xDEAD0001u, std::memory_order_release);
+}
+static inline void markWordB(bool ok) {
+    g_IntegrityWordB.store(ok ? (kSeedB1 ^ kSeedB2) : 0xDEAD0002u, std::memory_order_release);
+}
+static inline void markWordC(bool ok) {
+    g_IntegrityWordC.store(ok ? (kSeedC1 ^ kSeedA2) : 0xDEAD0003u, std::memory_order_release);
+}
+static inline bool isWordAOk() {
+    return g_IntegrityWordA.load(std::memory_order_acquire) == (kSeedA1 ^ kSeedA2);
+}
+static inline bool isWordBOk() {
+    return g_IntegrityWordB.load(std::memory_order_acquire) == (kSeedB1 ^ kSeedB2);
+}
+static inline bool isWordCOk() {
+    return g_IntegrityWordC.load(std::memory_order_acquire) == (kSeedC1 ^ kSeedA2);
+}
+
+static void triggerLockdown(bool forceExit) {
+    g_Verified.store(false, std::memory_order_release);
+    g_TokenVerified.store(false, std::memory_order_release);
+    g_IntegrityWordA.store(0u, std::memory_order_release);
+    g_IntegrityWordB.store(0u, std::memory_order_release);
+    g_IntegrityWordC.store(0u, std::memory_order_release);
+    g_TokenWord.store(0u, std::memory_order_release);
+    g_TokenExpiryMs.store(0, std::memory_order_release);
+
+    {
+        std::lock_guard<std::mutex> lock(g_SecMutex);
+        g_ActiveToken.clear();
+        g_ActiveUser.clear();
+        g_ActiveDeviceId.clear();
+    }
+
+    SecurityGuard::LockdownCallback cb = g_LockdownCb.load(std::memory_order_acquire);
+    if (cb) cb();
+
+    if (forceExit) {
+#ifndef DEBUG_BUILD
+        _exit(1);
+#endif
+    }
 }
 
 // ================================================================
@@ -61,6 +149,27 @@ static bool constTimeEquals(const std::string& a, const std::string& b) {
     unsigned char diff = 0;
     for (size_t i = 0; i < a.size(); i++) diff |= (unsigned char)(a[i] ^ b[i]);
     return diff == 0;
+}
+
+static bool isValidSha256Hex(const std::string& s) {
+    if (s.size() != 64) return false;
+    bool allZero = true;
+    for (unsigned char c : s) {
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+            return false;
+        }
+        if (c != '0') allZero = false;
+    }
+    return !allZero;
+}
+
+static bool isAllZeroOrPlaceholder(const std::string& s) {
+    if (s.empty()) return true;
+    if (s.find("__") != std::string::npos) return true;
+    for (char c : s) {
+        if (c != '0') return false;
+    }
+    return true;
 }
 
 static bool hexDecode(const std::string& hex, std::vector<uint8_t>& out) {
@@ -136,6 +245,677 @@ static std::string getJsonField(const std::string& json, const std::string& key)
 }
 
 // ================================================================
+// SHA-256 (RFC 6234)
+// ================================================================
+struct Sha256Ctx {
+    uint32_t state[8];
+    uint64_t bitlen;
+    uint8_t  data[64];
+    size_t   datalen;
+};
+
+static inline uint32_t rotr32(uint32_t x, uint32_t n) {
+    return (x >> n) | (x << (32 - n));
+}
+
+static void sha256Transform(Sha256Ctx* ctx, const uint8_t block[64]) {
+    static const uint32_t K[64] = {
+        0x428a2f98u,0x71374491u,0xb5c0fbcfu,0xe9b5dba5u,0x3956c25bu,0x59f111f1u,0x923f82a4u,0xab1c5ed5u,
+        0xd807aa98u,0x12835b01u,0x243185beu,0x550c7dc3u,0x72be5d74u,0x80deb1feu,0x9bdc06a7u,0xc19bf174u,
+        0xe49b69c1u,0xefbe4786u,0x0fc19dc6u,0x240ca1ccu,0x2de92c6fu,0x4a7484aau,0x5cb0a9dcu,0x76f988dau,
+        0x983e5152u,0xa831c66du,0xb00327c8u,0xbf597fc7u,0xc6e00bf3u,0xd5a79147u,0x06ca6351u,0x14292967u,
+        0x27b70a85u,0x2e1b2138u,0x4d2c6dfcu,0x53380d13u,0x650a7354u,0x766a0abbu,0x81c2c92eu,0x92722c85u,
+        0xa2bfe8a1u,0xa81a664bu,0xc24b8b70u,0xc76c51a3u,0xd192e819u,0xd6990624u,0xf40e3585u,0x106aa070u,
+        0x19a4c116u,0x1e376c08u,0x2748774cu,0x34b0bcb5u,0x391c0cb3u,0x4ed8aa4au,0x5b9cca4fu,0x682e6ff3u,
+        0x748f82eeu,0x78a5636fu,0x84c87814u,0x8cc70208u,0x90befffau,0xa4506cebu,0xbef9a3f7u,0xc67178f2u
+    };
+
+    uint32_t m[64];
+    for (int i = 0; i < 16; ++i) {
+        m[i] = ((uint32_t)block[i * 4] << 24) | ((uint32_t)block[i * 4 + 1] << 16) |
+               ((uint32_t)block[i * 4 + 2] << 8) | (uint32_t)block[i * 4 + 3];
+    }
+    for (int i = 16; i < 64; ++i) {
+        uint32_t s0 = rotr32(m[i - 15], 7) ^ rotr32(m[i - 15], 18) ^ (m[i - 15] >> 3);
+        uint32_t s1 = rotr32(m[i - 2], 17) ^ rotr32(m[i - 2], 19) ^ (m[i - 2] >> 10);
+        m[i] = m[i - 16] + s0 + m[i - 7] + s1;
+    }
+
+    uint32_t a = ctx->state[0], b = ctx->state[1], c = ctx->state[2], d = ctx->state[3];
+    uint32_t e = ctx->state[4], f = ctx->state[5], g = ctx->state[6], h = ctx->state[7];
+
+    for (int i = 0; i < 64; ++i) {
+        uint32_t S1 = rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25);
+        uint32_t ch = (e & f) ^ ((~e) & g);
+        uint32_t temp1 = h + S1 + ch + K[i] + m[i];
+        uint32_t S0 = rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22);
+        uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+        uint32_t temp2 = S0 + maj;
+
+        h = g; g = f; f = e; e = d + temp1;
+        d = c; c = b; b = a; a = temp1 + temp2;
+    }
+
+    ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c; ctx->state[3] += d;
+    ctx->state[4] += e; ctx->state[5] += f; ctx->state[6] += g; ctx->state[7] += h;
+}
+
+static void sha256Init(Sha256Ctx* ctx) {
+    ctx->state[0] = 0x6a09e667u; ctx->state[1] = 0xbb67ae85u;
+    ctx->state[2] = 0x3c6ef372u; ctx->state[3] = 0xa54ff53au;
+    ctx->state[4] = 0x510e527fu; ctx->state[5] = 0x9b05688cu;
+    ctx->state[6] = 0x1f83d9abu; ctx->state[7] = 0x5be0cd19u;
+    ctx->bitlen = 0;
+    ctx->datalen = 0;
+}
+
+static void sha256Update(Sha256Ctx* ctx, const uint8_t* data, size_t len) {
+    for (size_t i = 0; i < len; ++i) {
+        ctx->data[ctx->datalen++] = data[i];
+        if (ctx->datalen == 64) {
+            sha256Transform(ctx, ctx->data);
+            ctx->bitlen += 512;
+            ctx->datalen = 0;
+        }
+    }
+}
+
+static void sha256Final(Sha256Ctx* ctx, uint8_t hash[32]) {
+    size_t i = ctx->datalen;
+    if (ctx->datalen < 56) {
+        ctx->data[i++] = 0x80;
+        while (i < 56) ctx->data[i++] = 0x00;
+    } else {
+        ctx->data[i++] = 0x80;
+        while (i < 64) ctx->data[i++] = 0x00;
+        sha256Transform(ctx, ctx->data);
+        memset(ctx->data, 0, 56);
+    }
+
+    ctx->bitlen += ctx->datalen * 8ULL;
+    ctx->data[63] = (uint8_t)(ctx->bitlen);
+    ctx->data[62] = (uint8_t)(ctx->bitlen >> 8);
+    ctx->data[61] = (uint8_t)(ctx->bitlen >> 16);
+    ctx->data[60] = (uint8_t)(ctx->bitlen >> 24);
+    ctx->data[59] = (uint8_t)(ctx->bitlen >> 32);
+    ctx->data[58] = (uint8_t)(ctx->bitlen >> 40);
+    ctx->data[57] = (uint8_t)(ctx->bitlen >> 48);
+    ctx->data[56] = (uint8_t)(ctx->bitlen >> 56);
+    sha256Transform(ctx, ctx->data);
+
+    for (i = 0; i < 8; ++i) {
+        hash[i * 4 + 0] = (uint8_t)((ctx->state[i] >> 24) & 0xffu);
+        hash[i * 4 + 1] = (uint8_t)((ctx->state[i] >> 16) & 0xffu);
+        hash[i * 4 + 2] = (uint8_t)((ctx->state[i] >> 8) & 0xffu);
+        hash[i * 4 + 3] = (uint8_t)(ctx->state[i] & 0xffu);
+    }
+}
+
+static std::string bytesToLowerHex(const uint8_t* data, size_t len) {
+    static const char kHex[] = "0123456789abcdef";
+    std::string out;
+    out.resize(len * 2);
+    for (size_t i = 0; i < len; ++i) {
+        out[i * 2]     = kHex[(data[i] >> 4) & 0x0Fu];
+        out[i * 2 + 1] = kHex[data[i] & 0x0Fu];
+    }
+    return out;
+}
+
+static std::string sha256HexBytes(const uint8_t* data, size_t len) {
+    uint8_t digest[32];
+    Sha256Ctx ctx;
+    sha256Init(&ctx);
+    if (len > 0) sha256Update(&ctx, data, len);
+    sha256Final(&ctx, digest);
+    return bytesToLowerHex(digest, 32);
+}
+
+// ================================================================
+// Native APK Parser: EOCD, Central Directory, Sorted .dex SHA-256,
+// and APK Signature Scheme v2 / v3 Certificate SHA-256
+// ================================================================
+static inline uint16_t readU16(const uint8_t* p) {
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+static inline uint32_t readU32(const uint8_t* p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static inline uint64_t readU64(const uint8_t* p) {
+    return (uint64_t)readU32(p) | ((uint64_t)readU32(p + 4) << 32);
+}
+
+static bool preadExact(int fd, uint64_t offset, void* dst, size_t len) {
+    uint8_t* out = static_cast<uint8_t*>(dst);
+    size_t done = 0;
+    while (done < len) {
+        ssize_t n = pread(fd, out + done, len - done, (off64_t)(offset + done));
+        if (n <= 0) return false;
+        done += (size_t)n;
+    }
+    return true;
+}
+
+struct ApkFileLayout {
+    uint64_t fileSize = 0;
+    uint64_t cdOffset = 0;
+    uint32_t cdSize   = 0;
+};
+
+static bool parseZipEocd(int fd, ApkFileLayout& layout) {
+    struct stat st;
+    if (fstat(fd, &st) != 0 || st.st_size < 22) return false;
+    uint64_t fsz = (uint64_t)st.st_size;
+    layout.fileSize = fsz;
+
+    size_t tailLen = (size_t)std::min<uint64_t>(fsz, 65558ULL);
+    uint64_t tailStart = fsz - tailLen;
+    std::vector<uint8_t> tail(tailLen);
+    if (!preadExact(fd, tailStart, tail.data(), tailLen)) return false;
+
+    for (size_t i = tailLen - 22 + 1; i-- > 0;) {
+        if (readU32(&tail[i]) == 0x06054b50u) {
+            uint16_t commentLen = readU16(&tail[i + 20]);
+            if (i + 22 + commentLen == tailLen) {
+                uint32_t cdSize = readU32(&tail[i + 12]);
+                uint32_t cdOff  = readU32(&tail[i + 16]);
+                if (cdSize == 0xFFFFFFFFu || cdOff == 0xFFFFFFFFu) return false;
+                if ((uint64_t)cdOff + (uint64_t)cdSize > fsz) return false;
+                layout.cdOffset = (uint64_t)cdOff;
+                layout.cdSize   = cdSize;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static bool extractV2V3CertFromSchemeBlock(const uint8_t* data, size_t len, std::string& outCertHex) {
+    // Layout: uint32 signers_len -> uint32 signer_len -> uint32 signed_data_len
+    //         -> uint32 digests_len + bytes -> uint32 certs_len -> uint32 first_cert_len + DER
+    if (len < 20) return false;
+    size_t pos = 0;
+    uint32_t signersLen = readU32(data + pos); pos += 4;
+    if (pos + signersLen > len || signersLen < 12) return false;
+
+    uint32_t signerLen = readU32(data + pos); pos += 4;
+    if (pos + signerLen > len || signerLen < 12) return false;
+
+    uint32_t signedDataLen = readU32(data + pos); pos += 4;
+    if (pos + signedDataLen > len || signedDataLen < 12) return false;
+
+    uint32_t digestsLen = readU32(data + pos); pos += 4;
+    if (pos + digestsLen + 4 > len) return false;
+    pos += digestsLen;
+
+    uint32_t certsLen = readU32(data + pos); pos += 4;
+    if (pos + certsLen > len || certsLen < 4) return false;
+
+    uint32_t firstCertLen = readU32(data + pos); pos += 4;
+    if (firstCertLen == 0 || pos + firstCertLen > len) return false;
+
+    outCertHex = sha256HexBytes(data + pos, firstCertLen);
+    return outCertHex.size() == 64;
+}
+
+static bool extractApkV2V3CertSha256(int fd, const ApkFileLayout& layout, std::string& outCertHex) {
+    if (layout.cdOffset < 32) return false;
+
+    uint8_t footer[24];
+    if (!preadExact(fd, layout.cdOffset - 24, footer, 24)) return false;
+
+    static const char kMagic[16] = {
+        'A','P','K',' ','S','i','g',' ','B','l','o','c','k',' ','4','2'
+    };
+    if (memcmp(footer + 8, kMagic, 16) != 0) return false;
+
+    uint64_t blockSize = readU64(footer);
+    if (blockSize < 24 || blockSize > 16ULL * 1024ULL * 1024ULL) return false;
+    if (blockSize + 8 > layout.cdOffset) return false;
+
+    uint64_t blockStart = layout.cdOffset - (blockSize + 8);
+    uint8_t headBuf[8];
+    if (!preadExact(fd, blockStart, headBuf, 8)) return false;
+    if (readU64(headBuf) != blockSize) return false;
+
+    size_t payloadLen = (size_t)(blockSize - 24);
+    std::vector<uint8_t> block(payloadLen);
+    if (payloadLen > 0 && !preadExact(fd, blockStart + 8, block.data(), payloadLen)) {
+        return false;
+    }
+
+    size_t pos = 0;
+    std::string v2Cert, v3Cert;
+    while (pos + 12 <= payloadLen) {
+        uint64_t pairLen = readU64(&block[pos]);
+        pos += 8;
+        if (pairLen < 4 || pos + pairLen > payloadLen) break;
+        uint32_t id = readU32(&block[pos]);
+        const uint8_t* val = &block[pos + 4];
+        size_t valLen = (size_t)(pairLen - 4);
+        pos += (size_t)pairLen;
+
+        if (id == 0x7109871au && v2Cert.empty()) {
+            extractV2V3CertFromSchemeBlock(val, valLen, v2Cert);
+        } else if (id == 0xf05368c0u && v3Cert.empty()) {
+            extractV2V3CertFromSchemeBlock(val, valLen, v3Cert);
+        }
+    }
+
+    if (!v3Cert.empty()) { outCertHex = v3Cert; return true; }
+    if (!v2Cert.empty()) { outCertHex = v2Cert; return true; }
+    return false;
+}
+
+struct ZipDexEntry {
+    std::string name;
+    uint16_t method;
+    uint32_t compSize;
+    uint32_t uncompSize;
+    uint32_t localOffset;
+};
+
+static bool computeApkDexHashes(int fd,
+                                const ApkFileLayout& layout,
+                                std::string& outCombinedHex,
+                                std::vector<std::string>& outEntryHexes) {
+    outCombinedHex.clear();
+    outEntryHexes.clear();
+    if (layout.cdSize == 0 || layout.cdSize > 32U * 1024U * 1024U) return false;
+    std::vector<uint8_t> cd(layout.cdSize);
+    if (!preadExact(fd, layout.cdOffset, cd.data(), layout.cdSize)) return false;
+
+    std::vector<ZipDexEntry> dexEntries;
+    size_t pos = 0;
+    while (pos + 46 <= cd.size()) {
+        if (readU32(&cd[pos]) != 0x02014b50u) break;
+        uint16_t method     = readU16(&cd[pos + 10]);
+        uint32_t compSize   = readU32(&cd[pos + 20]);
+        uint32_t uncompSize = readU32(&cd[pos + 24]);
+        uint16_t nameLen    = readU16(&cd[pos + 28]);
+        uint16_t extraLen   = readU16(&cd[pos + 30]);
+        uint16_t commentLen = readU16(&cd[pos + 32]);
+        uint32_t localOff   = readU32(&cd[pos + 42]);
+        pos += 46;
+        if (pos + nameLen + extraLen + commentLen > cd.size()) return false;
+
+        std::string name(reinterpret_cast<const char*>(&cd[pos]), nameLen);
+        pos += nameLen + extraLen + commentLen;
+
+        if (name.size() >= 4 && name.compare(name.size() - 4, 4, ".dex") == 0) {
+            dexEntries.push_back({name, method, compSize, uncompSize, localOff});
+        }
+    }
+
+    if (dexEntries.empty()) return false;
+    std::sort(dexEntries.begin(), dexEntries.end(),
+              [](const ZipDexEntry& a, const ZipDexEntry& b) { return a.name < b.name; });
+
+    Sha256Ctx combinedSha;
+    sha256Init(&combinedSha);
+    std::vector<uint8_t> inBuf(16384);
+    std::vector<uint8_t> outBuf(32768);
+
+    for (const auto& entry : dexEntries) {
+        Sha256Ctx entrySha;
+        sha256Init(&entrySha);
+
+        uint8_t lh[30];
+        if ((uint64_t)entry.localOffset + 30 > layout.fileSize) return false;
+        if (!preadExact(fd, entry.localOffset, lh, 30)) return false;
+        if (readU32(lh) != 0x04034b50u) return false;
+        uint16_t lNameLen  = readU16(lh + 26);
+        uint16_t lExtraLen = readU16(lh + 28);
+        uint64_t dataOff = (uint64_t)entry.localOffset + 30ULL + lNameLen + lExtraLen;
+        if (dataOff + entry.compSize > layout.fileSize) return false;
+
+        if (entry.method == 0) {
+            uint32_t rem = entry.compSize;
+            uint64_t cur = dataOff;
+            while (rem > 0) {
+                size_t chunk = std::min<size_t>(rem, inBuf.size());
+                if (!preadExact(fd, cur, inBuf.data(), chunk)) return false;
+                sha256Update(&combinedSha, inBuf.data(), chunk);
+                sha256Update(&entrySha, inBuf.data(), chunk);
+                cur += chunk;
+                rem -= (uint32_t)chunk;
+            }
+        } else if (entry.method == 8) {
+            z_stream zs{};
+            if (inflateInit2(&zs, -MAX_WBITS) != Z_OK) return false;
+
+            uint32_t rem = entry.compSize;
+            uint64_t cur = dataOff;
+            uint64_t totalOut = 0;
+            bool streamDone = false;
+            bool failed = false;
+
+            while (!streamDone) {
+                if (zs.avail_in == 0 && rem > 0) {
+                    size_t chunk = std::min<size_t>(rem, inBuf.size());
+                    if (!preadExact(fd, cur, inBuf.data(), chunk)) {
+                        failed = true;
+                        break;
+                    }
+                    cur += chunk;
+                    rem -= (uint32_t)chunk;
+                    zs.next_in = inBuf.data();
+                    zs.avail_in = (uInt)chunk;
+                }
+
+                zs.next_out = outBuf.data();
+                zs.avail_out = (uInt)outBuf.size();
+                int rc = inflate(&zs, rem == 0 ? Z_FINISH : Z_NO_FLUSH);
+                size_t have = outBuf.size() - zs.avail_out;
+                if (have > 0) {
+                    sha256Update(&combinedSha, outBuf.data(), have);
+                    sha256Update(&entrySha, outBuf.data(), have);
+                    totalOut += have;
+                }
+                if (rc == Z_STREAM_END) {
+                    streamDone = true;
+                } else if (rc != Z_OK && rc != Z_BUF_ERROR) {
+                    failed = true;
+                    break;
+                } else if (zs.avail_in == 0 && rem == 0 && have == 0) {
+                    failed = true;
+                    break;
+                }
+            }
+            inflateEnd(&zs);
+            if (failed || totalOut != entry.uncompSize) return false;
+        } else {
+            return false;
+        }
+
+        uint8_t entryDigest[32];
+        sha256Final(&entrySha, entryDigest);
+        outEntryHexes.push_back(bytesToLowerHex(entryDigest, 32));
+    }
+
+    uint8_t digest[32];
+    sha256Final(&combinedSha, digest);
+    outCombinedHex = bytesToLowerHex(digest, 32);
+    return outCombinedHex.size() == 64;
+}
+
+// ================================================================
+// JNI Helpers for APK path & PackageManager signing cert (native C++)
+// ================================================================
+static void clearJniException(JNIEnv* env) {
+    if (env && env->ExceptionCheck()) env->ExceptionClear();
+}
+
+static std::string jstringToStdString(JNIEnv* env, jstring js) {
+    if (!env || !js) return "";
+    const char* utf = env->GetStringUTFChars(js, nullptr);
+    if (!utf) { clearJniException(env); return ""; }
+    std::string out(utf);
+    env->ReleaseStringUTFChars(js, utf);
+    return out;
+}
+
+static std::string getProcessPackageName() {
+    char buf[256] = {0};
+    int fd = open("/proc/self/cmdline", O_RDONLY);
+    if (fd >= 0) {
+        ssize_t n = read(fd, buf, sizeof(buf) - 1);
+        close(fd);
+        if (n <= 0) return "";
+    } else {
+        return "";
+    }
+    std::string s(buf);
+    size_t nul = s.find('\0');
+    if (nul != std::string::npos) s = s.substr(0, nul);
+    size_t col = s.find(':');
+    if (col != std::string::npos) s = s.substr(0, col);
+    return s;
+}
+
+static std::string findApkPathFromProcMaps() {
+    FILE* fp = fopen("/proc/self/maps", "r");
+    if (!fp) return "";
+
+    std::string pkg = getProcessPackageName();
+    char line[1024];
+    std::string fallbackApk;
+    std::string matchedApk;
+
+    while (fgets(line, sizeof(line), fp)) {
+        const char* slash = strchr(line, '/');
+        if (!slash) continue;
+        std::string path(slash);
+        while (!path.empty() && (path.back() == '\n' || path.back() == '\r')) path.pop_back();
+        if (path.size() < 5) continue;
+
+        if (path.compare(0, 8, "/system/") == 0 ||
+            path.compare(0, 8, "/vendor/") == 0 ||
+            path.compare(0, 6, "/apex/") == 0) {
+            continue;
+        }
+
+        if (path.size() >= 4 && path.compare(path.size() - 4, 4, ".apk") == 0) {
+            if (!pkg.empty() && path.find(pkg) != std::string::npos) {
+                if (path.find("base.apk") != std::string::npos) {
+                    matchedApk = path;
+                    break;
+                }
+                if (matchedApk.empty()) matchedApk = path;
+            } else if (fallbackApk.empty() && path.find("base.apk") != std::string::npos) {
+                fallbackApk = path;
+            }
+        }
+    }
+    fclose(fp);
+    return !matchedApk.empty() ? matchedApk : fallbackApk;
+}
+
+static jobject getCurrentApplicationViaActivityThread(JNIEnv* env) {
+    if (!env) return nullptr;
+    jclass atCls = env->FindClass(OBF_STR("android/app/ActivityThread"));
+    if (!atCls) { clearJniException(env); return nullptr; }
+    jmethodID curAppMid = env->GetStaticMethodID(
+            atCls, OBF_STR("currentApplication"), OBF_STR("()Landroid/app/Application;"));
+    if (!curAppMid) {
+        clearJniException(env);
+        env->DeleteLocalRef(atCls);
+        return nullptr;
+    }
+    jobject app = env->CallStaticObjectMethod(atCls, curAppMid);
+    if (env->ExceptionCheck()) {
+        clearJniException(env);
+        app = nullptr;
+    }
+    env->DeleteLocalRef(atCls);
+    return app;
+}
+
+static std::string getApkPathFromSourceDir(JNIEnv* env, jobject ctx) {
+    if (!env || !ctx) return "";
+    jclass ctxCls = env->GetObjectClass(ctx);
+    if (!ctxCls) { clearJniException(env); return ""; }
+
+    jmethodID getAppInfo = env->GetMethodID(
+            ctxCls, OBF_STR("getApplicationInfo"), OBF_STR("()Landroid/content/pm/ApplicationInfo;"));
+    if (!getAppInfo) {
+        clearJniException(env);
+        env->DeleteLocalRef(ctxCls);
+        return "";
+    }
+    jobject appInfo = env->CallObjectMethod(ctx, getAppInfo);
+    if (env->ExceptionCheck() || !appInfo) {
+        clearJniException(env);
+        env->DeleteLocalRef(ctxCls);
+        return "";
+    }
+
+    jclass appInfoCls = env->GetObjectClass(appInfo);
+    jfieldID srcDirFid = env->GetFieldID(appInfoCls, OBF_STR("sourceDir"), OBF_STR("Ljava/lang/String;"));
+    std::string out;
+    if (srcDirFid) {
+        jstring jSrc = (jstring)env->GetObjectField(appInfo, srcDirFid);
+        if (!env->ExceptionCheck() && jSrc) {
+            out = jstringToStdString(env, jSrc);
+            env->DeleteLocalRef(jSrc);
+        } else {
+            clearJniException(env);
+        }
+    } else {
+        clearJniException(env);
+    }
+
+    env->DeleteLocalRef(appInfoCls);
+    env->DeleteLocalRef(appInfo);
+    env->DeleteLocalRef(ctxCls);
+    return out;
+}
+
+static std::string getApkPathFromCodePath(JNIEnv* env, jobject ctx) {
+    if (!env || !ctx) return "";
+    jclass ctxCls = env->GetObjectClass(ctx);
+    if (!ctxCls) { clearJniException(env); return ""; }
+    jmethodID mid = env->GetMethodID(ctxCls, OBF_STR("getPackageCodePath"), OBF_STR("()Ljava/lang/String;"));
+    std::string out;
+    if (mid) {
+        jstring jPath = (jstring)env->CallObjectMethod(ctx, mid);
+        if (!env->ExceptionCheck() && jPath) {
+            out = jstringToStdString(env, jPath);
+            env->DeleteLocalRef(jPath);
+        } else {
+            clearJniException(env);
+        }
+    } else {
+        clearJniException(env);
+    }
+    env->DeleteLocalRef(ctxCls);
+    return out;
+}
+
+static std::string readPmCertSha256(JNIEnv* env, jobject ctx) {
+    if (!env || !ctx) return "";
+    jclass ctxCls = env->GetObjectClass(ctx);
+    if (!ctxCls) { clearJniException(env); return ""; }
+
+    jmethodID getPm = env->GetMethodID(
+            ctxCls, OBF_STR("getPackageManager"), OBF_STR("()Landroid/content/pm/PackageManager;"));
+    jmethodID getPkg = env->GetMethodID(
+            ctxCls, OBF_STR("getPackageName"), OBF_STR("()Ljava/lang/String;"));
+    if (!getPm || !getPkg) {
+        clearJniException(env);
+        env->DeleteLocalRef(ctxCls);
+        return "";
+    }
+
+    jobject pm = env->CallObjectMethod(ctx, getPm);
+    jstring pkg = (jstring)env->CallObjectMethod(ctx, getPkg);
+    if (env->ExceptionCheck() || !pm || !pkg) {
+        clearJniException(env);
+        if (pm) env->DeleteLocalRef(pm);
+        if (pkg) env->DeleteLocalRef(pkg);
+        env->DeleteLocalRef(ctxCls);
+        return "";
+    }
+
+    int sdkInt = 0;
+    jclass buildVerCls = env->FindClass(OBF_STR("android/os/Build$VERSION"));
+    if (buildVerCls) {
+        jfieldID sdkFid = env->GetStaticFieldID(buildVerCls, OBF_STR("SDK_INT"), OBF_STR("I"));
+        if (sdkFid) sdkInt = env->GetStaticIntField(buildVerCls, sdkFid);
+        env->DeleteLocalRef(buildVerCls);
+    }
+    clearJniException(env);
+
+    jclass pmCls = env->GetObjectClass(pm);
+    jmethodID getPi = env->GetMethodID(
+            pmCls, OBF_STR("getPackageInfo"), OBF_STR("(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;"));
+    if (!getPi) {
+        clearJniException(env);
+        env->DeleteLocalRef(pmCls);
+        env->DeleteLocalRef(pm);
+        env->DeleteLocalRef(pkg);
+        env->DeleteLocalRef(ctxCls);
+        return "";
+    }
+
+    const jint flags = (sdkInt >= 28) ? 0x08000000 /* GET_SIGNING_CERTIFICATES */ : 0x00000040 /* GET_SIGNATURES */;
+    jobject pi = env->CallObjectMethod(pm, getPi, pkg, flags);
+    if (env->ExceptionCheck() || !pi) {
+        clearJniException(env);
+        env->DeleteLocalRef(pmCls);
+        env->DeleteLocalRef(pm);
+        env->DeleteLocalRef(pkg);
+        env->DeleteLocalRef(ctxCls);
+        return "";
+    }
+
+    jclass piCls = env->GetObjectClass(pi);
+    jobjectArray sigArr = nullptr;
+    if (sdkInt >= 28) {
+        jfieldID siFid = env->GetFieldID(piCls, OBF_STR("signingInfo"), OBF_STR("Landroid/content/pm/SigningInfo;"));
+        if (siFid) {
+            jobject si = env->GetObjectField(pi, siFid);
+            if (si && !env->ExceptionCheck()) {
+                jclass siCls = env->GetObjectClass(si);
+                jmethodID hasMulti = env->GetMethodID(siCls, OBF_STR("hasMultipleSigners"), OBF_STR("()Z"));
+                jboolean multi = hasMulti ? env->CallBooleanMethod(si, hasMulti) : JNI_FALSE;
+                jmethodID getSigs = env->GetMethodID(
+                        siCls,
+                        multi ? OBF_STR("getApkContentsSigners") : OBF_STR("getSigningCertificateHistory"),
+                        OBF_STR("()[Landroid/content/pm/Signature;"));
+                if (getSigs) {
+                    sigArr = (jobjectArray)env->CallObjectMethod(si, getSigs);
+                }
+                env->DeleteLocalRef(siCls);
+                env->DeleteLocalRef(si);
+            }
+        }
+    } else {
+        jfieldID sigsFid = env->GetFieldID(piCls, OBF_STR("signatures"), OBF_STR("[Landroid/content/pm/Signature;"));
+        if (sigsFid) {
+            sigArr = (jobjectArray)env->GetObjectField(pi, sigsFid);
+        }
+    }
+    clearJniException(env);
+
+    std::string outHex;
+    if (sigArr && env->GetArrayLength(sigArr) > 0) {
+        jobject sig0 = env->GetObjectArrayElement(sigArr, 0);
+        if (sig0) {
+            jclass sigCls = env->GetObjectClass(sig0);
+            jmethodID toBytes = env->GetMethodID(sigCls, OBF_STR("toByteArray"), OBF_STR("()[B"));
+            if (toBytes) {
+                jbyteArray raw = (jbyteArray)env->CallObjectMethod(sig0, toBytes);
+                if (raw && !env->ExceptionCheck()) {
+                    jsize len = env->GetArrayLength(raw);
+                    if (len > 0) {
+                        std::vector<uint8_t> der((size_t)len);
+                        env->GetByteArrayRegion(raw, 0, len, reinterpret_cast<jbyte*>(der.data()));
+                        outHex = sha256HexBytes(der.data(), der.size());
+                    }
+                    env->DeleteLocalRef(raw);
+                }
+            }
+            env->DeleteLocalRef(sigCls);
+            env->DeleteLocalRef(sig0);
+        }
+        env->DeleteLocalRef(sigArr);
+    }
+
+    clearJniException(env);
+    env->DeleteLocalRef(piCls);
+    env->DeleteLocalRef(pi);
+    env->DeleteLocalRef(pmCls);
+    env->DeleteLocalRef(pm);
+    env->DeleteLocalRef(pkg);
+    env->DeleteLocalRef(ctxCls);
+    return outHex;
+}
+
+// ================================================================
 // Detection helpers — all SILENT
 // ================================================================
 static bool detectFrida() {
@@ -151,7 +931,8 @@ static bool detectFrida() {
                 strstr(line, "gum-js-loop") ||
                 strstr(line, "frida-server") ||
                 strstr(line, "re.frida.server")) {
-                found = true; break;
+                found = true;
+                break;
             }
         }
         fclose(fp);
@@ -165,7 +946,8 @@ static bool detectFrida() {
         while ((de = readdir(dir)) != nullptr) {
             if (strstr(de->d_name, "re.frida.server") ||
                 strstr(de->d_name, "frida-server")) {
-                found = true; break;
+                found = true;
+                break;
             }
         }
         closedir(dir);
@@ -221,66 +1003,467 @@ static bool isEnvironmentSafe() {
 }
 
 // ================================================================
-// JNI: verifyHashes — SILENT SECURITY GATE
+// Core Native APK & Hash Verification
+// ================================================================
+static bool matchesExpectedCertHash(const std::string& candidateLower) {
+    if (!isValidSha256Hex(candidateLower)) return false;
+    std::string primary = toLower(std::string(SHA256_PRIMARY()));
+    if (isValidSha256Hex(primary) && constTimeEquals(candidateLower, primary)) return true;
+    std::string a1 = toLower(std::string(SHA256_ALT1()));
+    if (isValidSha256Hex(a1) && constTimeEquals(candidateLower, a1)) return true;
+    std::string a2 = toLower(std::string(SHA256_ALT2()));
+    if (isValidSha256Hex(a2) && constTimeEquals(candidateLower, a2)) return true;
+    return false;
+}
+
+static bool matchesExpectedDex(const std::string& expectedLower,
+                               const std::string& combinedHex,
+                               const std::vector<std::string>& entryHexes) {
+    if (!isValidSha256Hex(expectedLower)) return false;
+    if (constTimeEquals(toLower(combinedHex), expectedLower)) return true;
+    for (const auto& eh : entryHexes) {
+        if (constTimeEquals(toLower(eh), expectedLower)) return true;
+    }
+    return false;
+}
+
+static bool verifyApkHashesOnDisk(const std::string& apkPath, const std::string& pmCertHex) {
+    if (apkPath.empty()) return false;
+
+    int fd = open(apkPath.c_str(), O_RDONLY);
+    if (fd < 0) return false;
+
+    struct stat st{};
+    if (fstat(fd, &st) != 0) {
+        close(fd);
+        return false;
+    }
+
+    ApkFileLayout layout;
+    bool eocdOk = parseZipEocd(fd, layout);
+    std::string v2CertHex;
+    std::string combinedDexHex;
+    std::vector<std::string> entryDexHexes;
+    bool v2Ok = eocdOk && extractApkV2V3CertSha256(fd, layout, v2CertHex);
+    bool dexOk = eocdOk && computeApkDexHashes(fd, layout, combinedDexHex, entryDexHexes);
+    close(fd);
+
+    if (!eocdOk || !dexOk) return false;
+
+#ifdef DEBUG_BUILD
+    // Debug build: still exercise native parser and verify PackageManager agrees with v2/v3 cert when both exist.
+    if (v2Ok && !pmCertHex.empty() && !constTimeEquals(toLower(v2CertHex), toLower(pmCertHex))) {
+        return false;
+    }
+    std::string expectedPrimary = toLower(std::string(SHA256_PRIMARY()));
+    if (!isAllZeroOrPlaceholder(expectedPrimary) && v2Ok && !matchesExpectedCertHash(v2CertHex)) {
+        return false;
+    }
+    std::string expectedDex = toLower(std::string(EXPECTED_DEX_HASH()));
+    if (!isAllZeroOrPlaceholder(expectedDex)) {
+        if (!matchesExpectedDex(expectedDex, combinedDexHex, entryDexHexes)) {
+            return false;
+        }
+    }
+#else
+    // Release build: STRICT FAIL-CLOSED enforcement!
+    std::string expectedPrimary = toLower(std::string(SHA256_PRIMARY()));
+    if (isAllZeroOrPlaceholder(expectedPrimary) || !isValidSha256Hex(expectedPrimary)) {
+        return false;
+    }
+    if (!v2Ok || !matchesExpectedCertHash(v2CertHex)) {
+        return false;
+    }
+    if (!pmCertHex.empty()) {
+        if (!matchesExpectedCertHash(toLower(pmCertHex)) ||
+            !constTimeEquals(toLower(v2CertHex), toLower(pmCertHex))) {
+            return false;
+        }
+    }
+
+    // Fail closed if EXPECTED_DEX_HASH is all-zero or unreplaced placeholder!
+    std::string expectedDex = toLower(std::string(EXPECTED_DEX_HASH()));
+    if (isAllZeroOrPlaceholder(expectedDex) || !isValidSha256Hex(expectedDex)) {
+        return false;
+    }
+    if (!matchesExpectedDex(expectedDex, combinedDexHex, entryDexHexes)) {
+        return false;
+    }
+#endif
+
+    {
+        std::lock_guard<std::mutex> lock(g_SecMutex);
+        g_CachedApkPath = apkPath;
+        g_HasExpectedApkStat = true;
+        g_ExpectedApkSize = (uint64_t)st.st_size;
+        g_ExpectedApkInode = (uint64_t)st.st_ino;
+    }
+    return true;
+}
+
+// ================================================================
+// Internal Ed25519 Session Token Verification
+// ================================================================
+static bool verifyTokenInternal(const std::string& token,
+                                const std::string& expectedUser,
+                                const std::string& expectedDevice,
+                                int64_t* outExpiryMs) {
+    if (token.empty() || expectedUser.empty() || expectedDevice.empty()) {
+        return false;
+    }
+
+    size_t dot = token.find('.');
+    if (dot == std::string::npos || dot == 0 || dot + 1 >= token.size()) {
+        return false;
+    }
+    if (token.find('.', dot + 1) != std::string::npos) {
+        return false;
+    }
+
+    std::string payloadB64 = token.substr(0, dot);
+    std::string sigB64     = token.substr(dot + 1);
+
+    std::vector<uint8_t> sigBytes;
+    if (!base64UrlDecode(sigB64, sigBytes) || sigBytes.size() != 64) {
+        return false;
+    }
+
+    std::vector<uint8_t> pkBytes;
+    if (!hexDecode(std::string(ED25519_PUBLIC_KEY()), pkBytes) || pkBytes.size() != 32) {
+        return false;
+    }
+    bool allZero = true;
+    for (uint8_t b : pkBytes) {
+        if (b != 0) { allZero = false; break; }
+    }
+    if (allZero) return false;
+
+    if (!Ed25519::verify(
+            sigBytes.data(),
+            reinterpret_cast<const uint8_t*>(payloadB64.data()),
+            payloadB64.size(),
+            pkBytes.data())) {
+        return false;
+    }
+
+    std::vector<uint8_t> payloadRaw;
+    if (!base64UrlDecode(payloadB64, payloadRaw) || payloadRaw.empty()) {
+        return false;
+    }
+    std::string payloadJson(reinterpret_cast<const char*>(payloadRaw.data()), payloadRaw.size());
+
+    std::string tokUser   = getJsonField(payloadJson, "u");
+    std::string tokDevice = getJsonField(payloadJson, "d");
+    std::string tokExpiry = getJsonField(payloadJson, "e");
+
+    if (tokUser.empty() || tokDevice.empty()) return false;
+    if (!constTimeEquals(toLower(tokUser), toLower(expectedUser))) return false;
+    if (!constTimeEquals(tokDevice, expectedDevice)) return false;
+
+    int64_t parsedExpiry = 0;
+    if (!tokExpiry.empty()) {
+        try {
+            parsedExpiry = std::stoll(tokExpiry);
+            if (parsedExpiry > 0) {
+                int64_t nowMs = (int64_t)time(nullptr) * 1000LL;
+                if (nowMs > parsedExpiry) return false;
+            }
+        } catch (...) {
+            return false;
+        }
+    }
+    if (outExpiryMs) *outExpiryMs = parsedExpiry;
+    return true;
+}
+
+// ================================================================
+// Background Watchdog Thread (periodic re-verification)
+// ================================================================
+static void* watchdog_thread(void*) {
+    while (true) {
+        sleep(25);
+        if (!SecurityGuard::periodicReverify()) {
+            triggerLockdown(true);
+            return nullptr;
+        }
+    }
+    return nullptr;
+}
+
+static void ensureWatchdogStarted() {
+    bool expected = false;
+    if (g_WatchdogStarted.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        pthread_t tid;
+        if (pthread_create(&tid, nullptr, watchdog_thread, nullptr) == 0) {
+            pthread_detach(tid);
+        } else {
+            g_WatchdogStarted.store(false, std::memory_order_release);
+        }
+    }
+}
+
+// ================================================================
+// SecurityGuard Multi-Path Implementations
+// ================================================================
+namespace SecurityGuard {
+
+void registerLockdownCallback(LockdownCallback cb) {
+    g_LockdownCb.store(cb, std::memory_order_release);
+}
+
+bool verifyPathOnLoad(JavaVM* vm, JNIEnv* env) {
+    {
+        std::lock_guard<std::mutex> lock(g_SecMutex);
+        g_JavaVm = vm;
+    }
+
+    if (!isEnvironmentSafe()) {
+        triggerLockdown(false);
+        return false;
+    }
+
+    // Try discovering APK early via /proc/self/maps and/or ActivityThread.currentApplication()
+    std::string apkPath = findApkPathFromProcMaps();
+    std::string pmCert;
+    if (env) {
+        jobject app = getCurrentApplicationViaActivityThread(env);
+        if (app) {
+            if (apkPath.empty()) apkPath = getApkPathFromSourceDir(env, app);
+            pmCert = readPmCertSha256(env, app);
+            env->DeleteLocalRef(app);
+        }
+    }
+
+    if (!apkPath.empty()) {
+        if (!verifyApkHashesOnDisk(apkPath, pmCert)) {
+            triggerLockdown(false);
+            return false;
+        }
+        markWordA(true);
+    } else {
+        // Environment passed at JNI_OnLoad; full APK verification runs in preload / MenuInit.
+        markWordA(true);
+    }
+    return true;
+}
+
+bool verifyPathPreload(JNIEnv* env, jobject ctx) {
+    if (!env || !ctx) {
+        triggerLockdown(false);
+        return false;
+    }
+    if (!isEnvironmentSafe()) {
+        triggerLockdown(false);
+        return false;
+    }
+
+    std::string apkPath = getApkPathFromSourceDir(env, ctx);
+    if (apkPath.empty()) apkPath = findApkPathFromProcMaps();
+    std::string pmCert = readPmCertSha256(env, ctx);
+
+    if (!verifyApkHashesOnDisk(apkPath, pmCert)) {
+        triggerLockdown(false);
+        return false;
+    }
+
+    markWordA(true);
+    markWordB(true);
+    g_Verified.store(true, std::memory_order_release);
+    ensureWatchdogStarted();
+    return true;
+}
+
+bool verifyPathMenuInit(JNIEnv* env, jobject ctx) {
+    if (!env || !ctx) {
+        triggerLockdown(false);
+        return false;
+    }
+    if (!isEnvironmentSafe()) {
+        triggerLockdown(true);
+        return false;
+    }
+
+    std::string codePath = getApkPathFromCodePath(env, ctx);
+    if (codePath.empty()) codePath = getApkPathFromSourceDir(env, ctx);
+    if (codePath.empty()) codePath = findApkPathFromProcMaps();
+    std::string pmCert = readPmCertSha256(env, ctx);
+
+    {
+        std::lock_guard<std::mutex> lock(g_SecMutex);
+        if (!g_CachedApkPath.empty() && !codePath.empty() && codePath != g_CachedApkPath) {
+            // Package code path unexpectedly mutated
+            codePath.clear();
+        }
+    }
+    if (!verifyApkHashesOnDisk(codePath, pmCert)) {
+        triggerLockdown(true);
+        return false;
+    }
+
+    markWordB(true);
+    markWordC(true);
+    g_Verified.store(true, std::memory_order_release);
+    ensureWatchdogStarted();
+    return true;
+}
+
+bool verifyPathFeatureGate(JNIEnv* env) {
+    (void)env;
+    if (!g_Verified.load(std::memory_order_acquire) || !isWordAOk() || !isWordBOk() || !isWordCOk()) {
+        return false;
+    }
+    if (!isEnvironmentSafe()) {
+        triggerLockdown(true);
+        return false;
+    }
+    if (!g_TokenVerified.load(std::memory_order_acquire) ||
+        g_TokenWord.load(std::memory_order_acquire) != (kSeedT1 ^ kSeedA2)) {
+        return false;
+    }
+
+    std::string tok, usr, dev;
+    {
+        std::lock_guard<std::mutex> lock(g_SecMutex);
+        tok = g_ActiveToken;
+        usr = g_ActiveUser;
+        dev = g_ActiveDeviceId;
+    }
+    int64_t expMs = 0;
+    if (!verifyTokenInternal(tok, usr, dev, &expMs)) {
+        triggerLockdown(false);
+        return false;
+    }
+    return true;
+}
+
+bool verifyPathToggle(JNIEnv* env, jobject ctx, int featNum) {
+    (void)env; (void)ctx;
+    if (!g_Verified.load(std::memory_order_acquire) || !isWordAOk() || !isWordBOk()) {
+        triggerLockdown(false);
+        return false;
+    }
+    if (!g_TokenVerified.load(std::memory_order_acquire) ||
+        g_TokenWord.load(std::memory_order_acquire) != (kSeedT1 ^ kSeedA2)) {
+        triggerLockdown(false);
+        return false;
+    }
+
+    int64_t expMs = g_TokenExpiryMs.load(std::memory_order_acquire);
+    if (expMs > 0 && ((int64_t)time(nullptr) * 1000LL) > expMs) {
+        triggerLockdown(false);
+        return false;
+    }
+
+    if (detectTracer()) {
+        triggerLockdown(true);
+        return false;
+    }
+
+    // Periodically and on sensitive/mode toggles run deeper checks
+    uint32_t count = g_ToggleCounter.fetch_add(1, std::memory_order_relaxed);
+    if ((count & 0x0Fu) == 0u || featNum == 150 || featNum >= 800) {
+        if (!isEnvironmentSafe()) {
+            triggerLockdown(true);
+            return false;
+        }
+        std::string cachedPath, tok, usr, dev;
+        bool hasStat = false;
+        uint64_t expSize = 0, expInode = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_SecMutex);
+            cachedPath = g_CachedApkPath;
+            hasStat = g_HasExpectedApkStat;
+            expSize = g_ExpectedApkSize;
+            expInode = g_ExpectedApkInode;
+            tok = g_ActiveToken;
+            usr = g_ActiveUser;
+            dev = g_ActiveDeviceId;
+        }
+        if (!verifyTokenInternal(tok, usr, dev, nullptr)) {
+            triggerLockdown(false);
+            return false;
+        }
+        if (hasStat && !cachedPath.empty()) {
+            struct stat st{};
+            if (stat(cachedPath.c_str(), &st) != 0 ||
+                (uint64_t)st.st_size != expSize ||
+                (uint64_t)st.st_ino != expInode) {
+                if (!verifyApkHashesOnDisk(cachedPath, "")) {
+                    triggerLockdown(true);
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+bool isReadyForHooks() {
+    if (!g_Verified.load(std::memory_order_acquire) || !isWordAOk() || !isWordBOk()) {
+        return false;
+    }
+    if (!g_TokenVerified.load(std::memory_order_acquire) ||
+        g_TokenWord.load(std::memory_order_acquire) != (kSeedT1 ^ kSeedA2)) {
+        return false;
+    }
+
+    std::string cachedPath, tok, usr, dev;
+    {
+        std::lock_guard<std::mutex> lock(g_SecMutex);
+        cachedPath = g_CachedApkPath;
+        tok = g_ActiveToken;
+        usr = g_ActiveUser;
+        dev = g_ActiveDeviceId;
+    }
+
+    if (!isEnvironmentSafe()) {
+        triggerLockdown(true);
+        return false;
+    }
+    if (!verifyApkHashesOnDisk(cachedPath, "")) {
+        triggerLockdown(true);
+        return false;
+    }
+    if (!verifyTokenInternal(tok, usr, dev, nullptr)) {
+        return false;
+    }
+    return true;
+}
+
+bool periodicReverify() {
+    if (!isEnvironmentSafe()) return false;
+
+    std::string cachedPath, tok, usr, dev;
+    bool tokActive = false;
+    {
+        std::lock_guard<std::mutex> lock(g_SecMutex);
+        cachedPath = g_CachedApkPath;
+        tokActive = g_TokenVerified.load(std::memory_order_acquire);
+        tok = g_ActiveToken;
+        usr = g_ActiveUser;
+        dev = g_ActiveDeviceId;
+    }
+
+    if (!cachedPath.empty() && !verifyApkHashesOnDisk(cachedPath, "")) {
+        return false;
+    }
+
+    if (tokActive && !verifyTokenInternal(tok, usr, dev, nullptr)) {
+        return false;
+    }
+    return true;
+}
+
+} // namespace SecurityGuard
+
+// ================================================================
+// JNI: verifyNative — SILENT NATIVE INTEGRITY GATE (no isDebug / no Java hashes)
 // ================================================================
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_android_support_SecurityNative_verifyHashes(
-        JNIEnv* env, jclass, jstring jsig, jstring jdex, jboolean jdebug) {
-
-    if (!jsig || !jdex) return JNI_FALSE;
-
-    const char* csig = env->GetStringUTFChars(jsig, nullptr);
-    const char* cdex = env->GetStringUTFChars(jdex, nullptr);
-    if (!csig || !cdex) {
-        if (csig) env->ReleaseStringUTFChars(jsig, csig);
-        if (cdex) env->ReleaseStringUTFChars(jdex, cdex);
-        return JNI_FALSE;
-    }
-
-    std::string sigHash = toLower(std::string(csig));
-    std::string dexHash = toLower(std::string(cdex));
-    env->ReleaseStringUTFChars(jsig, csig);
-    env->ReleaseStringUTFChars(jdex, cdex);
-
-    bool isDebug = (jdebug == JNI_TRUE);
-
-    // Signature verify (skip in debug)
-    if (!isDebug) {
-        std::string expected = toLower(std::string(SHA256_PRIMARY()));
-        bool ok = false;
-        if (!expected.empty() && sigHash.size() == expected.size()) {
-            if (constTimeEquals(sigHash, expected)) ok = true;
-        }
-        if (!ok) {
-            std::string a1 = toLower(std::string(SHA256_ALT1()));
-            if (!a1.empty() && sigHash.size() == a1.size()) {
-                if (constTimeEquals(sigHash, a1)) ok = true;
-            }
-            std::string a2 = toLower(std::string(SHA256_ALT2()));
-            if (!ok && !a2.empty() && sigHash.size() == a2.size()) {
-                if (constTimeEquals(sigHash, a2)) ok = true;
-            }
-        }
-        if (!ok) return JNI_FALSE;
-    }
-
-    // DEX integrity verify (skip in debug)
-    if (!isDebug) {
-        std::string expected = toLower(std::string(EXPECTED_DEX_HASH()));
-        bool placeholder = true;
-        for (char c : expected) {
-            if (c != '0') { placeholder = false; break; }
-        }
-        if (!placeholder) {
-            if (dexHash.size() != expected.size()) return JNI_FALSE;
-            if (!constTimeEquals(dexHash, expected)) return JNI_FALSE;
-        }
-    }
-
-    // Environment check (always)
-    if (!isEnvironmentSafe()) return JNI_FALSE;
-
-    return JNI_TRUE;
+Java_com_android_support_SecurityNative_verifyNative(
+        JNIEnv* env, jclass, jobject ctx) {
+    return SecurityGuard::verifyPathPreload(env, ctx) ? JNI_TRUE : JNI_FALSE;
 }
 
 // ================================================================
@@ -294,6 +1477,13 @@ Java_com_android_support_SecurityNative_verifySessionToken(
         jstring jToken, jstring jUser, jstring jDeviceId) {
 
     if (!jToken || !jUser || !jDeviceId) return JNI_FALSE;
+    if (!g_Verified.load(std::memory_order_acquire) || !isWordAOk() || !isWordBOk()) {
+        return JNI_FALSE;
+    }
+    if (!isEnvironmentSafe()) {
+        triggerLockdown(true);
+        return JNI_FALSE;
+    }
 
     const char* ct = env->GetStringUTFChars(jToken, nullptr);
     const char* cu = env->GetStringUTFChars(jUser, nullptr);
@@ -311,69 +1501,21 @@ Java_com_android_support_SecurityNative_verifySessionToken(
     env->ReleaseStringUTFChars(jUser, cu);
     env->ReleaseStringUTFChars(jDeviceId, cd);
 
-    if (token.empty() || expectedUser.empty() || expectedDevice.empty()) {
+    int64_t expiryMs = 0;
+    if (!verifyTokenInternal(token, expectedUser, expectedDevice, &expiryMs)) {
         return JNI_FALSE;
     }
 
-    size_t dot = token.find('.');
-    if (dot == std::string::npos || dot == 0 || dot + 1 >= token.size()) {
-        return JNI_FALSE;
+    {
+        std::lock_guard<std::mutex> lock(g_SecMutex);
+        g_ActiveToken = token;
+        g_ActiveUser = expectedUser;
+        g_ActiveDeviceId = expectedDevice;
     }
-    if (token.find('.', dot + 1) != std::string::npos) {
-        return JNI_FALSE;
-    }
-
-    std::string payloadB64 = token.substr(0, dot);
-    std::string sigB64     = token.substr(dot + 1);
-
-    std::vector<uint8_t> sigBytes;
-    if (!base64UrlDecode(sigB64, sigBytes) || sigBytes.size() != 64) {
-        return JNI_FALSE;
-    }
-
-    std::vector<uint8_t> pkBytes;
-    if (!hexDecode(std::string(ED25519_PUBLIC_KEY()), pkBytes) || pkBytes.size() != 32) {
-        return JNI_FALSE;
-    }
-    bool allZero = true;
-    for (uint8_t b : pkBytes) {
-        if (b != 0) { allZero = false; break; }
-    }
-    if (allZero) return JNI_FALSE;
-
-    if (!Ed25519::verify(
-            sigBytes.data(),
-            reinterpret_cast<const uint8_t*>(payloadB64.data()),
-            payloadB64.size(),
-            pkBytes.data())) {
-        return JNI_FALSE;
-    }
-
-    std::vector<uint8_t> payloadRaw;
-    if (!base64UrlDecode(payloadB64, payloadRaw) || payloadRaw.empty()) {
-        return JNI_FALSE;
-    }
-    std::string payloadJson(reinterpret_cast<const char*>(payloadRaw.data()), payloadRaw.size());
-
-    std::string tokUser   = getJsonField(payloadJson, "u");
-    std::string tokDevice = getJsonField(payloadJson, "d");
-    std::string tokExpiry = getJsonField(payloadJson, "e");
-
-    if (tokUser.empty() || tokDevice.empty()) return JNI_FALSE;
-    if (!constTimeEquals(toLower(tokUser), toLower(expectedUser))) return JNI_FALSE;
-    if (!constTimeEquals(tokDevice, expectedDevice)) return JNI_FALSE;
-
-    if (!tokExpiry.empty()) {
-        try {
-            long long expiryMs = std::stoll(tokExpiry);
-            if (expiryMs > 0) {
-                long long nowMs = (long long)time(nullptr) * 1000LL;
-                if (nowMs > expiryMs) return JNI_FALSE;
-            }
-        } catch (...) {
-            return JNI_FALSE;
-        }
-    }
+    g_TokenExpiryMs.store(expiryMs, std::memory_order_release);
+    g_TokenWord.store(kSeedT1 ^ kSeedA2, std::memory_order_release);
+    g_TokenVerified.store(true, std::memory_order_release);
+    ensureWatchdogStarted();
 
     return JNI_TRUE;
 }

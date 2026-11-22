@@ -1,70 +1,64 @@
 # ================================================================
-# ModX Lab — Professional ProGuard Rules
+# ModX Lab — Hardened ProGuard / R8 Rules
 # ================================================================
 
-# Original rules
--keepclassmembers class ** { public static void Start (***); }
+# Manifest entry points & external game-launch entrypoint
 -keep public class com.android.support.MainActivity
+-keep public class com.android.support.Launcher
+-keepclassmembers class ** {
+    public static void Start(***);
+    public static void StartWithoutPermission(***);
+}
+
+# Property-animation reflection (ObjectAnimator on maskX/maskY)
 -keepclassmembers class com.android.support.TitanicTextView {
     public void setMaskX(float);
     public void setMaskY(float);
     public float getMaskX();
     public float getMaskY();
 }
--keep class com.android.support.TitanicTextView { *; }
 
-# 🔒 JNI-bound classes — MUST keep
--keep class com.android.support.SecurityNative { *; }
--keep class com.android.support.Main             { *; }
--keep class com.android.support.MainActivity     { *; }
--keep class com.android.support.Menu             { *; }
--keep class com.android.support.LoginHelper      { *; }
--keep class com.android.support.LoginHelper$Callback { *; }
--keep class com.android.support.ESPView          { *; }
--keep class com.android.support.Preferences      { *; }
--keep class com.android.support.ModFirebase      { *; }
--keep class com.android.support.CrashHandler     { *; }
--keep class com.android.support.Launcher         { *; }
--keep class com.android.support.Titanic          { *; }
-
--keep class com.android.support.** { *; }
--keepclassmembers class com.android.support.** { *; }
+# JNI-bound classes resolved by name or static JNI export
+-keep class com.android.support.SecurityNative {
+    native <methods>;
+}
+-keep class com.android.support.Main {
+    native <methods>;
+}
+-keep class com.android.support.Menu {
+    native <methods>;
+}
+-keep class com.android.support.Preferences {
+    native <methods>;
+}
 
 -keepclasseswithmembernames,includedescriptorclasses class * {
     native <methods>;
 }
 
-# Firebase / GMS
--keep class com.google.firebase.** { *; }
--keep class com.google.android.gms.** { *; }
--dontwarn com.google.firebase.**
--dontwarn com.google.android.gms.**
-
-# AndroidX
--keep class androidx.** { *; }
--dontwarn androidx.**
-
-# Attributes
--keepattributes Signature
--keepattributes Exceptions
--keepattributes *Annotation*
--keepattributes InnerClasses
--keepattributes EnclosingMethod
--keepattributes SourceFile,LineNumberTable
-
-# Aggressive obfuscation
--repackageclasses 'o'
+# Aggressive obfuscation & shrinking (unique package prevents collisions inside merged game APKs)
+-repackageclasses 'mxl'
 -allowaccessmodification
 -overloadaggressively
 -adaptclassstrings
 
-# Strip logs (release only)
+# Keep minimal attributes (omit SourceFile/LineNumberTable leaks)
+-keepattributes Exceptions,InnerClasses,EnclosingMethod,Signature,*Annotation*
+-renamesourcefileattribute SourceFile
+
+# Strip all android.util.Log calls in release builds
 -assumenosideeffects class android.util.Log {
-    public static *** d(...);
     public static *** v(...);
+    public static *** d(...);
     public static *** i(...);
     public static *** w(...);
+    public static *** e(...);
+    public static *** wtf(...);
 }
+
+# AndroidX Multidex
+-keep class androidx.multidex.** { *; }
+-dontwarn androidx.**
 
 -dontwarn kotlin.**
 -dontwarn kotlinx.**

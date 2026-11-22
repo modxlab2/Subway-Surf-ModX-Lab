@@ -1,7 +1,6 @@
 package com.android.support;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 
 import org.json.JSONObject;
 
@@ -17,8 +16,6 @@ import java.util.Map;
  * - Endpoint, project ID, and function ID come from native obfuscated getters.
  */
 public final class ModFirebase {
-
-    private static final String PREF_AW_SESSION = "aw_session_cookie";
 
     private ModFirebase() { }
 
@@ -109,14 +106,11 @@ public final class ModFirebase {
 
     private static String getOrCreateSessionCookie(
             Context ctx, String endpoint, String projectId, boolean forceRefresh) {
-        SharedPreferences prefs = ctx.getApplicationContext()
-                .getSharedPreferences("KEY", Context.MODE_PRIVATE);
-
         if (!forceRefresh) {
-            String cached = prefs.getString(PREF_AW_SESSION, "");
+            String cached = SecureTokenStore.loadAppwriteSession(ctx);
             if (!isEmpty(cached)) return cached;
         } else {
-            prefs.edit().remove(PREF_AW_SESSION).apply();
+            SecureTokenStore.clearAppwriteSession(ctx);
         }
 
         Map<String, String> headers = new HashMap<>();
@@ -152,7 +146,7 @@ public final class ModFirebase {
         }
 
         if (!isEmpty(cookieVal)) {
-            prefs.edit().putString(PREF_AW_SESSION, cookieVal).apply();
+            SecureTokenStore.saveAppwriteSession(ctx, cookieVal);
         }
         return cookieVal;
     }

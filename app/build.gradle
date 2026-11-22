@@ -58,6 +58,12 @@ android {
             shrinkResources false
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            externalNativeBuild {
+                ndkBuild {
+                    cppFlags "-DDEBUG_BUILD"
+                    cFlags "-DDEBUG_BUILD"
+                }
+            }
         }
     }
 

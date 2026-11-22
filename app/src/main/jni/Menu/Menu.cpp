@@ -1,6 +1,7 @@
 
 #include "Includes/obfuscate.h"
 #include "Menu/Menu.hpp"
+#include "SecurityGuard.hpp"
 
 bool iconValid = false;
 bool settingsValid = false;
@@ -50,6 +51,12 @@ jstring IconWebViewData(JNIEnv *env, jobject thiz) {
 }
 
 jobjectArray SettingsList(JNIEnv *env, jobject activityObject) {
+    (void)activityObject;
+    if (!SecurityGuard::periodicReverify()) {
+        return (jobjectArray) env->NewObjectArray(
+                0, env->FindClass(OBFUSCATE("java/lang/String")), env->NewStringUTF(""));
+    }
+
     jobjectArray ret;
 
     const char *features[] = {

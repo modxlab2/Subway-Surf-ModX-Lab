@@ -21,7 +21,7 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) { }
 
         // Silent runtime gate
-        if (!SecurityNative.preload(this, BuildConfig.DEBUG)) {
+        if (!SecurityNative.preload(this)) {
             android.os.Process.killProcess(android.os.Process.myPid());
             return;
         }

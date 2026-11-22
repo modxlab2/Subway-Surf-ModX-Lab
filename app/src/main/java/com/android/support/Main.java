@@ -44,6 +44,7 @@ public class Main {
 
     public static void Start(Context context) {
         if (context == null) return;
+        if (!SecurityNative.preload(context)) return;
 
         CrashHandler.init(context, false);
 
@@ -63,6 +64,7 @@ public class Main {
 
     public static void StartWithoutPermission(Context context) {
         if (context == null) return;
+        if (!SecurityNative.preload(context)) return;
 
         // Atomic single-launch guard
         if (!sLaunchAttempted.compareAndSet(false, true)) return;

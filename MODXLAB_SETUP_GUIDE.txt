@@ -1,0 +1,251 @@
+================================================================================
+ModX Lab (Subway Surfers Mod Menu) — সম্পূর্ণ সেটআপ ও রক্ষণাবেক্ষণ গাইড
+Repository : https://github.com/modxlab2/Subway-Surf-ModX-Lab
+================================================================================
+
+এই ফাইলে প্রথম থেকে শেষ পর্যন্ত আপনার নিজেকে যেসব কাজ করতে হবে (Firebase,
+Appwrite, Ed25519 Keys, GitHub Secrets, Termux, SPKI Pin এবং MT Manager দিয়ে
+গেমে Inject + Sign করা) — সবকিছুর ধাপ গুছিয়ে লেখা আছে।
+
+সতর্কতা: এই ফাইলে কোনো আসল Password, Private Key, Service Account JSON বা
+Keystore Password লিখবেন না। সেগুলো ফোনের নিরাপদ স্থানে আলাদা রাখুন।
+
+--------------------------------------------------------------------------------
+১. প্রজেক্টের গুরুত্বপূর্ণ আইডি ও কোডের অবস্থান (Quick Reference)
+--------------------------------------------------------------------------------
+- Appwrite Endpoint     : https://sgp.cloud.appwrite.io/v1
+- Appwrite Project ID   : 6b00580c000a55b46807
+- Appwrite Function ID  : 6b005c0f000b971d589f  (নাম: verifyLogin)
+- Firebase RTDB URL     : https://modx-lab-a5e41-default-rtdb.firebaseio.com
+
+গুরুত্বপূর্ণ ফাইলসমূহ:
+- functions/verifyLogin/main.js             -> Appwrite লগইন সার্ভার কোড
+- appwrite.json                             -> Appwrite ফাংশন কনফিগারেশন
+- database.rules.json                       -> Firebase RTDB Security Rules
+- scripts/migrate-passwords.js              -> Ed25519 কী, scrypt হ্যাশ ও ইউজার তৈরির স্ক্রিপ্ট
+- app/src/main/jni/Security.cpp             -> নেটিভ ইন্টেগ্রিটি, URL ও ID (OBF_STR), DEX/Cert চেক
+- app/src/main/java/com/android/support/PinnedHttp.java -> SSL SPKI Certificate Pinning
+- app/src/main/jni/Main.cpp                 -> গেম হুকস ও ফিচার গেট
+- .github/workflows/generate-keystore.yml   -> Release Keystore তৈরির Workflow
+- .github/workflows/build.yml               -> Two-Pass Signed Release APK বিল্ড Workflow
+
+--------------------------------------------------------------------------------
+২. Firebase Realtime Database (RTDB) সেটআপ ও ইউজার তৈরি
+--------------------------------------------------------------------------------
+২.১) Database Rules সেট করা:
+  - Firebase Console -> আপনার প্রজেক্ট -> Realtime Database -> Rules ট্যাব।
+  - প্রজেক্টের `database.rules.json` অনুযায়ী নিচের Rules বসানো থাকবে:
+      * User নোট: .read = false, .write = false, .indexOn = ["user"]
+      * update নোট: .read = true, .write = false
+  - Publish বাটনে ক্লিক করুন।
+
+২.২) Firebase Service Account JSON নেওয়া (শুধু Appwrite সার্ভারের জন্য):
+  - Firebase Console -> Project Settings (গিয়ার আইকন) -> Service accounts।
+  - "Generate new private key" ক্লিক করে JSON ফাইলটি ডাউনলোড করুন।
+  - এই JSON ফাইলটি কখনোই GitHub-এ বা APK-তে রাখবেন না।
+
+২.৩) ইউজার ও পাসওয়ার্ড তৈরি করা (Termux বা PC-তে Node.js দিয়ে):
+  উপায় ক — শুধু পাসওয়ার্ডের scrypt হ্যাশ বানানো (Firebase Console-এ পেস্ট করতে):
+    node scripts/migrate-passwords.js --hash "MyPass123"
+
+  উপায় খ — কমান্ড দিয়ে সরাসরি Firebase RTDB-তে ইউজার তৈরি করা:
+    FIREBASE_DB_URL="https://modx-lab-a5e41-default-rtdb.firebaseio.com" \
+    FIREBASE_SERVICE_ACCOUNT_FILE="./service-account.json" \
+    node scripts/migrate-passwords.js --add-user modxlab MyPass123 30
+
+  Firebase RTDB-তে `/User/<node>`-এর ফিল্ডগুলোর নিয়ম:
+    - user        : ছোট হাতের অক্ষরে ইউজারনেম (যেমন "modxlab")
+    - passHash    : --hash থেকে পাওয়া "scrypt$16384$8$1$..." স্ট্রিং
+                    (পুরনো plaintext "pass" ফিল্ড রাখবেন না)
+    - status      : "true" (অ্যাকাউন্ট বন্ধ করতে চাইলে "false")
+    - device_id   : "" (ফাঁকা রাখলে সবাই একই username/password দিয়ে যেকোনো
+                    ডিভাইস থেকে লগইন করতে পারবে; এক ডিভাইসে লক চাইলে ডিভাইস আইডি দিন)
+    - expire_date : "2027-12-31 23:59 +06:00" (অথবা rgtime + duration_days)
+
+২.৪) অ্যাপ আপডেট নোটিশ (ইচ্ছামতো) — Firebase RTDB `/update/up`:
+    - version : "1.0" (app/build.gradle-এর versionName-এর সাথে মিলবে)
+    - message : "New update available"
+    - url     : ডাউনলোড লিংক
+
+--------------------------------------------------------------------------------
+৩. Ed25519 Keypair তৈরি (সার্ভার টোকেন সাইনিংয়ের জন্য)
+--------------------------------------------------------------------------------
+Termux বা PC-তে রিপোর ফোল্ডারের ভেতর থেকে নিচের কমান্ড চালান:
+    node scripts/migrate-passwords.js --gen-keys
+
+এটি দুটি ৬৪-অক্ষরের hex স্ট্রিং দেবে:
+  1) ED25519_PRIVATE_KEY -> এটি শুধু Appwrite Function-এর Env Var-এ দেবেন (গোপন)।
+  2) ED25519_PUBLIC_KEY  -> এটি শুধু GitHub Repository Secrets-এ দেবেন।
+
+--------------------------------------------------------------------------------
+৪. Appwrite Function (`verifyLogin`) সেটআপ ও ডিপ্লয়
+--------------------------------------------------------------------------------
+১. Appwrite Console -> আপনার প্রজেক্ট (6b00580c000a55b46807) -> Functions -> verifyLogin।
+২. Settings-এ চেক করুন:
+   - Runtime        : Node.js 18.0 (node-18.0)  [Java/Maven নয়!]
+   - Entrypoint     : main.js
+   - Root Directory : functions/verifyLogin (GitHub কানেক্ট থাকলে)
+   - Build Command  : npm install (এখানে mvn থাকবে না)
+   - Execute Access : any বা guests (যাতে অ্যাপ থেকে লগইন কল করা যায়)
+৩. Settings -> Environment Variables-এ এই ৩টি ভ্যারিয়েবল অবশ্যই সেট করুন:
+   - FIREBASE_DB_URL              = https://modx-lab-a5e41-default-rtdb.firebaseio.com
+   - FIREBASE_SERVICE_ACCOUNT_JSON = আপনার ডাউনলোড করা Service Account JSON-এর পুরো লেখা
+   - ED25519_PRIVATE_KEY          = ধাপ ৩ থেকে পাওয়া Private Key (64-char hex)
+৪. Deployments -> Redeploy / Create deployment করুন এবং Status "Ready" আছে দেখুন।
+
+--------------------------------------------------------------------------------
+৫. GitHub Token (PAT) ও Repository Secrets সেটআপ
+--------------------------------------------------------------------------------
+৫.১) GitHub Fine-grained Personal Access Token (PAT) তৈরি:
+  - GitHub -> Profile -> Settings -> Developer settings -> Personal access tokens
+    -> Fine-grained tokens -> Generate new token।
+  - Repository access: Only select repositories -> Subway-Surf-ModX-Lab।
+  - Permissions (Repository):
+      * Secrets   : Read and write  (Generate Release Keystore-এর জন্য আবশ্যক)
+      * Contents  : Read and write  (Termux থেকে git push করার জন্য)
+      * Workflows : Read and write  (প্রয়োজনে)
+  - টোকেনটি কপি করে নিরাপদ জায়গায় সেভ রাখুন।
+
+৫.২) GitHub Repository Secrets যোগ করা:
+  - GitHub Repo -> Settings -> Secrets and variables -> Actions -> New repository secret:
+      * GH_PAT             = ধাপ ৫.১-এর তৈরি করা টোকেন
+      * ED25519_PUBLIC_KEY = ধাপ ৩ থেকে পাওয়া 64-char Public Key
+
+  (নিচের ৪টি Secret হাতে লিখতে হবে না; ধাপ ৬ চালালে অটোমেটিক তৈরি হবে:
+   KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD)
+
+--------------------------------------------------------------------------------
+৬. Release Keystore তৈরি ও ফোনে ব্যাকআপ নেওয়া (অত্যন্ত জরুরি)
+--------------------------------------------------------------------------------
+১. GitHub Repo -> Actions -> বাম পাশে "Generate Release Keystore"।
+২. "Run workflow" ক্লিক করুন:
+   - প্রথমবার হলে checkbox খালি রাখুন।
+   - আগে থেকে KEYSTORE_BASE64 থাকলে এবং নতুন করে বানাতে চাইলে:
+     [x] "Overwrite existing KEYSTORE_BASE64 secret if it already exists"-এ টিক দিন।
+৩. Workflow সফল হলে পেজের নিচে Artifacts সেকশন থেকে
+   "release-keystore-backup" জিপ ফাইলটি সাথে সাথে ডাউনলোড করুন (১ দিন পর ডিলিট হয়)।
+৪. জিপ Extract করে `release.keystore` এবং `credentials.txt` ফোনে নিরাপদে রাখুন।
+   (নোট: অযথা বারবার Generate Release Keystore চালাবেন না; এতে আগের কী বদলে যাবে।)
+
+--------------------------------------------------------------------------------
+৭. Termux থেকে লাইভ SSL SPKI Pin বের করা ও `PinnedHttp.java`-তে বসানো
+--------------------------------------------------------------------------------
+৭.১) Termux-এ দরকারি টুল ইনস্টল করুন:
+    pkg update && pkg install git openssl-tool nodejs -y
+
+৭.২) Firebase RTDB-এর SPKI পিন বের করুন:
+    openssl s_client -servername modx-lab-a5e41-default-rtdb.firebaseio.com -connect modx-lab-a5e41-default-rtdb.firebaseio.com:443 -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/{ if(/BEGIN CERTIFICATE/){a++}; out="fb"a".pem"; print >out }'
+    for f in fb*.pem; do echo "$f:"; openssl x509 -in "$f" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64; done
+
+৭.৩) Appwrite Cloud-এর SPKI পিন বের করুন:
+    openssl s_client -servername sgp.cloud.appwrite.io -connect sgp.cloud.appwrite.io:443 -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/{ if(/BEGIN CERTIFICATE/){a++}; out="aw"a".pem"; print >out }'
+    for f in aw*.pem; do echo "$f:"; openssl x509 -in "$f" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64; done
+
+৭.৪) `app/src/main/java/com/android/support/PinnedHttp.java` এডিট করুন:
+  - `FIREBASE_PINS` অ্যারেতে fb2.pem (Intermediate CA) এবং ব্যাকআপ হিসেবে
+    fb1.pem বা fb3.pem-এর Base64 স্ট্রিং বসান।
+  - `APPWRITE_PINS` অ্যারেতে aw2.pem (Intermediate CA) এবং ব্যাকআপ হিসেবে
+    aw1.pem বা aw3.pem-এর Base64 স্ট্রিং বসান।
+  - ENFORCE_PINS = true অপরিবর্তিত রাখুন।
+
+--------------------------------------------------------------------------------
+৮. Termux থেকে কোড Clone / Update ও GitHub-এ Push করা
+--------------------------------------------------------------------------------
+৮.১) নতুন করে রিপো ক্লোন করতে:
+    termux-setup-storage
+    cd ~
+    rm -rf Subway-Surf-ModX-Lab
+    git clone https://github.com/modxlab2/Subway-Surf-ModX-Lab.git
+    cd Subway-Surf-ModX-Lab
+    (Username চাইলে modxlab2 এবং Password-এ আপনার GitHub PAT দেবেন।)
+
+৮.২) আগে থেকেই ক্লোন করা থাকলে শুধু আপডেট নিতে:
+    cd ~/Subway-Surf-ModX-Lab
+    git pull origin main
+
+৮.৩) Git পরিচয় সেট করা (প্রথমবার):
+    git config --global user.name "modxlab2"
+    git config --global user.email "kayesahmmedffglobal@gmail.com"
+
+৮.৪) কোড পরিবর্তন করে Push করার আগে Repo Hygiene চেক করুন:
+  - নিচের ফাইল/ফোল্ডারগুলো কখনোই রিপোতে থাকবে না:
+      app/google-services.json, app/src/main/obj/, app/src/main/jniLibs/,
+      *.keystore, *.jks, *firebase-adminsdk*.json, serviceAccountKey*.json
+  - তারপর Push করুন:
+    git status
+    git add -A
+    git commit -m "Update ModXLab code and pins"
+    git push origin main
+
+--------------------------------------------------------------------------------
+৯. GitHub Actions থেকে Signed Release APK বিল্ড ও ডাউনলোড
+--------------------------------------------------------------------------------
+১. main ব্রাঞ্চে Push করার সাথে সাথে GitHub Actions -> "Build Signed Release APK"
+   স্বয়ংক্রিয়ভাবে চলবে (চাইলে Actions ট্যাব থেকে ম্যানুয়ালিও Run করতে পারেন)।
+২. বিল্ডটি ২ ধাপে কাজ করে:
+   - Pass 1: CERT_SHA256 ও ED25519_PUBLIC_KEY বসিয়ে classes.dex বানায় এবং
+             classes.dex-এর আসল SHA-256 মাপে।
+   - Pass 2: gradle clean assembleRelease দিয়ে আসল DEX_HASH সহ নতুন করে
+             libModXLab.so ও classes.dex তৈরি করে release.keystore দিয়ে Sign করে।
+৩. বিল্ড সফল হলে Artifacts থেকে "ModXLab-release-signed" ডাউনলোড করুন।
+
+--------------------------------------------------------------------------------
+১০. Subway Surfers গেমে Inject ও MT Manager-এ Sign করার ধাপ
+--------------------------------------------------------------------------------
+১০.১) ফাইল আলাদা করা:
+  - `ModXLab-release-signed` থেকে পাওয়া `app-release.apk` MT Manager দিয়ে খুলুন।
+  - ভেতরের `classes.dex` বের করে নাম বদলে `classes11.dex` রাখুন।
+    (সতর্কতা: `classes11.dex`-এর ভেতরে কোনো smali এডিট করবেন না, তাহলে DEX hash ফেল করবে!)
+  - ভেতরের `lib/arm64-v8a/libModXLab.so` নিন (সবসময় সর্বশেষ বিল্ডের নতুনটি নেবেন)।
+
+১০.২) গেম APK-তে যোগ করা:
+  - Subway Surfers (`com.kiloo.subwaysurf`)-এর APK-তে:
+    1. `classes11.dex` যোগ করুন (গেমের classes*.dex-গুলোর সাথে)।
+    2. `lib/arm64-v8a/libModXLab.so` যোগ করুন।
+    3. গেমের নিজস্ব `classes.dex`-এ মূল Activity-র onCreate-এ কল রাখুন:
+       invoke-static {p0}, Lcom/android/support/Main;->Start(Landroid/content/Context;)V
+    4. গেমের `AndroidManifest.xml`-এ নিশ্চিত করুন:
+       - <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+       - <uses-permission android:name="android.permission.INTERNET" />
+       - <service android:name="com.android.support.Launcher"
+                  android:enabled="true"
+                  android:exported="false"
+                  android:stopWithTask="true" />
+
+১০.৩) MT Manager-এ নিজের Keystore ইম্পোর্ট ও Sign করা:
+  - ধাপ ৬ থেকে পাওয়া `release.keystore` ফাইলটি ফোনের `/sdcard/MT2/keystore/`
+    ফোল্ডারে কপি করুন।
+  - MT Manager -> Auto sign -> MORE -> Manage signing keys-এ যান।
+  - "Importable (MT2/keystore)" থেকে `release.keystore` সিলেক্ট করে `credentials.txt`
+    থেকে KEY_ALIAS ("modxlab"), KEYSTORE_PASSWORD ও KEY_PASSWORD দিয়ে ইম্পোর্ট করুন।
+  - এবার গেম APK-তে "Auto sign" করার সময়:
+      * Signing Key : অবশ্যই ইম্পোর্ট করা `modxlab` সিলেক্ট করুন (Default নয়!)
+      * Scheme      : `V1 + V2 + V3` সিলেক্ট করুন
+      * OK চাপুন এবং ইনস্টল করুন।
+
+--------------------------------------------------------------------------------
+১১. ভবিষ্যতে কোনো কিছু পরিবর্তন করতে হলে কোথায় কী করবেন (Cheat Sheet)
+--------------------------------------------------------------------------------
+১. পাসওয়ার্ড বদলানো / নতুন ইউজার / মেয়াদ বাড়ানো বা ব্লক করা:
+   -> শুধু Firebase RTDB `/User` আপডেট করুন (বা `scripts/migrate-passwords.js` চালান)।
+   -> অ্যাপ নতুন করে বিল্ড করার দরকার নেই।
+
+২. "New Update Available" পপআপ বা ভার্সন বদলানো:
+   -> Firebase RTDB `/update/up` ও `app/build.gradle`-এর `versionName` মিলিয়ে নিন।
+
+৩. Mod Menu-র নতুন ফিচার, অফসেট বা UI ডিজাইন পরিবর্তন:
+   -> `app/src/main/jni/Main.cpp` / `Menu.java` / `LoginHelper.java` এডিট করে
+      GitHub-এ push করুন -> নতুন `classes11.dex` + `libModXLab.so` গেমে দিন।
+
+৪. Firebase বা Appwrite ডোমেইন/প্রজেক্ট আইডি বদলাতে হলে:
+   -> `app/src/main/jni/Security.cpp`-এর নিচের দিকের
+      getUpdateUrl / getAppwriteEndpoint / getAppwriteProjectId / getVerifyLoginFunctionId
+      ফাংশনগুলো আপডেট করুন।
+   -> নতুন ডোমেইনের SPKI Pin Termux দিয়ে বের করে `PinnedHttp.java`-তে বসান।
+
+৫. হঠাৎ লগইন করার সময় "Connection failed" দেখালে:
+   -> সার্ভারের SSL সার্টিফিকেট (বিশেষ করে Leaf/Intermediate) পরিবর্তন হয়েছে কি না
+      ধাপ ৭-এর `openssl` কমান্ড দিয়ে চেক করুন, নতুন পিন `PinnedHttp.java`-তে বসিয়ে
+      রি-বিল্ড করুন।
+
+================================================================================

@@ -15,6 +15,7 @@
 #include "Includes/get_device_api_level_inlines.h"
 #include "Menu/Jni.hpp"
 #include "Includes/Logger.h"
+#include "SecurityGuard.hpp"
 
 //Jni stuff from MrDarkRX https://github.com/MrDarkRXx/DarkMod-Floating
 void setDialog(jobject ctx, JNIEnv *env, const char *title, const char *msg){
@@ -96,7 +97,11 @@ void startActivityPermisson(JNIEnv *env, jobject ctx){
 
 //Needed jclass parameter because this is a static java method
 void CheckOverlayPermission(JNIEnv *env, jclass thiz, jobject ctx){
+    (void)thiz;
     //If overlay permission option is greyed out, make sure to add android.permission.SYSTEM_ALERT_WINDOW in manifest
+    if (!SecurityGuard::verifyPathMenuInit(env, ctx)) {
+        return;
+    }
 
     LOGI(OBFUSCATE("Check overlay permission"));
 
@@ -115,6 +120,9 @@ void CheckOverlayPermission(JNIEnv *env, jclass thiz, jobject ctx){
         }
     }
 
+    if (!SecurityGuard::periodicReverify()) {
+        return;
+    }
 
     LOGI(OBFUSCATE("Start service"));
 

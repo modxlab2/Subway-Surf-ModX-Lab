@@ -1,1 +1,9 @@
 /build
+/src/main/obj/
+/src/main/jniLibs/
+google-services.json
+*.so
+*.o
+*.o.d
+*.jks
+*.keystore

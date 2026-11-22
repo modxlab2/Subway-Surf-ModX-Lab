@@ -6,7 +6,6 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -102,8 +101,6 @@ public class LoginHelper {
 
     private final Context ctx;
     private final Callback callback;
-    private final SharedPreferences save;
-    private final SharedPreferences KEY;
 
     private EditText editUser, editPass;
     private LinearLayout userBox, passBox;
@@ -122,9 +119,7 @@ public class LoginHelper {
     public LoginHelper(Context context, Callback cb) {
         this.ctx = context;
         this.callback = cb;
-        this.save = context.getSharedPreferences("save", Context.MODE_PRIVATE);
-        this.KEY = context.getSharedPreferences("KEY", Context.MODE_PRIVATE);
-        this.save.edit().remove("edittext2").apply();
+        SecureTokenStore.purgeLegacyPlaintext(context);
         this.tfRegular = Typeface.create("sans-serif", Typeface.NORMAL);
         this.tfMedium  = Typeface.create("sans-serif-medium", Typeface.NORMAL);
         this.tfBold    = Typeface.create("sans-serif", Typeface.BOLD);
@@ -252,20 +247,8 @@ public class LoginHelper {
         rememberCb.setListener(new CheckListener() {
             @Override
             public void onChanged(boolean checked) {
-                save.edit().remove("edittext2").apply();
-                if (checked) {
-                    String u = editUser.getText().toString().trim().toLowerCase();
-                    if (!TextUtils.isEmpty(u)) {
-                        save.edit().putString("edittext1", u).apply();
-                    }
-                } else {
-                    save.edit().remove("edittext1").apply();
-                    KEY.edit()
-                            .remove("token")
-                            .remove("User")
-                            .remove("Status")
-                            .remove("expiry")
-                            .apply();
+                if (!checked) {
+                    SecureTokenStore.clearToken(ctx);
                 }
             }
         });
@@ -337,27 +320,23 @@ public class LoginHelper {
             }
         });
 
-        save.edit().remove("edittext2").apply();
-        final String savedUser = save.getString("edittext1", "");
-        final String savedToken = KEY.getString("token", "");
-        final String tokenUser = KEY.getString("User", "");
-        if (!savedUser.isEmpty()) {
-            editUser.setText(savedUser);
+        final String savedToken = SecureTokenStore.loadToken(ctx);
+        final String tokenUser = SecureTokenStore.extractUserFromToken(savedToken);
+        if (!TextUtils.isEmpty(savedToken) && !TextUtils.isEmpty(tokenUser)) {
+            editUser.setText(tokenUser);
             rememberCb.setChecked(true);
-            if (!TextUtils.isEmpty(savedToken) && !TextUtils.isEmpty(tokenUser)) {
-                final String devId = getOrCreateDeviceId();
-                if (SecurityNative.verifySessionToken(savedToken, tokenUser, devId)) {
-                    wrapper.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            setStatus("Resuming session...", COLOR_SUCCESS);
-                            checkUpdateAfterLogin();
-                        }
-                    });
-                }
+            final String devId = getOrCreateDeviceId();
+            if (SecurityNative.verifySessionToken(savedToken, tokenUser, devId)) {
+                wrapper.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        setStatus("Resuming session...", COLOR_SUCCESS);
+                        checkUpdateAfterLogin(savedToken, tokenUser, devId);
+                    }
+                });
+            } else {
+                SecureTokenStore.clearToken(ctx);
             }
-        } else {
-            KEY.edit().remove("token").remove("User").remove("Status").remove("expiry").apply();
         }
 
         wrapper.addView(root, new FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
@@ -857,7 +836,7 @@ public class LoginHelper {
     }
 
     private String getOrCreateDeviceId() {
-        String cached = KEY.getString("device_id", "");
+        String cached = SecureTokenStore.loadDeviceId(ctx);
         if (!TextUtils.isEmpty(cached)) return cached;
 
         String raw = "";
@@ -879,7 +858,7 @@ public class LoginHelper {
         if (TextUtils.isEmpty(id)) {
             id = UUID.randomUUID().toString().replace("-", "");
         }
-        KEY.edit().putString("device_id", id).apply();
+        SecureTokenStore.saveDeviceId(ctx, id);
         return id;
     }
 
@@ -899,11 +878,9 @@ public class LoginHelper {
         loginBtn.setText("SIGNING IN...");
         setStatus("Verifying credentials...", COLOR_ACCENT_HI);
 
-        save.edit().remove("edittext2").apply();
-        if (rememberCb != null && rememberCb.isChecked()) {
-            save.edit().putString("edittext1", inputUser).apply();
-        } else {
-            save.edit().remove("edittext1").apply();
+        final boolean shouldRemember = (rememberCb != null && rememberCb.isChecked());
+        if (!shouldRemember) {
+            SecureTokenStore.clearToken(ctx);
         }
 
         final String deviceId = getOrCreateDeviceId();
@@ -977,15 +954,14 @@ public class LoginHelper {
                     return;
                 }
 
-                try {
-                    KEY.edit()
-                            .putString("User", userOut)
-                            .putString("Status", statusOut)
-                            .putString("expiry", expiryOut)
-                            .putString("token", token)
-                            .apply();
-                } catch (Exception ignored) { }
+                if (shouldRemember) {
+                    SecureTokenStore.saveToken(ctx, token);
+                } else {
+                    SecureTokenStore.clearToken(ctx);
+                }
 
+                final String fToken = token;
+                final String fUser = userOut;
                 loginInProgress = false;
                 new Handler(Looper.getMainLooper()).post(new Runnable() {
                     @Override
@@ -994,22 +970,22 @@ public class LoginHelper {
                         loginBtn.setText("SIGN IN");
                         setStatus("Welcome back!", COLOR_SUCCESS);
                         Toast.makeText(ctx, "Login Success", Toast.LENGTH_SHORT).show();
-                        checkUpdateAfterLogin();
+                        checkUpdateAfterLogin(fToken, fUser, deviceId);
                     }
                 });
             }
         }).start();
     }
 
-    private void checkUpdateAfterLogin() {
+    private void checkUpdateAfterLogin(final String token, final String user, final String deviceId) {
         new Thread(new Runnable() {
             @Override
             public void run() {
                 JSONObject updateJson = ModFirebase.fetchUpdate();
-                if (updateJson == null) { proceedToMenu(); return; }
+                if (updateJson == null) { proceedToMenu(token, user, deviceId); return; }
                 try {
                     JSONObject up = updateJson.optJSONObject("up");
-                    if (up == null) { proceedToMenu(); return; }
+                    if (up == null) { proceedToMenu(token, user, deviceId); return; }
                     String latest = up.optString("version", "");
                     String msg = up.optString("message", "");
                     String current = getVersionName();
@@ -1017,24 +993,20 @@ public class LoginHelper {
                         final String fv = latest, fm = msg;
                         new Handler(Looper.getMainLooper()).post(new Runnable() {
                             @Override
-                            public void run() { showUpdateDialog(fv, fm); }
+                            public void run() { showUpdateDialog(fv, fm, token, user, deviceId); }
                         });
                     } else {
-                        proceedToMenu();
+                        proceedToMenu(token, user, deviceId);
                     }
                 } catch (Exception e) {
-                    proceedToMenu();
+                    proceedToMenu(token, user, deviceId);
                 }
             }
         }).start();
     }
 
-    private void proceedToMenu() {
-        final String token = KEY.getString("token", "");
-        final String user = KEY.getString("User", "");
-        final String deviceId = getOrCreateDeviceId();
-
-        if (token == null || token.isEmpty()) {
+    private void proceedToMenu(final String token, final String user, final String deviceId) {
+        if (token == null || token.isEmpty() || user == null || user.isEmpty()) {
             new Handler(Looper.getMainLooper()).post(new Runnable() {
                 @Override public void run() { setStatus("Session invalid", COLOR_DANGER); }
             });
@@ -1203,7 +1175,8 @@ public class LoginHelper {
                 .setInterpolator(new DecelerateInterpolator(1.5f)).start();
     }
 
-    private void showUpdateDialog(String version, String msg) {
+    private void showUpdateDialog(String version, String msg,
+                                  final String token, final String user, final String deviceId) {
         final android.app.AlertDialog[] ref = new android.app.AlertDialog[1];
         final LinearLayout card = newDialogCard();
         card.addView(newDialogIconHolder(COLOR_CTA, new UpdateIcon(COLOR_ON_ACCENT)));
@@ -1273,7 +1246,7 @@ public class LoginHelper {
         continueBtn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 if (ref[0] != null) ref[0].dismiss();
-                proceedToMenu();
+                proceedToMenu(token, user, deviceId);
             }
         });
 
