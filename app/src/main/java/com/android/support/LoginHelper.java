@@ -13,6 +13,7 @@ import android.graphics.ColorFilter;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
@@ -30,11 +31,12 @@ import android.text.method.PasswordTransformationMethod;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.TypedValue;
+import android.view.ActionMode;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MenuItem;
 import android.view.MotionEvent;
 import android.view.View;
-import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
 import android.view.WindowManager;
@@ -47,7 +49,6 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.PopupWindow;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -91,11 +92,6 @@ public class LoginHelper {
     private static final int COLOR_CTA          = Color.parseColor("#3DDB87");
     private static final int COLOR_OUTLINE      = Color.parseColor("#3A3D49");
 
-    private static final int COLOR_TOOLBAR_BG     = 0xFF2E2E2E;
-    private static final int COLOR_TOOLBAR_BORDER = 0xFF3D3D3D;
-    private static final int COLOR_TOOLBAR_TEXT   = 0xFFFFFFFF;
-    private static final int COLOR_TOOLBAR_DIV    = 0xFF4A4A4A;
-
     private static final int WRAP_CONTENT = ViewGroup.LayoutParams.WRAP_CONTENT;
     private static final int MATCH_PARENT = ViewGroup.LayoutParams.MATCH_PARENT;
 
@@ -111,8 +107,6 @@ public class LoginHelper {
     private TextView statusTxt;
     private boolean loginInProgress = false;
     private boolean keyExpiredDialogShowing = false;
-
-    private PopupWindow copyPastePopup;
 
     private Typeface tfRegular, tfMedium, tfBold;
 
@@ -168,10 +162,12 @@ public class LoginHelper {
         userIconView = (ImageView) userChip.getChildAt(0);
         userBox.addView(userChip);
 
-        editUser = makeInput("user");
+        editUser = makeInput("user", false);
         editUser.setHint("Username");
-        editUser.setImeOptions(EditorInfo.IME_ACTION_NEXT);
-        editUser.setInputType(InputType.TYPE_CLASS_TEXT);
+        editUser.setImeOptions(EditorInfo.IME_ACTION_NEXT | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
+        editUser.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        editUser.setTypeface(tfRegular);
+        editUser.setSingleLine(true);
         LinearLayout.LayoutParams ueLp = new LinearLayout.LayoutParams(0, MATCH_PARENT, 1f);
         editUser.setLayoutParams(ueLp);
         enableRichTextInteraction(editUser);
@@ -188,11 +184,16 @@ public class LoginHelper {
         passIconView = (ImageView) passChip.getChildAt(0);
         passBox.addView(passChip);
 
-        editPass = makeInput("pass");
+        editPass = makeInput("pass", true);
         editPass.setHint("Password or license key");
-        editPass.setImeOptions(EditorInfo.IME_ACTION_DONE);
-        editPass.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        editPass.setImeOptions(EditorInfo.IME_ACTION_DONE | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
+        editPass.setInputType(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_VARIATION_PASSWORD
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        editPass.setTypeface(tfRegular);
+        editPass.setSingleLine(true);
         editPass.setTransformationMethod(PasswordTransformationMethod.getInstance());
+        attachPasswordActionModeGuard(editPass);
         LinearLayout.LayoutParams peLp = new LinearLayout.LayoutParams(0, MATCH_PARENT, 1f);
         editPass.setLayoutParams(peLp);
         enableRichTextInteraction(editPass);
@@ -226,7 +227,6 @@ public class LoginHelper {
             public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
                 if (actionId == EditorInfo.IME_ACTION_DONE
                         || (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER)) {
-                    dismissCopyPastePopup();
                     hideKeyboard(editPass);
                     performLogin();
                     return true;
@@ -247,15 +247,25 @@ public class LoginHelper {
         showCb.setListener(new CheckListener() {
             @Override
             public void onChanged(boolean checked) {
-                int sel = editPass.getSelectionStart();
+                int selStart = editPass.getSelectionStart();
+                int selEnd = editPass.getSelectionEnd();
                 if (checked) {
+                    editPass.setInputType(InputType.TYPE_CLASS_TEXT
+                            | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                            | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
                     editPass.setTransformationMethod(
                             android.text.method.HideReturnsTransformationMethod.getInstance());
                 } else {
+                    editPass.setInputType(InputType.TYPE_CLASS_TEXT
+                            | InputType.TYPE_TEXT_VARIATION_PASSWORD
+                            | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
                     editPass.setTransformationMethod(PasswordTransformationMethod.getInstance());
                 }
-                if (sel >= 0 && sel <= editPass.getText().length()) {
-                    editPass.setSelection(sel);
+                editPass.setTypeface(tfRegular);
+                editPass.setSingleLine(true);
+                int len = editPass.getText() != null ? editPass.getText().length() : 0;
+                if (selStart >= 0 && selEnd >= 0 && selStart <= len && selEnd <= len) {
+                    editPass.setSelection(selStart, selEnd);
                 }
             }
         });
@@ -319,7 +329,6 @@ public class LoginHelper {
         loginBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                dismissCopyPastePopup();
                 v.animate().scaleX(0.975f).scaleY(0.975f).setDuration(100)
                         .withEndAction(new Runnable() {
                             @Override
@@ -430,8 +439,17 @@ public class LoginHelper {
         return chip;
     }
 
-    private EditText makeInput(final String which) {
-        EditText e = new EditText(ctx);
+    private EditText makeInput(final String which, final boolean isPasswordField) {
+        EditText e = isPasswordField ? new EditText(ctx) {
+            @Override
+            public boolean onTextContextMenuItem(int id) {
+                if (isPasswordMasked(this)
+                        && (id == android.R.id.cut || id == android.R.id.copy)) {
+                    return false;
+                }
+                return super.onTextContextMenuItem(id);
+            }
+        } : new EditText(ctx);
         e.setTag(which);
         e.setHintTextColor(COLOR_HINT);
         e.setTextColor(COLOR_TEXT);
@@ -442,12 +460,80 @@ public class LoginHelper {
         e.setFocusableInTouchMode(true);
         e.setClickable(true);
         e.setCursorVisible(true);
+        e.setSelectAllOnFocus(false);
         e.setBackground(null);
         e.setIncludeFontPadding(false);
         e.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
         e.setPadding(dp(8), 0, dp(14), 0);
         e.setHighlightColor(withAlpha(COLOR_ACCENT, 0x55));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            e.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            applyAccentSelectionDrawables(e);
+        }
         return e;
+    }
+
+    private static boolean isPasswordMasked(EditText et) {
+        return et != null && (et.getTransformationMethod() instanceof PasswordTransformationMethod);
+    }
+
+    private void attachPasswordActionModeGuard(final EditText passField) {
+        ActionMode.Callback cb = new ActionMode.Callback() {
+            @Override
+            public boolean onCreateActionMode(ActionMode mode, android.view.Menu menu) {
+                return true;
+            }
+
+            @Override
+            public boolean onPrepareActionMode(ActionMode mode, android.view.Menu menu) {
+                if (menu != null && isPasswordMasked(passField)) {
+                    menu.removeItem(android.R.id.cut);
+                    menu.removeItem(android.R.id.copy);
+                    return true;
+                }
+                return false;
+            }
+
+            @Override
+            public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
+                return false;
+            }
+
+            @Override
+            public void onDestroyActionMode(ActionMode mode) { }
+        };
+        passField.setCustomSelectionActionModeCallback(cb);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            passField.setCustomInsertionActionModeCallback(cb);
+        }
+    }
+
+    private void applyAccentSelectionDrawables(EditText e) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return;
+        try {
+            GradientDrawable cursor = new GradientDrawable();
+            cursor.setShape(GradientDrawable.RECTANGLE);
+            cursor.setColor(COLOR_ACCENT);
+            cursor.setSize(Math.max(2, dp(2)), dp(18));
+            e.setTextCursorDrawable(cursor);
+
+            e.setTextSelectHandle(tintOrFallbackHandle(e.getTextSelectHandle(), 0));
+            e.setTextSelectHandleLeft(tintOrFallbackHandle(e.getTextSelectHandleLeft(), -1));
+            e.setTextSelectHandleRight(tintOrFallbackHandle(e.getTextSelectHandleRight(), 1));
+        } catch (Exception ignored) { }
+    }
+
+    private Drawable tintOrFallbackHandle(Drawable d, int align) {
+        if (d != null) {
+            Drawable copy = d.mutate();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                copy.setTint(COLOR_ACCENT);
+            }
+            return copy;
+        }
+        return new HandleDrawable(COLOR_ACCENT, align, dp(20));
     }
 
     private void enableRichTextInteraction(final EditText e) {
@@ -460,9 +546,10 @@ public class LoginHelper {
 
     private ImageView makePasteButton(final EditText target) {
         final ImageView btn = new ImageView(ctx);
-        btn.setImageDrawable(new PasteIcon(COLOR_TEXT_MUTED));
+        final PasteIcon pasteIcon = new PasteIcon(COLOR_TEXT_MUTED);
+        btn.setImageDrawable(pasteIcon);
         btn.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        btn.setPadding(dp(7), dp(7), dp(7), dp(7));
+        btn.setPadding(dp(8), dp(8), dp(8), dp(8));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(32), dp(32));
         lp.setMargins(dp(2), 0, dp(6), 0);
         btn.setLayoutParams(lp);
@@ -475,20 +562,36 @@ public class LoginHelper {
             mask.setShape(GradientDrawable.OVAL);
             mask.setColor(Color.WHITE);
             RippleDrawable ripple = new RippleDrawable(
-                    ColorStateList.valueOf(withAlpha(COLOR_ACCENT, 0x3A)), null, mask);
+                    ColorStateList.valueOf(withAlpha(COLOR_ACCENT, 0x18)), null, mask);
             btn.setBackground(ripple);
         }
+
+        btn.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                switch (event.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        pasteIcon.setColor(COLOR_ACCENT_HI);
+                        break;
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        pasteIcon.setColor(COLOR_TEXT_MUTED);
+                        break;
+                }
+                return false;
+            }
+        });
 
         btn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 pasteFromClipboard(target);
-                v.animate().scaleX(0.82f).scaleY(0.82f).setDuration(90)
+                v.animate().scaleX(0.86f).scaleY(0.86f).setDuration(85)
                         .withEndAction(new Runnable() {
                             @Override
                             public void run() {
-                                btn.animate().scaleX(1f).scaleY(1f).setDuration(180)
-                                        .setInterpolator(new OvershootInterpolator(2.2f)).start();
+                                btn.animate().scaleX(1f).scaleY(1f).setDuration(170)
+                                        .setInterpolator(new OvershootInterpolator(2.0f)).start();
                             }
                         }).start();
             }
@@ -547,252 +650,16 @@ public class LoginHelper {
                 if (fi != null) {
                     fi.animateColor(hasFocus ? COLOR_ACCENT_HI : COLOR_TEXT_MUTED, 200);
                 }
-                if (!hasFocus) dismissCopyPastePopup();
+                if (hasFocus) {
+                    et.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            forceShowKeyboard(et);
+                        }
+                    });
+                }
             }
         });
-
-        et.setOnTouchListener(new View.OnTouchListener() {
-            private final Handler handler = new Handler(Looper.getMainLooper());
-            private Runnable longPressRunnable;
-            private float downX, downY;
-            private float localX, localY;
-            private boolean longPressFired = false;
-            private final int slop = ViewConfiguration.get(ctx).getScaledTouchSlop();
-            private static final long LONG_PRESS_MS = 400;
-
-            @Override
-            public boolean onTouch(View v, MotionEvent event) {
-                switch (event.getActionMasked()) {
-                    case MotionEvent.ACTION_DOWN:
-                        downX = event.getRawX();
-                        downY = event.getRawY();
-                        localX = event.getX();
-                        localY = event.getY();
-                        longPressFired = false;
-                        longPressRunnable = new Runnable() {
-                            @Override
-                            public void run() {
-                                longPressFired = true;
-                                onLongPress(et, localX, localY);
-                            }
-                        };
-                        handler.postDelayed(longPressRunnable, LONG_PRESS_MS);
-                        return false;
-
-                    case MotionEvent.ACTION_MOVE: {
-                        float dx = Math.abs(event.getRawX() - downX);
-                        float dy = Math.abs(event.getRawY() - downY);
-                        if (!longPressFired && (dx > slop || dy > slop)) {
-                            if (longPressRunnable != null) {
-                                handler.removeCallbacks(longPressRunnable);
-                                longPressRunnable = null;
-                            }
-                        }
-                        return false;
-                    }
-
-                    case MotionEvent.ACTION_UP:
-                    case MotionEvent.ACTION_CANCEL:
-                        if (longPressRunnable != null) {
-                            handler.removeCallbacks(longPressRunnable);
-                            longPressRunnable = null;
-                        }
-                        if (!longPressFired
-                                && event.getActionMasked() == MotionEvent.ACTION_UP) {
-                            v.requestFocus();
-                            v.postDelayed(new Runnable() {
-                                @Override
-                                public void run() {
-                                    forceShowKeyboard(et);
-                                }
-                            }, 80);
-                        }
-                        return false;
-                }
-                return false;
-            }
-        });
-    }
-
-    private void onLongPress(EditText et, float x, float y) {
-        try {
-            et.requestFocus();
-            CharSequence text = et.getText();
-            if (text != null && text.length() > 0) {
-                int offset = et.getOffsetForPosition(x, y);
-                if (offset < 0) offset = 0;
-                if (offset > text.length()) offset = text.length();
-
-                int start = offset;
-                int end = offset;
-                while (start > 0 && !Character.isWhitespace(text.charAt(start - 1))) start--;
-                while (end < text.length() && !Character.isWhitespace(text.charAt(end))) end++;
-
-                if (start != end) {
-                    et.setSelection(start, end);
-                } else {
-                    et.selectAll();
-                }
-            }
-            et.post(new Runnable() {
-                @Override
-                public void run() {
-                    showCopyPasteToolbar(et);
-                }
-            });
-        } catch (Exception e) {
-            Log.e(DBG, "onLongPress error", e);
-        }
-    }
-
-    private void dismissCopyPastePopup() {
-        if (copyPastePopup != null) {
-            try { copyPastePopup.dismiss(); } catch (Exception ignored) { }
-            copyPastePopup = null;
-        }
-    }
-
-    private void showCopyPasteToolbar(final EditText et) {
-        dismissCopyPastePopup();
-
-        boolean hasText = et.getText() != null && et.getText().length() > 0;
-        boolean hasSelection = et.getSelectionStart() != et.getSelectionEnd();
-        boolean hasClipboard;
-        try {
-            ClipboardManager cm = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);
-            hasClipboard = cm != null && cm.hasPrimaryClip();
-        } catch (Exception e) {
-            hasClipboard = false;
-        }
-
-        java.util.List<String> labels = new java.util.ArrayList<>();
-        java.util.List<Integer> actions = new java.util.ArrayList<>();
-
-        if (hasText) {
-            labels.add("Select all");  actions.add(0x0102001f); // framework selectAll
-            if (hasSelection) {
-                labels.add("Cut");     actions.add(0x01020020); // framework cut
-            }
-            labels.add("Copy");        actions.add(0x01020021); // framework copy
-        }
-        if (hasClipboard) {
-            labels.add("Paste");       actions.add(0x01020022); // framework paste
-        }
-        if (labels.isEmpty()) return;
-
-        LinearLayout toolbar = new LinearLayout(ctx);
-        toolbar.setOrientation(LinearLayout.HORIZONTAL);
-        toolbar.setGravity(Gravity.CENTER_VERTICAL);
-
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(COLOR_TOOLBAR_BG);
-        bg.setCornerRadius(dp(8));
-        bg.setStroke(dp(1), COLOR_TOOLBAR_BORDER);
-        toolbar.setBackground(bg);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            toolbar.setElevation(dp(12));
-        }
-
-        toolbar.setPadding(dp(4), dp(3), dp(4), dp(3));
-
-        for (int i = 0; i < labels.size(); i++) {
-            if (i > 0) {
-                View div = new View(ctx);
-                LinearLayout.LayoutParams divLp =
-                        new LinearLayout.LayoutParams(dp(1), dp(18));
-                divLp.setMargins(dp(2), 0, dp(2), 0);
-                div.setLayoutParams(divLp);
-                div.setBackgroundColor(COLOR_TOOLBAR_DIV);
-                toolbar.addView(div);
-            }
-
-            final int actionId = actions.get(i);
-            TextView tv = new TextView(ctx);
-            tv.setText(labels.get(i));
-            tv.setTextColor(COLOR_TOOLBAR_TEXT);
-            tv.setTextSize(14f);
-            tv.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
-            tv.setPadding(dp(14), dp(9), dp(14), dp(9));
-            tv.setClickable(true);
-            tv.setFocusable(true);
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                ColorStateList rippleCol = ColorStateList.valueOf(0x40FFFFFF);
-                GradientDrawable mask = new GradientDrawable();
-                mask.setCornerRadius(dp(6));
-                mask.setColor(Color.WHITE);
-                RippleDrawable ripple = new RippleDrawable(rippleCol, null, mask);
-                tv.setBackground(ripple);
-            }
-
-            tv.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    try {
-                        et.onTextContextMenuItem(actionId);
-                    } catch (Exception ex) {
-                        Log.e(DBG, "onTextContextMenuItem error", ex);
-                    }
-                    dismissCopyPastePopup();
-                }
-            });
-
-            toolbar.addView(tv);
-        }
-
-        PopupWindow popup = new PopupWindow(toolbar,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                true);
-        popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-        popup.setOutsideTouchable(true);
-        popup.setFocusable(true);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            popup.setElevation(dp(12));
-        }
-
-        this.copyPastePopup = popup;
-
-        toolbar.measure(
-                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-        int tw = toolbar.getMeasuredWidth();
-        int th = toolbar.getMeasuredHeight();
-
-        int[] loc = new int[2];
-        et.getLocationOnScreen(loc);
-        int ex = loc[0];
-        int ey = loc[1];
-        int ew = et.getWidth();
-        int eh = et.getHeight();
-
-        DisplayMetrics dm = safeDisplayMetrics(ctx);
-        int screenW = dm.widthPixels;
-        int screenH = dm.heightPixels;
-
-        int x = ex + (ew - tw) / 2;
-        if (x < dp(4)) x = dp(4);
-        if (x + tw > screenW - dp(4)) x = screenW - tw - dp(4);
-
-        int gap = dp(8);
-        int yAbove = ey - th - gap;
-        int yBelow = ey + eh + gap;
-
-        int y;
-        if (yAbove >= dp(8)) {
-            y = yAbove;
-        } else if (yBelow + th <= screenH - dp(8)) {
-            y = yBelow;
-        } else {
-            y = dp(8);
-        }
-
-        try {
-            popup.showAtLocation(et, Gravity.NO_GRAVITY, x, y);
-        } catch (Exception e) {
-            Log.e(DBG, "popup show failed", e);
-            copyPastePopup = null;
-        }
     }
 
     private void forceShowKeyboard(final EditText et) {
@@ -801,12 +668,7 @@ public class LoginHelper {
             InputMethodManager imm = (InputMethodManager)
                     ctx.getSystemService(Context.INPUT_METHOD_SERVICE);
             if (imm == null) return;
-            et.requestFocus();
-            if (et.getText().length() > 0) {
-                et.setSelection(et.getText().length());
-            }
-            boolean shown = imm.showSoftInput(et, InputMethodManager.SHOW_IMPLICIT);
-            if (!shown) imm.showSoftInput(et, InputMethodManager.SHOW_FORCED);
+            imm.showSoftInput(et, InputMethodManager.SHOW_IMPLICIT);
         } catch (Exception e) {
             Log.e(DBG, "forceShowKeyboard error", e);
         }
@@ -1498,32 +1360,114 @@ public class LoginHelper {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Path path = new Path();
         private final RectF rect = new RectF();
+
         PasteIcon(int color) {
             paint.setColor(color);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeCap(Paint.Cap.ROUND);
             paint.setStrokeJoin(Paint.Join.ROUND);
         }
-        @Override public void draw(Canvas canvas) {
-            android.graphics.Rect b = getBounds();
+
+        void setColor(int color) {
+            if (paint.getColor() != color) {
+                paint.setColor(color);
+                invalidateSelf();
+            }
+        }
+
+        @Override
+        public void draw(Canvas canvas) {
+            Rect b = getBounds();
             if (b.width() <= 0 || b.height() <= 0) return;
             float size = Math.min(b.width(), b.height());
             float s = size / 24f;
-            paint.setStrokeWidth(1.4f * s);
+            paint.setStrokeWidth(1.5f * s);
             canvas.save();
             canvas.translate(b.left + (b.width() - size) / 2f,
                              b.top + (b.height() - size) / 2f);
             canvas.scale(s, s);
-            rect.set(6f, 5.5f, 18f, 20.5f);
-            canvas.drawRoundRect(rect, 2.4f, 2.4f, paint);
-            rect.set(9.5f, 3.5f, 14.5f, 6.5f);
-            canvas.drawRoundRect(rect, 1.4f, 1.4f, paint);
-            path.reset(); path.moveTo(9f, 11f); path.lineTo(15f, 11f);
+
+            // Top clip tab
+            rect.set(9.2f, 3.2f, 14.8f, 6.2f);
+            canvas.drawRoundRect(rect, 1.3f, 1.3f, paint);
+
+            // Clipboard body (clean outline opening around top clip tab)
+            path.reset();
+            path.moveTo(9.2f, 5.2f);
+            path.lineTo(7.8f, 5.2f);
+            path.quadTo(6f, 5.2f, 6f, 7f);
+            path.lineTo(6f, 18.7f);
+            path.quadTo(6f, 20.5f, 7.8f, 20.5f);
+            path.lineTo(16.2f, 20.5f);
+            path.quadTo(18f, 20.5f, 18f, 18.7f);
+            path.lineTo(18f, 7f);
+            path.quadTo(18f, 5.2f, 16.2f, 5.2f);
+            path.lineTo(14.8f, 5.2f);
             canvas.drawPath(path, paint);
-            path.reset(); path.moveTo(9f, 14.5f); path.lineTo(13f, 14.5f);
+
+            // Single subtle inner line
+            canvas.drawLine(9.5f, 12.2f, 14.5f, 12.2f, paint);
+
+            canvas.restore();
+        }
+
+        @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); }
+        @Override public void setColorFilter(ColorFilter cf) { paint.setColorFilter(cf); }
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
+    private static class HandleDrawable extends Drawable {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Path path = new Path();
+        private final int align;
+        private final int sizePx;
+
+        HandleDrawable(int color, int align, int sizePx) {
+            this.align = align;
+            this.sizePx = Math.max(12, sizePx);
+            paint.setColor(color);
+            paint.setStyle(Paint.Style.FILL);
+        }
+
+        @Override public int getIntrinsicWidth() { return sizePx; }
+        @Override public int getIntrinsicHeight() { return sizePx; }
+
+        @Override
+        public void draw(Canvas canvas) {
+            Rect b = getBounds();
+            if (b.width() <= 0 || b.height() <= 0) return;
+            float size = Math.min(b.width(), b.height());
+            float s = size / 24f;
+            canvas.save();
+            canvas.translate(b.left + (b.width() - size) / 2f, b.top);
+            canvas.scale(s, s);
+            path.reset();
+            if (align < 0) {
+                path.moveTo(20f, 2f);
+                path.lineTo(20f, 14f);
+                path.cubicTo(20f, 18.4f, 16.4f, 22f, 12f, 22f);
+                path.cubicTo(7.6f, 22f, 4f, 18.4f, 4f, 14f);
+                path.cubicTo(4f, 9.6f, 7.6f, 6f, 12f, 6f);
+                path.lineTo(20f, 2f);
+            } else if (align > 0) {
+                path.moveTo(4f, 2f);
+                path.lineTo(12f, 6f);
+                path.cubicTo(16.4f, 6f, 20f, 9.6f, 20f, 14f);
+                path.cubicTo(20f, 18.4f, 16.4f, 22f, 12f, 22f);
+                path.cubicTo(7.6f, 22f, 4f, 18.4f, 4f, 14f);
+                path.lineTo(4f, 2f);
+            } else {
+                path.moveTo(12f, 2f);
+                path.lineTo(18.5f, 9.5f);
+                path.cubicTo(20.5f, 12f, 20.5f, 16f, 18.2f, 18.8f);
+                path.cubicTo(15f, 22.5f, 9f, 22.5f, 5.8f, 18.8f);
+                path.cubicTo(3.5f, 16f, 3.5f, 12f, 5.5f, 9.5f);
+                path.close();
+            }
             canvas.drawPath(path, paint);
             canvas.restore();
         }
+
         @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); }
         @Override public void setColorFilter(ColorFilter cf) { paint.setColorFilter(cf); }
         @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }

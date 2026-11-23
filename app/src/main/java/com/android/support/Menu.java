@@ -1461,6 +1461,19 @@ new Titanic().start(proTitle);
         private final RectF rect = new RectF();
         private final float density;
         private int barAlpha = IDLE_ALPHA;
+        private boolean scrollingEnabled = true;
+
+        void setScrollingEnabled(boolean enabled) {
+            this.scrollingEnabled = enabled;
+            if (!enabled) {
+                removeCallbacks(fadeRunnable);
+                barAlpha = IDLE_ALPHA;
+                if (getScrollX() != 0 || getScrollY() != 0) {
+                    super.scrollTo(0, 0);
+                }
+            }
+            invalidate();
+        }
 
         private final Runnable fadeRunnable = new Runnable() {
             @Override
@@ -1481,6 +1494,7 @@ new Titanic().start(proTitle);
         }
 
         private void flashBar() {
+            if (!scrollingEnabled) return;
             barAlpha = ACTIVE_ALPHA;
             removeCallbacks(fadeRunnable);
             postDelayed(fadeRunnable, 700);
@@ -1488,9 +1502,38 @@ new Titanic().start(proTitle);
         }
 
         @Override
+        public boolean onInterceptTouchEvent(MotionEvent ev) {
+            if (!scrollingEnabled) return false;
+            return super.onInterceptTouchEvent(ev);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent ev) {
+            if (!scrollingEnabled) return false;
+            return super.onTouchEvent(ev);
+        }
+
+        @Override
+        public boolean requestChildRectangleOnScreen(View child, Rect rectangle, boolean immediate) {
+            if (!scrollingEnabled) return false;
+            return super.requestChildRectangleOnScreen(child, rectangle, immediate);
+        }
+
+        @Override
+        public void scrollTo(int x, int y) {
+            if (!scrollingEnabled) {
+                if (getScrollX() != 0 || getScrollY() != 0) {
+                    super.scrollTo(0, 0);
+                }
+                return;
+            }
+            super.scrollTo(x, y);
+        }
+
+        @Override
         protected void onScrollChanged(int l, int t, int oldl, int oldt) {
             super.onScrollChanged(l, t, oldl, oldt);
-            flashBar();
+            if (scrollingEnabled) flashBar();
         }
 
         @Override
@@ -1507,7 +1550,7 @@ new Titanic().start(proTitle);
         @Override
         public void draw(Canvas canvas) {
             super.draw(canvas);
-            if (getChildCount() == 0) return;
+            if (!scrollingEnabled || getChildCount() == 0) return;
 
             final int viewH = getHeight();
             final int contentH = getChildAt(0).getHeight();
@@ -2253,6 +2296,9 @@ if (!categoryNames.contains("Settings")) {
             if (!isLoggedIn) {
                 showLoginScreen();
             } else {
+                if (contentScrollView instanceof SlimScrollView) {
+                    ((SlimScrollView) contentScrollView).setScrollingEnabled(true);
+                }
                 buildFeaturesAndCategories(GetFeatureList());
             }
         }
@@ -2295,6 +2341,9 @@ private void showLoginScreen() {
     if (sidebarDivider != null) sidebarDivider.setVisibility(View.GONE);
 
     contentLayout.removeAllViews();
+    if (contentScrollView instanceof SlimScrollView) {
+        ((SlimScrollView) contentScrollView).setScrollingEnabled(false);
+    }
     setWindowFocusable(true);
 
     LoginHelper loginHelper = new LoginHelper(getContext, new LoginHelper.Callback() {
@@ -2308,6 +2357,9 @@ private void showLoginScreen() {
             if (sidebarScroll != null) sidebarScroll.setVisibility(View.VISIBLE);
             if (sidebarDivider != null) sidebarDivider.setVisibility(View.VISIBLE);
 
+            if (contentScrollView instanceof SlimScrollView) {
+                ((SlimScrollView) contentScrollView).setScrollingEnabled(true);
+            }
             contentLayout.removeAllViews();
             buildFeaturesAndCategories(GetFeatureList());
         }
@@ -2316,33 +2368,66 @@ private void showLoginScreen() {
     final View loginView = loginHelper.buildView();
 
     // ================================================================
-    // Drag wrapper — DOWN সর্বদা consume করি (child কে dispatch করার পরে)
-    // এর ফলে background-এ টাচ করলেও আমাদের MOVE/UP আসবে।
+    // Drag wrapper — EditText touch সরাসরি EditText-কে দেই,
+    // card background বা অন্য জায়গায় drag করলে যেকোনো দিকে window move হয়।
     // ================================================================
     FrameLayout dragWrapper = new FrameLayout(Menu.this.getContext) {
         private float downX, downY;
         private int   startWindowX, startWindowY;
         private boolean dragging = false;
+        private boolean touchInEditText = false;
+        private final Rect hitRect = new Rect();
         private final int slop =
                 ViewConfiguration.get(Menu.this.getContext).getScaledTouchSlop();
 
+        private boolean isPointInChildEditText(View v, float x, float y) {
+            if (v == null || v.getVisibility() != View.VISIBLE) return false;
+            if (v instanceof EditText) {
+                hitRect.set(0, 0, v.getWidth(), v.getHeight());
+                offsetDescendantRectToMyCoords(v, hitRect);
+                return hitRect.contains(Math.round(x), Math.round(y));
+            }
+            if (v instanceof ViewGroup) {
+                ViewGroup vg = (ViewGroup) v;
+                for (int i = vg.getChildCount() - 1; i >= 0; i--) {
+                    if (isPointInChildEditText(vg.getChildAt(i), x, y)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         @Override
         public boolean dispatchTouchEvent(MotionEvent ev) {
-            switch (ev.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN: {
-                    downX = ev.getRawX();
-                    downY = ev.getRawY();
-                    if (vmParams != null) {
-                        startWindowX = vmParams.x;
-                        startWindowY = vmParams.y;
-                    }
+            int action = ev.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                touchInEditText = isPointInChildEditText(this, ev.getX(), ev.getY());
+                if (touchInEditText) {
                     dragging = false;
-                    // Let children see DOWN first (so EditText/Button work)
-                    super.dispatchTouchEvent(ev);
-                    // ALWAYS claim DOWN → guarantees we receive MOVE/UP
-                    return true;
+                    return super.dispatchTouchEvent(ev);
                 }
+                downX = ev.getRawX();
+                downY = ev.getRawY();
+                if (vmParams != null) {
+                    startWindowX = vmParams.x;
+                    startWindowY = vmParams.y;
+                }
+                dragging = false;
+                // Let children see DOWN first (so Button/CheckBox work)
+                super.dispatchTouchEvent(ev);
+                // ALWAYS claim DOWN on non-EditText areas -> guarantees MOVE/UP
+                return true;
+            }
 
+            if (touchInEditText) {
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    touchInEditText = false;
+                }
+                return super.dispatchTouchEvent(ev);
+            }
+
+            switch (action) {
                 case MotionEvent.ACTION_MOVE: {
                     float dx = ev.getRawX() - downX;
                     float dy = ev.getRawY() - downY;
@@ -2363,7 +2448,7 @@ private void showLoginScreen() {
                         }
                         return true;
                     }
-                    // Not dragging yet → pass MOVE to children
+                    // Not dragging yet -> pass MOVE to children
                     super.dispatchTouchEvent(ev);
                     return true;
                 }
@@ -2472,35 +2557,15 @@ private void setWindowFocusable(boolean focusable) {
             if (!windowIsFocusable) {
                 savedWindowFlags = vmParams.flags;
 
-                try {
-                    View focused = rootFrame.findFocus();
-                    if (focused != null) focused.clearFocus();
-                    InputMethodManager imm = (InputMethodManager)
-                            getContext.getSystemService(Context.INPUT_METHOD_SERVICE);
-                    if (imm != null) imm.hideSoftInputFromWindow(rootFrame.getWindowToken(), 0);
-                } catch (Exception ignored) { }
-
                 vmParams.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
                 vmParams.flags &= ~WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM;
                 vmParams.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
 
                 vmParams.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN
-                                       | WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN;
+                                       | WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN;
 
                 windowIsFocusable = true;
                 mWindowManager.updateViewLayout(rootFrame, vmParams);
-
-                rootFrame.requestFocus();
-                rootFrame.postDelayed(new Runnable() {
-                    @Override
-                    public void run() {
-                        try {
-                            InputMethodManager imm = (InputMethodManager)
-                                    getContext.getSystemService(Context.INPUT_METHOD_SERVICE);
-                            if (imm != null) imm.restartInput(rootFrame);
-                        } catch (Exception ignored) { }
-                    }
-                }, 100);
             }
         } else {
             if (windowIsFocusable) {

@@ -23,8 +23,9 @@ Keystore Password লিখবেন না। সেগুলো ফোনে�
 - appwrite.json                             -> Appwrite ফাংশন কনফিগারেশন
 - database.rules.json                       -> Firebase RTDB Security Rules
 - scripts/migrate-passwords.js              -> Ed25519 কী, scrypt হ্যাশ ও ইউজার তৈরির স্ক্রিপ্ট
+- scripts/inject-and-sign.sh                -> Termux অটোমেটেড Host APK Inject, Page-Align & V1+V2+V3 Sign স্ক্রিপ্ট
 - app/src/main/jni/Security.cpp             -> নেটিভ ইন্টেগ্রিটি, URL ও ID (OBF_STR), DEX/Cert চেক
-- app/src/main/java/com/android/support/PinnedHttp.java -> SSL SPKI Certificate Pinning
+- app/src/main/java/com/android/support/PinnedHttp.java -> SSL SPKI Certificate Pinning (AndroidCAStore)
 - app/src/main/jni/Main.cpp                 -> গেম হুকস ও ফিচার গেট
 - .github/workflows/generate-keystore.yml   -> Release Keystore তৈরির Workflow
 - .github/workflows/build.yml               -> Two-Pass Signed Release APK বিল্ড Workflow
@@ -255,6 +256,68 @@ Termux বা PC-তে রিপোর ফোল্ডারের ভেতর
       apksigner verify -v --print-certs host_signed.apk
   - `apksigner verify`-তে অবশ্যই `v2: true` এবং `v3: true` দেখাতে হবে এবং SHA-256
     digest আপনার CI Summary-র `Signing Cert SHA-256`-এর সাথে হুবহু মিলতে হবে।
+  - নোট: হোস্ট গেমের `minSdkVersion >= 24` হলে সাধারণ `apksigner verify`-তে V1
+    `false` দেখাতে পারে; V1 যাচাই করতে `--min-sdk-version 21` যোগ করে দেখুন:
+      apksigner verify --min-sdk-version 21 --verbose --print-certs host_signed.apk
+
+১০.৪) Termux অটোমেটেড স্ক্রিপ্ট (`scripts/inject-and-sign.sh`) — প্রস্তাবিত পদ্ধতি:
+  ১. Termux-এ প্রথমবার প্রয়োজনীয় সব প্যাকেজ ইনস্টল ও রিপো আপডেট:
+      termux-setup-storage
+      pkg update && pkg upgrade -y
+      pkg install -y git apksigner zip unzip openjdk-21 aapt python android-tools apktool
+
+     Termux home বা স্টোরেজে রিপো ক্লোন / আপডেট:
+      cd ~
+      git clone https://github.com/modxlab2/Subway-Surf-ModX-Lab.git
+      cd Subway-Surf-ModX-Lab
+      (আগে থেকে থাকলে শুধু: git pull origin main)
+
+  ২. গেমে প্রথমবার Smali + Manifest এডিট (Sign ছাড়াই `base_patched.apk` তৈরি):
+     - MT Manager (Auto Sign অবশ্যই OFF) অথবা `apktool` ব্যবহার করুন:
+         mkdir -p ~/mod_work
+         apktool d -r "/storage/emulated/0/keystore/Subway Surf_3.71.11.apk" -o ~/mod_work/host_dec
+     - `AndroidManifest.xml`-এ `SYSTEM_ALERT_WINDOW`, `INTERNET` এবং `<service android:name="com.android.support.Launcher" ... />` দিন।
+     - Host Main Activity (যেমন `ChiliMultidexSupportActivity`)-র `onCreate` মেথডে
+       `invoke-super` লাইনের ঠিক পরে বসান:
+         invoke-static {p0}, Lcom/android/support/Main;->Start(Landroid/content/Context;)V
+     - `apktool`-এ রিবিল্ড করুন (Sign ছাড়াই):
+         apktool b ~/mod_work/host_dec -o "/storage/emulated/0/keystore/Subway_Surf_3.71.11_base_patched.apk"
+
+  ৩. ফোনের `release.keystore` ও GitHub `app-release.apk` একই কি না যাচাই করা
+     (একাধিকবার Generate Release Keystore চালালে এটি অবশ্যই মিলিয়ে নিন):
+      keytool -list -v -keystore "/storage/emulated/0/keystore/release.keystore" -storetype PKCS12 -alias modxlab | grep "SHA256:"
+      apksigner verify --print-certs "/storage/emulated/0/keystore/app-release.apk" | grep "SHA-256 digest:"
+     - দুটোর ৬৪-অক্ষরের কোড (`:` ছাড়া) হুবহু এক হতে হবে। না মিললে GitHub Actions ->
+       "Generate Release Keystore"-এর সর্বশেষ সফল (সবুজ) রান থেকে `release-keystore-backup`
+       নামিয়ে তারপর আবার "Build Signed Release APK" চালিয়ে নতুন `app-release.apk` নিন।
+
+  ৪. অটোমেটিক Inject + Align + V1/V2/V3 Sign + Post-flight Verify চালানো:
+      bash scripts/inject-and-sign.sh \
+        --mod-apk "/storage/emulated/0/keystore/app-release.apk" \
+        --host-apk "/storage/emulated/0/keystore/Subway_Surf_3.71.11_base_patched.apk" \
+        --keystore "/storage/emulated/0/keystore/release.keystore" \
+        --ks-type PKCS12 \
+        --alias modxlab \
+        --cert-sha256 "এখানে_৬৪_অক্ষরের_CERT_SHA256_দিন" \
+        --out "/storage/emulated/0/keystore/Subway_Surf_3.71.11_signed.apk" \
+        --report-bn
+     - পাসওয়ার্ড `read -s` দিয়ে গোপনে নেওয়া হবে (কখনো প্রিন্ট বা সেভ হয় না)।
+     - ফোনে `zipalign` না থাকলে স্ক্রিপ্ট নিজস্ব Python 4KB page-alignment fallback ব্যবহার করবে।
+     - Termux টার্মিনালের monospace রেন্ডারার (এবং ডিফল্ট ফন্ট) বাংলা যুক্তবর্ণ সঠিকভাবে জোড়া (shape) দিতে পারে না বলে বাংলা লেখা ভেঙে যায়। তাই টার্মিনালের সব আউটপুট এখন সহজ ইংরেজিতে (`[OK]`, `[FAIL]`, `[STEP 1/6]`) দেখায়।
+     - `--report-bn` ফ্ল্যাগ যোগ করলে একই ফোল্ডারে `inject-report-bn.html` নামে সম্পূর্ণ বাংলা HTML রিপোর্ট তৈরি হয়ে ফোনের ব্রাউজারে (`termux-open`) খুলবে (ফোনের ব্রাউজার বাংলা যুক্তবর্ণ সঠিকভাবে রেন্ডার করে)। চাইলে `pkg install termux-api` থাকলে শেষে ছোট একটি Toast নোটিফিকেশনও দেখাবে।
+     - টিপস: Termux:Styling অ্যাপ দিয়ে ফন্ট বদলালেও টার্মিনালে বাংলা যুক্তবর্ণ অনেক সময় ভেঙে যায় — তাই নির্ভুল বাংলা রিপোর্ট পড়ার সবচেয়ে নির্ভরযোগ্য উপায় হলো `--report-bn` দিয়ে তৈরি HTML রিপোর্টটি ব্রাউজারে দেখা।
+     - শেষে সবগুলো `[PASS]` / `[OK]` এলে তবেই তৈরি হওয়া APK ইনস্টল করুন।
+
+  ৫. Split APKs / XAPK হলে সবগুলো Split একই Keystore দিয়ে সাইন ও ইনস্টল:
+      for f in base.apk config.*.apk; do
+        apksigner sign --ks "/storage/emulated/0/keystore/release.keystore" --ks-type PKCS12 --ks-key-alias modxlab --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out "signed_${f}" "${f}"
+      done
+      adb install-multiple signed_base.apk signed_config.*.apk
+     - অথবা ফোনে SAI (Split APKs Installer) দিয়ে ইনস্টল করুন।
+     - সতর্কতা: ফোনে আগে Play Store বা অন্য সিগনেচারের গেম থাকলে আগে Uninstall করতে হবে
+       (এতে লোকাল অফলাইন গেম সেভ ডেটা মুছে যেতে পারে)।
+
+  ৬. ইনস্টলের পর ফোনের Settings -> Apps -> Subway Surf -> Display over other apps = Allow করুন।
 
 --------------------------------------------------------------------------------
 ১১. ভবিষ্যতে কোনো কিছু পরিবর্তন করতে হলে কোথায় কী করবেন (Cheat Sheet)
@@ -276,10 +339,14 @@ Termux বা PC-তে রিপোর ফোল্ডারের ভেতর
       ফাংশনগুলো আপডেট করুন।
    -> নতুন ডোমেইনের SPKI Pin Termux দিয়ে বের করে `PinnedHttp.java`-তে বসান।
 
-৫. হঠাৎ লগইন করার সময় "Connection failed" দেখালে:
-   -> সার্ভারের SSL সার্টিফিকেট (বিশেষ করে Leaf/Intermediate) পরিবর্তন হয়েছে কি না
-      ধাপ ৭-এর `openssl` কমান্ড দিয়ে চেক করুন, নতুন পিন `PinnedHttp.java`-তে বসিয়ে
-      রি-বিল্ড করুন।
+৫. হঠাৎ লগইন করার সময় "Connection failed" বা "SSL handshake error" দেখালে:
+   -> ফোনের তারিখ/সময় ঠিক আছে কি না এবং VPN/AdGuard/HTTP Proxy বন্ধ আছে কি না দেখুন।
+   -> সার্ভারের SSL সার্টিফিকেট পরিবর্তন হয়েছে কি না ধাপ ৭-এর `openssl` কমান্ড দিয়ে
+      চেক করে নতুন পিন `PinnedHttp.java`-তে বসান।
+   -> উল্লেখ্য: `PinnedHttp.java` এখন হোস্ট গেমের `network_security_config.xml`
+      এড়াতে সরাসরি সিস্টেমের `AndroidCAStore` (`system:*` রুট CA) ব্যবহার করে।
+   -> তবুও সমস্যা থাকলে `diag=true` বিল্ড নিয়ে `adb logcat -s MXL` দেখুন (`[301]`
+      লাইন আসল TLS exception দেখাবে)।
 
 --------------------------------------------------------------------------------
 ১২. Troubleshooting টেবিল (গেমে মেনু না আসলে বা ফেল করলে করণীয়)
@@ -348,5 +415,14 @@ Termux বা PC-তে রিপোর ফোল্ডারের ভেতর
    - কারণ: ফোনে LSPosed/Xposed মডিউল বা Frida server চালু আছে বা ডিবাগার সংযুক্ত।
    - সমাধান: গেমটিকে Magisk DenyList / Shamiko দিয়ে হাইড করুন, Xposed/LSPosed এই গেমে
              অ্যাপ্লাই বন্ধ করুন এবং Frida server বা ডিবাগার বন্ধ করে গেম চালান।
+
+১০) গেমের ভেতর "SSL handshake error" / "SSL pin mismatch" (Stage 301):
+   - লক্ষণ: Standalone `app-release.apk`-তে লগইন হয়, কিন্তু গেমের ভেতর লগইন করলে
+           `SSL handshake error` দেখায় (বা `diag=true` লগে `MXL [301]` আসে)।
+   - কারণ: হোস্ট গেমের `AndroidManifest.xml`-এ থাকা `network_security_config`,
+           ফোনের ভুল তারিখ/সময়, VPN/Proxy, বা সার্ভারের SPKI Pin পরিবর্তন।
+   - সমাধান: `PinnedHttp.java`-র আপডেট করা `AndroidCAStore` ভার্সন (`system:*` root CAs)
+             ব্যবহার করে নতুন বিল্ড নিন, ফোনের সময় ও নেটওয়ার্ক ঠিক রাখুন, এবং
+             দরকার হলে ধাপ ৭ অনুযায়ী SPKI Pin ও `diag=true` + `adb logcat -s MXL` চেক করুন।
 
 ================================================================================
