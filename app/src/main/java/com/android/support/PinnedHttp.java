@@ -134,7 +134,11 @@ public final class PinnedHttp {
 
             return readStream(conn.getInputStream());
         } catch (Exception e) {
-            sLastError.set(classifyException(e));
+            String reason = classifyException(e);
+            sLastError.set(reason);
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diag(301, "HTTP GET " + reason + ": " + describeThrowable(e));
+            }
             return null;
         } finally {
             if (conn != null) try { conn.disconnect(); } catch (Exception ignored) { }
@@ -209,7 +213,11 @@ public final class PinnedHttp {
             }
             return new HttpResponse(code, body, cookies);
         } catch (Exception e) {
-            sLastError.set(classifyException(e));
+            String reason = classifyException(e);
+            sLastError.set(reason);
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diag(301, "HTTP POST " + reason + ": " + describeThrowable(e));
+            }
             return null;
         } finally {
             if (conn != null) try { conn.disconnect(); } catch (Exception ignored) { }
@@ -247,11 +255,53 @@ public final class PinnedHttp {
         }
     }
 
+    private static String describeThrowable(Throwable t) {
+        if (t == null) return "null";
+        StringBuilder sb = new StringBuilder();
+        Throwable cur = t;
+        int depth = 0;
+        while (cur != null && depth++ < 4) {
+            if (depth > 1) sb.append(" <- ");
+            sb.append(cur.getClass().getSimpleName());
+            if (cur.getMessage() != null) {
+                sb.append('(').append(cur.getMessage()).append(')');
+            }
+            cur = cur.getCause();
+        }
+        return sb.toString();
+    }
+
     private static SSLSocketFactory buildFactory(String[] pins) {
         try {
             TrustManagerFactory tmf = TrustManagerFactory.getInstance(
                     TrustManagerFactory.getDefaultAlgorithm());
-            tmf.init((KeyStore) null);
+            boolean initialized = false;
+            try {
+                KeyStore caStore = KeyStore.getInstance("AndroidCAStore");
+                caStore.load(null, null);
+                KeyStore systemOnly = KeyStore.getInstance(KeyStore.getDefaultType());
+                systemOnly.load(null, null);
+                int count = 0;
+                java.util.Enumeration<String> aliases = caStore.aliases();
+                while (aliases.hasMoreElements()) {
+                    String alias = aliases.nextElement();
+                    if (alias != null && alias.startsWith("system:")) {
+                        java.security.cert.Certificate cert = caStore.getCertificate(alias);
+                        if (cert != null) {
+                            systemOnly.setCertificateEntry(alias, cert);
+                            count++;
+                        }
+                    }
+                }
+                if (count > 0) {
+                    tmf.init(systemOnly);
+                    initialized = true;
+                }
+            } catch (Exception ignored) { }
+            if (!initialized) {
+                tmf.init((KeyStore) null);
+            }
+
             X509TrustManager systemTm = null;
             for (TrustManager tm : tmf.getTrustManagers()) {
                 if (tm instanceof X509TrustManager) {
@@ -259,7 +309,12 @@ public final class PinnedHttp {
                     break;
                 }
             }
-            if (systemTm == null) return null;
+            if (systemTm == null) {
+                if (BuildConfig.SEC_DIAG) {
+                    SecurityNative.diag(301, "buildFactory: no X509TrustManager");
+                }
+                return null;
+            }
 
             SSLContext ctx = SSLContext.getInstance("TLS");
             ctx.init(null,
@@ -267,6 +322,9 @@ public final class PinnedHttp {
                     new SecureRandom());
             return ctx.getSocketFactory();
         } catch (Exception e) {
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diag(301, "buildFactory failed: " + describeThrowable(e));
+            }
             return null;
         }
     }
