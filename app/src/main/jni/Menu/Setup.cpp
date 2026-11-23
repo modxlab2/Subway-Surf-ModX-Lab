@@ -13,6 +13,7 @@ Java_com_android_support_Main_setNativeCrashDir(JNIEnv*, jclass, jstring);
 void Init(JNIEnv *env, jobject thiz, jobject ctx, jobject title, jobject subtitle) {
     (void)thiz;
     if (!SecurityGuard::verifyPathMenuInit(env, ctx)) {
+        SEC_DIAG_LOG(113, "Init blocked by verifyPathMenuInit");
         setText(env, title, OBFUSCATE(""));
         setText(env, subtitle, OBFUSCATE(""));
         return;
@@ -96,15 +97,26 @@ JNIEXPORT jint JNICALL
 JNI_OnLoad(JavaVM *vm, void *reserved) {
     (void)reserved;
     JNIEnv *env = nullptr;
-    if (vm->GetEnv((void **) &env, JNI_VERSION_1_6) != JNI_OK || !env)
+    if (vm->GetEnv((void **) &env, JNI_VERSION_1_6) != JNI_OK || !env) {
+        SEC_DIAG_LOG(112, "JNI_OnLoad GetEnv failed");
         return JNI_ERR;
-    if (!SecurityGuard::verifyPathOnLoad(vm, env))
+    }
+    if (!SecurityGuard::verifyPathOnLoad(vm, env)) {
+        SEC_DIAG_LOG(112, "JNI_OnLoad verifyPathOnLoad failed");
         return JNI_ERR;
-    if (RegisterMenu(env) != 0)
+    }
+    if (RegisterMenu(env) != 0) {
+        SEC_DIAG_LOG(112, "JNI_OnLoad RegisterMenu failed");
         return JNI_ERR;
-    if (RegisterPreferences(env) != 0)
+    }
+    if (RegisterPreferences(env) != 0) {
+        SEC_DIAG_LOG(112, "JNI_OnLoad RegisterPreferences failed");
         return JNI_ERR;
-    if (RegisterMain(env) != 0)
+    }
+    if (RegisterMain(env) != 0) {
+        SEC_DIAG_LOG(112, "JNI_OnLoad RegisterMain failed");
         return JNI_ERR;
+    }
+    SEC_DIAG_LOG(100, "JNI_OnLoad OK");
     return JNI_VERSION_1_6;
 }

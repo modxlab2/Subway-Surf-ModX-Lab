@@ -44,6 +44,11 @@ LOCAL_CPPFLAGS := \
     -fstack-protector-strong \
     -D_FORTIFY_SOURCE=2
 
+ifeq ($(SEC_DIAG),1)
+    LOCAL_CFLAGS += -DSEC_DIAG
+    LOCAL_CPPFLAGS += -DSEC_DIAG
+endif
+
 LOCAL_LDFLAGS += \
     -Wl,--gc-sections \
     -Wl,--strip-all \

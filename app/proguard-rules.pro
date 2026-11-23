@@ -8,6 +8,7 @@
 -keepclassmembers class ** {
     public static void Start(***);
     public static void StartWithoutPermission(***);
+    public static void startInProcessFallback(***);
 }
 
 # Property-animation reflection (ObjectAnimator on maskX/maskY)

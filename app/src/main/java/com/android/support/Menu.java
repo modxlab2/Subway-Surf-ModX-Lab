@@ -12,6 +12,8 @@ import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.ColorStateList;
+import android.content.res.Configuration;
+import android.content.res.Resources;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -327,10 +329,12 @@ try {
         mCollapsed.setVisibility(View.VISIBLE);
         mCollapsed.setAlpha(ICON_ALPHA);
 
-        int orientation = context.getResources().getConfiguration().orientation;
+        int orientation = (screenW() > screenH())
+                ? Configuration.ORIENTATION_LANDSCAPE
+                : Configuration.ORIENTATION_PORTRAIT;
 
         effectivePosY = POS_Y;
-        if (orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
+        if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
     effectivePosY = 10;
 }
 
@@ -391,7 +395,7 @@ if (initH < loginMinH && screenH() > loginMinH + effectivePosY) {
 
         // ---------------- Collapsed icon (with animated neon ring) ----------------
         startimage = new ImageView(context);
-        int iconPx = (int) TypedValue.applyDimension(1, ICON_SIZE, context.getResources().getDisplayMetrics());
+        int iconPx = (int) TypedValue.applyDimension(1, ICON_SIZE, safeDisplayMetrics(context));
         startimage.setLayoutParams(new FrameLayout.LayoutParams(iconPx, iconPx, Gravity.CENTER));
         startimage.setScaleType(ImageView.ScaleType.FIT_XY);
         byte[] decode = Base64.decode(Icon(), 0);
@@ -672,36 +676,41 @@ mExpanded.addView(shimmer);
 
         
         try {
-    tpPadView = new TeleportPadTouchView(context);
-    WindowManager tpWm = (WindowManager) context.getSystemService(context.WINDOW_SERVICE);
+    boolean canOverlayTp = Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+            || android.provider.Settings.canDrawOverlays(context);
+    if (canOverlayTp) {
+        tpPadView = new TeleportPadTouchView(context);
+        WindowManager tpWm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
 
-    int tpType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-        ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        : WindowManager.LayoutParams.TYPE_PHONE;
+        int tpType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            : WindowManager.LayoutParams.TYPE_PHONE;
 
-    tpPadParams = new WindowManager.LayoutParams(
-        WindowManager.LayoutParams.WRAP_CONTENT,
-        WindowManager.LayoutParams.WRAP_CONTENT,
-        tpType,
-        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-        | WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS,
-        PixelFormat.TRANSPARENT);
-    tpPadParams.gravity = Gravity.TOP | Gravity.START;
+        tpPadParams = new WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            tpType,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+            | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+            | WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS,
+            PixelFormat.TRANSPARENT);
+        tpPadParams.gravity = Gravity.TOP | Gravity.START;
 
-    // Default position: bottom-right
-    int sw = screenW();
-    int sh = screenH();
-    int padW = (int)(220 * getContext.getResources().getDisplayMetrics().density);
-    int padH = (int)(130 * getContext.getResources().getDisplayMetrics().density);
-    tpPadParams.x = sw - padW - dp(20);
-    tpPadParams.y = sh - padH - dp(140);
+        // Default position: bottom-right
+        int sw = screenW();
+        int sh = screenH();
+        float dens = safeDisplayMetrics(getContext).density;
+        int padW = (int)(220 * dens);
+        int padH = (int)(130 * dens);
+        tpPadParams.x = sw - padW - dp(20);
+        tpPadParams.y = sh - padH - dp(140);
 
-    tpWm.addView(tpPadView, tpPadParams);
-    tpPadWindowManager = tpWm;
-    tpPadView.setVisibility(View.GONE);
+        tpWm.addView(tpPadView, tpPadParams);
+        tpPadWindowManager = tpWm;
+        tpPadView.setVisibility(View.GONE);
+    }
 } catch (Exception e) {
     Log.e(TAG, "TPPad add failed: " + e);
 }
@@ -737,11 +746,6 @@ new Titanic().start(proTitle);
     // Small helpers
     // ================================================================
     private Typeface loadFont(String[] assetNames, String fallbackFamily, int fallbackStyle) {
-        for (int i = 0; i < assetNames.length; i++) {
-            try {
-                return Typeface.createFromAsset(getContext.getAssets(), assetNames[i]);
-            } catch (Exception ignored) {}
-        }
         try {
             return Typeface.create(fallbackFamily, fallbackStyle);
         } catch (Exception e) {
@@ -833,14 +837,22 @@ new Titanic().start(proTitle);
         return v;
     }
 
-    private DisplayMetrics displayMetrics() {
+    private static DisplayMetrics safeDisplayMetrics(Context ctx) {
         DisplayMetrics dm = new DisplayMetrics();
         try {
-            WindowManager wm = (WindowManager) getContext.getSystemService(Context.WINDOW_SERVICE);
-            wm.getDefaultDisplay().getMetrics(dm);
-            if (dm.widthPixels > 0 && dm.heightPixels > 0) return dm;
+            if (ctx != null) {
+                WindowManager wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
+                if (wm != null && wm.getDefaultDisplay() != null) {
+                    wm.getDefaultDisplay().getMetrics(dm);
+                    if (dm.widthPixels > 0 && dm.heightPixels > 0 && dm.density > 0f) return dm;
+                }
+            }
         } catch (Exception ignored) {}
-        return getContext.getResources().getDisplayMetrics();
+        return Resources.getSystem().getDisplayMetrics();
+    }
+
+    private DisplayMetrics displayMetrics() {
+        return safeDisplayMetrics(getContext);
     }
 
     private int screenW() { return displayMetrics().widthPixels; }
@@ -1155,7 +1167,7 @@ new Titanic().start(proTitle);
 
         GlowRingView(Context context, int c1, int c2) {
             super(context, 3200);
-            this.density = context.getResources().getDisplayMetrics().density;
+            this.density = safeDisplayMetrics(context).density;
             this.c1 = c1;
             this.c2 = c2;
             glowPaint.setStyle(Paint.Style.STROKE);
@@ -1272,7 +1284,7 @@ new Titanic().start(proTitle);
 
         ToggleView(Context context, int onColor, int onColor2, int offColor) {
             super(context);
-            this.density = context.getResources().getDisplayMetrics().density;
+            this.density = safeDisplayMetrics(context).density;
             this.onColor = onColor;
             this.onColor2 = onColor2;
             this.offColor = offColor;
@@ -1461,7 +1473,7 @@ new Titanic().start(proTitle);
 
         SlimScrollView(Context context) {
             super(context);
-            density = context.getResources().getDisplayMetrics().density;
+            density = safeDisplayMetrics(context).density;
             setVerticalScrollBarEnabled(false);
             setHorizontalScrollBarEnabled(false);
             setOverScrollMode(OVER_SCROLL_NEVER);
@@ -2399,10 +2411,11 @@ for (final long delay : new long[]{ 50, 200, 500, 1000, 2000, 4000 }) {
         public void run() {
             try {
                 ViewGroup.LayoutParams lp = menuFrame.getLayoutParams();
-                int orientation = Menu.this.getContext.getResources()
-                                        .getConfiguration().orientation;
+                int orientation = (screenW() > screenH())
+                        ? Configuration.ORIENTATION_LANDSCAPE
+                        : Configuration.ORIENTATION_PORTRAIT;
                 int targetH;
-                if (orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
+                if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
                     targetH = screenH() - dp(15);
                 } else {
                     targetH = dp(352);
@@ -2447,9 +2460,9 @@ for (final long delay : new long[]{ 50, 200, 500, 1000, 2000, 4000 }) {
     }
 
     private boolean isViewCollapsed() { return rootFrame == null || mCollapsed.getVisibility() == View.VISIBLE; }
-    private int convertDipToPixels(int i) { return (int)((i * getContext.getResources().getDisplayMetrics().density) + 0.5f); }
-    private int dp(int i) { return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, (float) i, getContext.getResources().getDisplayMetrics()); }
-    private float dpf(float v) { return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getContext.getResources().getDisplayMetrics()); }
+    private int convertDipToPixels(int i) { return (int)((i * safeDisplayMetrics(getContext).density) + 0.5f); }
+    private int dp(int i) { return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, (float) i, safeDisplayMetrics(getContext)); }
+    private float dpf(float v) { return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, safeDisplayMetrics(getContext)); }
     public void setVisibility(int view) { if (rootFrame != null) rootFrame.setVisibility(view); }
 
 private void setWindowFocusable(boolean focusable) {
@@ -3216,7 +3229,7 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
         button.setBackground(bg);
 
         // Telegram paper-plane icon (left of text)
-                float density = getContext.getResources().getDisplayMetrics().density;
+        float density = safeDisplayMetrics(getContext).density;
         TelegramIcon icon = new TelegramIcon(Color.WHITE, density);
         button.setCompoundDrawablesWithIntrinsicBounds(icon, null, null, null);
         button.setCompoundDrawablePadding(dp(8));
@@ -4048,7 +4061,7 @@ private static class ColorWheelView extends View {
 
     ColorWheelView(Context ctx, float initialHue) {
         super(ctx);
-        this.density = ctx.getResources().getDisplayMetrics().density;
+        this.density = safeDisplayMetrics(ctx).density;
         this.ringWidth = 30f * density;
         this.currentHue = ((initialHue % 360f) + 360f) % 360f;
 
@@ -4364,7 +4377,7 @@ private static final int PAD_H_DP = 100;    // ★ 23% ছোট
 
     TeleportPadTouchView(Context ctx) {
         super(ctx);
-        density = ctx.getResources().getDisplayMetrics().density;
+        density = safeDisplayMetrics(ctx).density;
         slop = ViewConfiguration.get(ctx).getScaledTouchSlop();
 
         bgPaint.setStyle(Paint.Style.FILL);

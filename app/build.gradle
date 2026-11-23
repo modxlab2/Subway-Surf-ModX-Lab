@@ -1,5 +1,7 @@
 apply plugin: 'com.android.application'
 
+def isSecDiag = (project.findProperty("secDiag")?.toString()?.toBoolean() == true)
+
 android {
     namespace 'com.android.support'
     compileSdkVersion 34
@@ -12,9 +14,18 @@ android {
         versionName "1.0"
 
         multiDexEnabled true
+        buildConfigField "boolean", "SEC_DIAG", isSecDiag ? "true" : "false"
 
         ndk {
             abiFilters 'armeabi-v7a', 'arm64-v8a'
+        }
+
+        externalNativeBuild {
+            ndkBuild {
+                if (isSecDiag) {
+                    arguments "SEC_DIAG=1"
+                }
+            }
         }
     }
 

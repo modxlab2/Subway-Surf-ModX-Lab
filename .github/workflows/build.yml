@@ -2,6 +2,12 @@ name: Build Signed Release APK
 
 on:
   workflow_dispatch:
+    inputs:
+      diag:
+        description: 'Diagnostic build with SEC_DIAG ("MXL" logcat). NEVER distribute.'
+        type: boolean
+        required: false
+        default: false
   push:
     branches:
       - main
@@ -16,6 +22,20 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Determine build mode
+        id: mode
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.diag }}" = "true" ]; then
+            echo "is_diag=true" >> "${GITHUB_OUTPUT}"
+            echo "gradle_flag=-PsecDiag=true" >> "${GITHUB_OUTPUT}"
+            echo "artifact_name=ModXLab-DIAG-do-not-distribute" >> "${GITHUB_OUTPUT}"
+          else
+            echo "is_diag=false" >> "${GITHUB_OUTPUT}"
+            echo "gradle_flag=" >> "${GITHUB_OUTPUT}"
+            echo "artifact_name=ModXLab-release-signed" >> "${GITHUB_OUTPUT}"
+          fi
 
       - name: Validate required signing and security secrets
         env:
@@ -131,9 +151,10 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: gradle assembleRelease --stacktrace
+          GRADLE_DIAG_FLAG: ${{ steps.mode.outputs.gradle_flag }}
+        run: gradle assembleRelease ${GRADLE_DIAG_FLAG} --stacktrace
 
-      - name: Compute DEX SHA-256 from Pass 1 APK
+      - name: Compute single classes.dex SHA-256 from Pass 1 APK
         id: dex1
         run: |
           set -euo pipefail
@@ -147,18 +168,17 @@ jobs:
           DEX_HASH="$(python3 - "${PASS1_APK}" <<'PY'
           import hashlib, sys, zipfile
 
-          h = hashlib.sha256()
           with zipfile.ZipFile(sys.argv[1], "r") as z:
               dex_names = sorted(n for n in z.namelist() if n.endswith(".dex"))
-              if not dex_names:
-                  sys.exit("No .dex entries found in APK")
-              for name in dex_names:
-                  with z.open(name, "r") as f:
-                      while True:
-                          chunk = f.read(16384)
-                          if not chunk:
-                              break
-                          h.update(chunk)
+              if dex_names != ["classes.dex"]:
+                  sys.exit(f"Expected exact single classes.dex, found: {dex_names}")
+              h = hashlib.sha256()
+              with z.open("classes.dex", "r") as f:
+                  while True:
+                      chunk = f.read(16384)
+                      if not chunk:
+                          break
+                      h.update(chunk)
           print(h.hexdigest())
           PY
           )"
@@ -203,12 +223,14 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: gradle clean assembleRelease --stacktrace
+          GRADLE_DIAG_FLAG: ${{ steps.mode.outputs.gradle_flag }}
+        run: gradle clean assembleRelease ${GRADLE_DIAG_FLAG} --stacktrace
 
-      - name: Verify final APK DEX determinism and signing certificate
+      - name: Verify final APK DEX determinism, ABIs, diag hygiene, and signing certificate
         env:
           EXPECTED_DEX_HASH: ${{ steps.dex1.outputs.dex_hash }}
           EXPECTED_CERT_SHA256: ${{ steps.keystore.outputs.cert_sha256 }}
+          IS_DIAG: ${{ steps.mode.outputs.is_diag }}
         run: |
           set -euo pipefail
 
@@ -221,18 +243,25 @@ jobs:
           PASS2_DEX_HASH="$(python3 - "${FINAL_APK}" <<'PY'
           import hashlib, sys, zipfile
 
-          h = hashlib.sha256()
           with zipfile.ZipFile(sys.argv[1], "r") as z:
-              dex_names = sorted(n for n in z.namelist() if n.endswith(".dex"))
-              if not dex_names:
-                  sys.exit("No .dex entries found in APK")
-              for name in dex_names:
-                  with z.open(name, "r") as f:
-                      while True:
-                          chunk = f.read(16384)
-                          if not chunk:
-                              break
-                          h.update(chunk)
+              names = z.namelist()
+              dex_names = sorted(n for n in names if n.endswith(".dex"))
+              if dex_names != ["classes.dex"]:
+                  sys.exit(f"Expected exact single classes.dex, found: {dex_names}")
+              required_libs = [
+                  "lib/armeabi-v7a/libModXLab.so",
+                  "lib/arm64-v8a/libModXLab.so",
+              ]
+              for lib in required_libs:
+                  if lib not in names:
+                      sys.exit(f"Missing required ABI binary in APK: {lib}")
+              h = hashlib.sha256()
+              with z.open("classes.dex", "r") as f:
+                  while True:
+                      chunk = f.read(16384)
+                      if not chunk:
+                          break
+                      h.update(chunk)
           print(h.hexdigest())
           PY
           )"
@@ -240,6 +269,27 @@ jobs:
           if [ "${PASS2_DEX_HASH}" != "${EXPECTED_DEX_HASH}" ]; then
             echo "::error::Non-deterministic DEX hash! Pass 1 (${EXPECTED_DEX_HASH}) != Pass 2 (${PASS2_DEX_HASH})."
             exit 1
+          fi
+
+          INSPECT_DIR="${RUNNER_TEMP}/inspect_apk"
+          rm -rf "${INSPECT_DIR}"
+          mkdir -p "${INSPECT_DIR}"
+          unzip -q -o "${FINAL_APK}" 'classes.dex' 'lib/*/libModXLab.so' -d "${INSPECT_DIR}"
+
+          if [ "${IS_DIAG}" != "true" ]; then
+            for bin in "${INSPECT_DIR}/classes.dex" "${INSPECT_DIR}"/lib/*/libModXLab.so; do
+              if strings "${bin}" | grep -Fq "MXL"; then
+                echo "::error::Diagnostic string 'MXL' leaked into normal release binary: ${bin}"
+                exit 1
+              fi
+            done
+          else
+            for so in "${INSPECT_DIR}"/lib/*/libModXLab.so; do
+              if ! strings "${so}" | grep -Fq "MXL"; then
+                echo "::error::Expected diagnostic string 'MXL' missing from diagnostic binary: ${so}"
+                exit 1
+              fi
+            done
           fi
 
           APKSIGNER="$(find "${ANDROID_HOME}/build-tools" -maxdepth 2 -name apksigner | sort -V | tail -n1)"
@@ -263,16 +313,38 @@ jobs:
             exit 1
           fi
 
-          echo "Verified deterministic DEX hash (${PASS2_DEX_HASH}) and APK signing certificate (${APK_CERT_SHA256})."
+          BUILT_ABIS="$(find "${INSPECT_DIR}/lib" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort | paste -sd ', ' -)"
+          {
+            echo "## ModX Lab Build Summary"
+            echo ""
+            if [ "${IS_DIAG}" = "true" ]; then
+              echo "- **Mode:** \`DIAGNOSTIC (-DSEC_DIAG)\` — **DO NOT DISTRIBUTE**"
+            else
+              echo "- **Mode:** \`Release\` (diagnostic strings verified absent)"
+            fi
+            echo "- **Single DEX:** \`classes.dex\`"
+            echo "- **classes.dex SHA-256:** \`${PASS2_DEX_HASH}\`"
+            echo "- **Signing Cert SHA-256:** \`${APK_CERT_SHA256}\`"
+            echo "- **Built ABIs:** \`${BUILT_ABIS}\`"
+            echo ""
+            echo "### Host-APK Injection Reminder"
+            echo "Always extract **both** files from the **same** build artifact:"
+            echo "1. \`classes.dex\` -> rename to next sequential \`classesN.dex\` (no gap after game's last \`classes*.dex\`)"
+            echo "2. \`lib/<abi>/libModXLab.so\` -> copy every ABI matching your host APK (\`arm64-v8a\` / \`armeabi-v7a\`)"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Upload signed release APK
+          rm -rf "${INSPECT_DIR}"
+          echo "Verified single classes.dex (${PASS2_DEX_HASH}), ABIs (${BUILT_ABIS}), and cert (${APK_CERT_SHA256})."
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ModXLab-release-signed
+          name: ${{ steps.mode.outputs.artifact_name }}
           path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
       - name: Cleanup keystore and temp template
         if: always()
         run: |
-          rm -f "${GITHUB_WORKSPACE}/release.keystore" "${RUNNER_TEMP}/Security.cpp.template"
+          rm -f "${GITHUB_WORKSPACE}/release.keystore" "${RUNNER_TEMP}/Security.cpp.template" "${RUNNER_TEMP}/inspect_apk"
+

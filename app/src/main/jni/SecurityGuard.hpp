@@ -34,6 +34,13 @@ bool isReadyForHooks();
 // Periodic background re-verification of environment, APK integrity, and active server token.
 bool periodicReverify();
 
+#ifdef SEC_DIAG
+void diagLog(int stage, const char* fmt, ...);
+#define SEC_DIAG_LOG(stage, ...) ::SecurityGuard::diagLog((stage), __VA_ARGS__)
+#else
+#define SEC_DIAG_LOG(stage, ...) do {} while (0)
+#endif
+
 } // namespace SecurityGuard
 
 #endif // MODXLAB_SECURITY_GUARD_HPP

@@ -1,18 +1,21 @@
 package com.android.support;
 
 import android.content.Context;
-import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.BitmapShader;
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.Matrix;
+import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.Shader;
-import android.graphics.drawable.Drawable;
 import android.util.AttributeSet;
-import android.util.Log;
 import android.widget.TextView;
 
 public class TitanicTextView extends TextView {
+
+    private static final int WAVE_WIDTH = 200;
+    private static final int WAVE_HEIGHT = 100;
 
     private AnimationSetupCallback animationSetupCallback;
     private float maskX, maskY;
@@ -20,7 +23,6 @@ public class TitanicTextView extends TextView {
     private boolean setUp;
     private BitmapShader shader;
     private Matrix shaderMatrix;
-    private Drawable wave;
     private float offsetY;
 
     public TitanicTextView(Context context) {
@@ -104,36 +106,40 @@ public class TitanicTextView extends TextView {
         }
     }
 
-    @SuppressWarnings("deprecation")
     private void createShader() {
-        // ✅ [FIX]: wave রিসোর্স লোড করার সময় সব এরর ক্যাচ করা
-        if (wave == null) {
-            try {
-                wave = getResources().getDrawable(R.drawable.wave);
-            } catch (Exception e) {
-                Log.e("Titanic", "Wave drawable not found! Titanic animation disabled.");
-                getPaint().setShader(null);
-                return;
-            }
-        }
         try {
-            int waveW = wave.getIntrinsicWidth();
-            int waveH = wave.getIntrinsicHeight();
+            int textColor = getCurrentTextColor();
+            int baseColor = Color.argb(
+                    135,
+                    Color.red(textColor),
+                    Color.green(textColor),
+                    Color.blue(textColor));
 
-            if (waveW <= 0 || waveH <= 0) {
-                return;
-            }
-
-            Bitmap b = Bitmap.createBitmap(waveW, waveH, Bitmap.Config.ARGB_8888);
+            Bitmap b = Bitmap.createBitmap(WAVE_WIDTH, WAVE_HEIGHT, Bitmap.Config.ARGB_8888);
             Canvas c = new Canvas(b);
-            c.drawColor(getCurrentTextColor());
-            wave.setBounds(0, 0, waveW, waveH);
-            wave.draw(c);
+            c.drawColor(baseColor);
+
+            Paint wavePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            wavePaint.setStyle(Paint.Style.FILL);
+            wavePaint.setColor(textColor);
+
+            Path path = new Path();
+            float midY = WAVE_HEIGHT * 0.50f;
+            float amp = WAVE_HEIGHT * 0.14f;
+            path.moveTo(0f, WAVE_HEIGHT);
+            path.lineTo(0f, midY);
+            for (int x = 0; x <= WAVE_WIDTH; x += 4) {
+                float y = midY + (float) Math.sin((x / (double) WAVE_WIDTH) * 2.0 * Math.PI) * amp;
+                path.lineTo(x, y);
+            }
+            path.lineTo(WAVE_WIDTH, WAVE_HEIGHT);
+            path.close();
+            c.drawPath(path, wavePaint);
+
             shader = new BitmapShader(b, Shader.TileMode.REPEAT, Shader.TileMode.CLAMP);
             getPaint().setShader(shader);
-            offsetY = (getHeight() - waveH) / 2;
+            offsetY = (getHeight() - WAVE_HEIGHT) / 2f;
         } catch (Exception e) {
-            Log.e("Titanic", "Error setting up shader: " + e.getMessage());
             getPaint().setShader(null);
         }
     }

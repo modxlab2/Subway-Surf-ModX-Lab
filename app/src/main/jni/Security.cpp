@@ -38,6 +38,11 @@
 #include "Ed25519.hpp"
 #include "SecurityGuard.hpp"
 
+#ifdef SEC_DIAG
+#include <android/log.h>
+#include <cstdarg>
+#endif
+
 #define OBF_STR(s) (static_cast<const char*>(OBFUSCATE(s)))
 
 // ================================================================
@@ -520,9 +525,9 @@ struct ZipDexEntry {
 
 static bool computeApkDexHashes(int fd,
                                 const ApkFileLayout& layout,
-                                std::string& outCombinedHex,
+                                std::vector<std::string>& outEntryNames,
                                 std::vector<std::string>& outEntryHexes) {
-    outCombinedHex.clear();
+    outEntryNames.clear();
     outEntryHexes.clear();
     if (layout.cdSize == 0 || layout.cdSize > 32U * 1024U * 1024U) return false;
     std::vector<uint8_t> cd(layout.cdSize);
@@ -554,8 +559,6 @@ static bool computeApkDexHashes(int fd,
     std::sort(dexEntries.begin(), dexEntries.end(),
               [](const ZipDexEntry& a, const ZipDexEntry& b) { return a.name < b.name; });
 
-    Sha256Ctx combinedSha;
-    sha256Init(&combinedSha);
     std::vector<uint8_t> inBuf(16384);
     std::vector<uint8_t> outBuf(32768);
 
@@ -578,7 +581,6 @@ static bool computeApkDexHashes(int fd,
             while (rem > 0) {
                 size_t chunk = std::min<size_t>(rem, inBuf.size());
                 if (!preadExact(fd, cur, inBuf.data(), chunk)) return false;
-                sha256Update(&combinedSha, inBuf.data(), chunk);
                 sha256Update(&entrySha, inBuf.data(), chunk);
                 cur += chunk;
                 rem -= (uint32_t)chunk;
@@ -611,7 +613,6 @@ static bool computeApkDexHashes(int fd,
                 int rc = inflate(&zs, rem == 0 ? Z_FINISH : Z_NO_FLUSH);
                 size_t have = outBuf.size() - zs.avail_out;
                 if (have > 0) {
-                    sha256Update(&combinedSha, outBuf.data(), have);
                     sha256Update(&entrySha, outBuf.data(), have);
                     totalOut += have;
                 }
@@ -633,13 +634,11 @@ static bool computeApkDexHashes(int fd,
 
         uint8_t entryDigest[32];
         sha256Final(&entrySha, entryDigest);
+        outEntryNames.push_back(entry.name);
         outEntryHexes.push_back(bytesToLowerHex(entryDigest, 32));
     }
 
-    uint8_t digest[32];
-    sha256Final(&combinedSha, digest);
-    outCombinedHex = bytesToLowerHex(digest, 32);
-    return outCombinedHex.size() == 64;
+    return !outEntryHexes.empty();
 }
 
 // ================================================================
@@ -996,9 +995,18 @@ static bool detectTracer() {
 }
 
 static bool isEnvironmentSafe() {
-    if (detectFrida())  return false;
-    if (detectXposed()) return false;
-    if (detectTracer()) return false;
+    if (detectFrida()) {
+        SEC_DIAG_LOG(101, "Environment unsafe: Frida detected");
+        return false;
+    }
+    if (detectXposed()) {
+        SEC_DIAG_LOG(102, "Environment unsafe: Xposed/LSPosed detected");
+        return false;
+    }
+    if (detectTracer()) {
+        SEC_DIAG_LOG(103, "Environment unsafe: TracerPid > 0 detected");
+        return false;
+    }
     return true;
 }
 
@@ -1017,51 +1025,76 @@ static bool matchesExpectedCertHash(const std::string& candidateLower) {
 }
 
 static bool matchesExpectedDex(const std::string& expectedLower,
-                               const std::string& combinedHex,
                                const std::vector<std::string>& entryHexes) {
     if (!isValidSha256Hex(expectedLower)) return false;
-    if (constTimeEquals(toLower(combinedHex), expectedLower)) return true;
+    bool matched = false;
     for (const auto& eh : entryHexes) {
-        if (constTimeEquals(toLower(eh), expectedLower)) return true;
+        if (constTimeEquals(toLower(eh), expectedLower)) {
+            matched = true;
+        }
     }
-    return false;
+    return matched;
 }
 
 static bool verifyApkHashesOnDisk(const std::string& apkPath, const std::string& pmCertHex) {
-    if (apkPath.empty()) return false;
+    if (apkPath.empty()) {
+        SEC_DIAG_LOG(104, "APK path empty");
+        return false;
+    }
 
     int fd = open(apkPath.c_str(), O_RDONLY);
-    if (fd < 0) return false;
+    if (fd < 0) {
+        SEC_DIAG_LOG(105, "Failed to open APK: %s", apkPath.c_str());
+        return false;
+    }
 
     struct stat st{};
     if (fstat(fd, &st) != 0) {
         close(fd);
+        SEC_DIAG_LOG(105, "fstat failed for APK: %s", apkPath.c_str());
         return false;
     }
 
     ApkFileLayout layout;
     bool eocdOk = parseZipEocd(fd, layout);
     std::string v2CertHex;
-    std::string combinedDexHex;
+    std::vector<std::string> entryDexNames;
     std::vector<std::string> entryDexHexes;
     bool v2Ok = eocdOk && extractApkV2V3CertSha256(fd, layout, v2CertHex);
-    bool dexOk = eocdOk && computeApkDexHashes(fd, layout, combinedDexHex, entryDexHexes);
+    bool dexOk = eocdOk && computeApkDexHashes(fd, layout, entryDexNames, entryDexHexes);
     close(fd);
 
-    if (!eocdOk || !dexOk) return false;
+    if (!eocdOk) {
+        SEC_DIAG_LOG(105, "ZIP EOCD parse failed: %s", apkPath.c_str());
+        return false;
+    }
+    if (!dexOk) {
+        SEC_DIAG_LOG(109, "DEX hash computation failed: %s", apkPath.c_str());
+        return false;
+    }
+
+#ifdef SEC_DIAG
+    SEC_DIAG_LOG(110, "Found %zu dex entries in %s", entryDexNames.size(), apkPath.c_str());
+    for (size_t i = 0; i < entryDexNames.size() && i < entryDexHexes.size(); ++i) {
+        SEC_DIAG_LOG(110, "DEX[%zu] %s sha256=%s", i, entryDexNames[i].c_str(), entryDexHexes[i].c_str());
+    }
+#endif
 
 #ifdef DEBUG_BUILD
     // Debug build: still exercise native parser and verify PackageManager agrees with v2/v3 cert when both exist.
     if (v2Ok && !pmCertHex.empty() && !constTimeEquals(toLower(v2CertHex), toLower(pmCertHex))) {
+        SEC_DIAG_LOG(107, "PM cert mismatch v2=%s pm=%s", v2CertHex.c_str(), pmCertHex.c_str());
         return false;
     }
     std::string expectedPrimary = toLower(std::string(SHA256_PRIMARY()));
     if (!isAllZeroOrPlaceholder(expectedPrimary) && v2Ok && !matchesExpectedCertHash(v2CertHex)) {
+        SEC_DIAG_LOG(108, "Cert mismatch actual=%s expected=%s", v2CertHex.c_str(), expectedPrimary.c_str());
         return false;
     }
     std::string expectedDex = toLower(std::string(EXPECTED_DEX_HASH()));
     if (!isAllZeroOrPlaceholder(expectedDex)) {
-        if (!matchesExpectedDex(expectedDex, combinedDexHex, entryDexHexes)) {
+        if (!matchesExpectedDex(expectedDex, entryDexHexes)) {
+            SEC_DIAG_LOG(111, "DEX mismatch expected=%s", expectedDex.c_str());
             return false;
         }
     }
@@ -1069,14 +1102,21 @@ static bool verifyApkHashesOnDisk(const std::string& apkPath, const std::string&
     // Release build: STRICT FAIL-CLOSED enforcement!
     std::string expectedPrimary = toLower(std::string(SHA256_PRIMARY()));
     if (isAllZeroOrPlaceholder(expectedPrimary) || !isValidSha256Hex(expectedPrimary)) {
+        SEC_DIAG_LOG(108, "Expected cert SHA-256 invalid or placeholder");
         return false;
     }
-    if (!v2Ok || !matchesExpectedCertHash(v2CertHex)) {
+    if (!v2Ok) {
+        SEC_DIAG_LOG(106, "APK v2/v3 signature block missing (v1-only or unsigned)");
+        return false;
+    }
+    if (!matchesExpectedCertHash(v2CertHex)) {
+        SEC_DIAG_LOG(108, "APK cert mismatch actual=%s expected=%s", v2CertHex.c_str(), expectedPrimary.c_str());
         return false;
     }
     if (!pmCertHex.empty()) {
         if (!matchesExpectedCertHash(toLower(pmCertHex)) ||
             !constTimeEquals(toLower(v2CertHex), toLower(pmCertHex))) {
+            SEC_DIAG_LOG(107, "PackageManager cert mismatch v2=%s pm=%s", v2CertHex.c_str(), pmCertHex.c_str());
             return false;
         }
     }
@@ -1084,9 +1124,11 @@ static bool verifyApkHashesOnDisk(const std::string& apkPath, const std::string&
     // Fail closed if EXPECTED_DEX_HASH is all-zero or unreplaced placeholder!
     std::string expectedDex = toLower(std::string(EXPECTED_DEX_HASH()));
     if (isAllZeroOrPlaceholder(expectedDex) || !isValidSha256Hex(expectedDex)) {
+        SEC_DIAG_LOG(111, "Expected DEX hash invalid or placeholder");
         return false;
     }
-    if (!matchesExpectedDex(expectedDex, combinedDexHex, entryDexHexes)) {
+    if (!matchesExpectedDex(expectedDex, entryDexHexes)) {
+        SEC_DIAG_LOG(111, "No .dex entry matched expected DEX hash=%s", expectedDex.c_str());
         return false;
     }
 #endif
@@ -1098,6 +1140,7 @@ static bool verifyApkHashesOnDisk(const std::string& apkPath, const std::string&
         g_ExpectedApkSize = (uint64_t)st.st_size;
         g_ExpectedApkInode = (uint64_t)st.st_ino;
     }
+    SEC_DIAG_LOG(100, "APK cert and DEX verified OK (%s)", apkPath.c_str());
     return true;
 }
 
@@ -1125,29 +1168,36 @@ static bool verifyTokenInternal(const std::string& token,
 
     std::vector<uint8_t> sigBytes;
     if (!base64UrlDecode(sigB64, sigBytes) || sigBytes.size() != 64) {
+        SEC_DIAG_LOG(204, "Token signature base64url/length invalid");
         return false;
     }
 
     std::vector<uint8_t> pkBytes;
     if (!hexDecode(std::string(ED25519_PUBLIC_KEY()), pkBytes) || pkBytes.size() != 32) {
+        SEC_DIAG_LOG(204, "Ed25519 public key missing or invalid");
         return false;
     }
     bool allZero = true;
     for (uint8_t b : pkBytes) {
         if (b != 0) { allZero = false; break; }
     }
-    if (allZero) return false;
+    if (allZero) {
+        SEC_DIAG_LOG(204, "Ed25519 public key is all-zero");
+        return false;
+    }
 
     if (!Ed25519::verify(
             sigBytes.data(),
             reinterpret_cast<const uint8_t*>(payloadB64.data()),
             payloadB64.size(),
             pkBytes.data())) {
+        SEC_DIAG_LOG(204, "Ed25519 signature verification failed");
         return false;
     }
 
     std::vector<uint8_t> payloadRaw;
     if (!base64UrlDecode(payloadB64, payloadRaw) || payloadRaw.empty()) {
+        SEC_DIAG_LOG(204, "Token payload decode failed");
         return false;
     }
     std::string payloadJson(reinterpret_cast<const char*>(payloadRaw.data()), payloadRaw.size());
@@ -1156,9 +1206,18 @@ static bool verifyTokenInternal(const std::string& token,
     std::string tokDevice = getJsonField(payloadJson, "d");
     std::string tokExpiry = getJsonField(payloadJson, "e");
 
-    if (tokUser.empty() || tokDevice.empty()) return false;
-    if (!constTimeEquals(toLower(tokUser), toLower(expectedUser))) return false;
-    if (!constTimeEquals(tokDevice, expectedDevice)) return false;
+    if (tokUser.empty() || tokDevice.empty()) {
+        SEC_DIAG_LOG(204, "Token claims incomplete");
+        return false;
+    }
+    if (!constTimeEquals(toLower(tokUser), toLower(expectedUser))) {
+        SEC_DIAG_LOG(204, "Token user mismatch");
+        return false;
+    }
+    if (!constTimeEquals(tokDevice, expectedDevice)) {
+        SEC_DIAG_LOG(204, "Token device mismatch");
+        return false;
+    }
 
     int64_t parsedExpiry = 0;
     if (!tokExpiry.empty()) {
@@ -1166,9 +1225,13 @@ static bool verifyTokenInternal(const std::string& token,
             parsedExpiry = std::stoll(tokExpiry);
             if (parsedExpiry > 0) {
                 int64_t nowMs = (int64_t)time(nullptr) * 1000LL;
-                if (nowMs > parsedExpiry) return false;
+                if (nowMs > parsedExpiry) {
+                    SEC_DIAG_LOG(204, "Token expired");
+                    return false;
+                }
             }
         } catch (...) {
+            SEC_DIAG_LOG(204, "Token expiry parse error");
             return false;
         }
     }
@@ -1206,6 +1269,17 @@ static void ensureWatchdogStarted() {
 // SecurityGuard Multi-Path Implementations
 // ================================================================
 namespace SecurityGuard {
+
+#ifdef SEC_DIAG
+void diagLog(int stage, const char* fmt, ...) {
+    char msg[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    __android_log_print(ANDROID_LOG_INFO, "MXL", "[%d] %s", stage, msg);
+}
+#endif
 
 void registerLockdownCallback(LockdownCallback cb) {
     g_LockdownCb.store(cb, std::memory_order_release);
@@ -1292,10 +1366,12 @@ bool verifyPathMenuInit(JNIEnv* env, jobject ctx) {
         std::lock_guard<std::mutex> lock(g_SecMutex);
         if (!g_CachedApkPath.empty() && !codePath.empty() && codePath != g_CachedApkPath) {
             // Package code path unexpectedly mutated
+            SEC_DIAG_LOG(104, "Package codePath mutated (%s vs %s)", codePath.c_str(), g_CachedApkPath.c_str());
             codePath.clear();
         }
     }
     if (!verifyApkHashesOnDisk(codePath, pmCert)) {
+        SEC_DIAG_LOG(113, "verifyPathMenuInit failed on disk verification");
         triggerLockdown(true);
         return false;
     }
@@ -1476,8 +1552,12 @@ Java_com_android_support_SecurityNative_verifySessionToken(
         JNIEnv* env, jclass,
         jstring jToken, jstring jUser, jstring jDeviceId) {
 
-    if (!jToken || !jUser || !jDeviceId) return JNI_FALSE;
+    if (!jToken || !jUser || !jDeviceId) {
+        SEC_DIAG_LOG(204, "verifySessionToken missing arguments");
+        return JNI_FALSE;
+    }
     if (!g_Verified.load(std::memory_order_acquire) || !isWordAOk() || !isWordBOk()) {
+        SEC_DIAG_LOG(113, "verifySessionToken rejected: native integrity not verified");
         return JNI_FALSE;
     }
     if (!isEnvironmentSafe()) {

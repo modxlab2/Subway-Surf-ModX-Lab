@@ -178,50 +178,83 @@ Termux বা PC-তে রিপোর ফোল্ডারের ভেতর
     git push origin main
 
 --------------------------------------------------------------------------------
-৯. GitHub Actions থেকে Signed Release APK বিল্ড ও ডাউনলোড
+৯. GitHub Actions থেকে Signed Release APK ও Diagnostic APK বিল্ড
 --------------------------------------------------------------------------------
-১. main ব্রাঞ্চে Push করার সাথে সাথে GitHub Actions -> "Build Signed Release APK"
-   স্বয়ংক্রিয়ভাবে চলবে (চাইলে Actions ট্যাব থেকে ম্যানুয়ালিও Run করতে পারেন)।
-২. বিল্ডটি ২ ধাপে কাজ করে:
-   - Pass 1: CERT_SHA256 ও ED25519_PUBLIC_KEY বসিয়ে classes.dex বানায় এবং
-             classes.dex-এর আসল SHA-256 মাপে।
-   - Pass 2: gradle clean assembleRelease দিয়ে আসল DEX_HASH সহ নতুন করে
-             libModXLab.so ও classes.dex তৈরি করে release.keystore দিয়ে Sign করে।
-৩. বিল্ড সফল হলে Artifacts থেকে "ModXLab-release-signed" ডাউনলোড করুন।
+৯.১) সাধারণ Release বিল্ড:
+  ১. main ব্রাঞ্চে Push করার সাথে সাথে GitHub Actions -> "Build Signed Release APK"
+     স্বয়ংক্রিয়ভাবে চলবে (অথবা Actions ট্যাব -> Run workflow থেকে ম্যানুয়ালি চালানো যাবে)।
+  ২. বিল্ডটি ২ ধাপে কাজ করে:
+     - Pass 1: CERT_SHA256 ও ED25519_PUBLIC_KEY বসিয়ে একক `classes.dex` বানায়
+               এবং সেই একক `classes.dex`-এর আসল SHA-256 হিসাব করে।
+     - Pass 2: `gradle clean assembleRelease` দিয়ে আসল DEX_HASH সহ নতুন করে
+               `libModXLab.so` (`armeabi-v7a` ও `arm64-v8a`) ও `classes.dex` তৈরি করে
+               `release.keystore` দিয়ে Sign করে।
+  ৩. CI শেষে Job Summary-তে Built ABIs, একক `classes.dex` SHA-256 ও Cert SHA-256 দেখাবে।
+  ৪. Artifacts থেকে `ModXLab-release-signed` ডাউনলোড করুন। (এতে কোনো `"MXL"` ডায়াগনস্টিক
+     স্ট্রিং থাকে না — এটিই পাবলিক বা সাধারণ ব্যবহারের বিল্ড।)
+
+৯.২) সমস্যা ধরার জন্য Diagnostic বিল্ড (`diag = true`):
+  - কখনো মেনু না এলে কোথায় আটকাচ্ছে তা দেখতে:
+    GitHub Repo -> Actions -> "Build Signed Release APK" -> Run workflow
+    -> `diag` চেকবক্স `[x] true` করে Run দিন।
+  - Artifact নাম হবে: `ModXLab-DIAG-do-not-distribute` (এটি কখনোই পাবলিক শেয়ার করবেন না)।
+  - Termux-এ ADB কানেক্ট করে লাইভ লগ দেখুন:
+      pkg install android-tools -y
+      adb pair <IP>:<PAIR_PORT>
+      adb connect <IP>:<DEBUG_PORT>
+      adb logcat -c && adb logcat -s MXL
+  - কারণ খুঁজে ঠিক করার পর আবার সাধারণ `diag = false` বিল্ড নিয়ে ব্যবহার করুন।
 
 --------------------------------------------------------------------------------
-১০. Subway Surfers গেমে Inject ও MT Manager-এ Sign করার ধাপ
+১০. Subway Surfers (Host APK)-এ Inject ও Sign করার সঠিক ধাপ
 --------------------------------------------------------------------------------
-১০.১) ফাইল আলাদা করা:
-  - `ModXLab-release-signed` থেকে পাওয়া `app-release.apk` MT Manager দিয়ে খুলুন।
-  - ভেতরের `classes.dex` বের করে নাম বদলে `classes11.dex` রাখুন।
-    (সতর্কতা: `classes11.dex`-এর ভেতরে কোনো smali এডিট করবেন না, তাহলে DEX hash ফেল করবে!)
-  - ভেতরের `lib/arm64-v8a/libModXLab.so` নিন (সবসময় সর্বশেষ বিল্ডের নতুনটি নেবেন)।
+১০.১) মোড APK থেকে ফাইল বের করা (সবসময় একই বিল্ড জিপ থেকে নেবেন):
+  - `ModXLab-release-signed` থেকে পাওয়া `app-release.apk` আনজিপ / MT Manager দিয়ে খুলুন।
+  - কোনো `res/` বা `assets/` ফাইল নেওয়ার দরকার নেই — কোড সম্পূর্ণ resource-independent।
+  - শুধু এই ২টি অংশ নিন:
+    1) একক `classes.dex`
+    2) Host গেমে যেসব ABI ফোল্ডার আছে তার সাথে মিলিয়ে `lib/arm64-v8a/libModXLab.so`
+       এবং/অথবা `lib/armeabi-v7a/libModXLab.so`।
 
-১০.২) গেম APK-তে যোগ করা:
-  - Subway Surfers (`com.kiloo.subwaysurf`)-এর APK-তে:
-    1. `classes11.dex` যোগ করুন (গেমের classes*.dex-গুলোর সাথে)।
-    2. `lib/arm64-v8a/libModXLab.so` যোগ করুন।
-    3. গেমের নিজস্ব `classes.dex`-এ মূল Activity-র onCreate-এ কল রাখুন:
-       invoke-static {p0}, Lcom/android/support/Main;->Start(Landroid/content/Context;)V
-    4. গেমের `AndroidManifest.xml`-এ নিশ্চিত করুন:
-       - <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-       - <uses-permission android:name="android.permission.INTERNET" />
-       - <service android:name="com.android.support.Launcher"
-                  android:enabled="true"
-                  android:exported="false"
-                  android:stopWithTask="true" />
+১০.২) গেম (Host APK)-এ যোগ করার নিয়ম:
+  - **DEX নাম্বারিং (খুব গুরুত্বপূর্ণ):** গেমের ভেতর শেষ dex কোনটি দেখুন। যদি
+    `classes.dex`..`classes9.dex` থাকে, তাহলে মোডের dex-কে অবশ্যই পরের ক্রমিক নাম
+    `classes10.dex` দিন। মাঝখানে কোনো সংখ্যা বাদ পড়লে (যেমন `classes10.dex` নেই,
+    সরাসরি `classes11.dex`) Android ART ওই dex লোড করবে না!
+  - মোডের `classes*.dex`-এর ভেতরে কোনো Smali এডিট করবেন না (তাহলে DEX SHA-256 বদলে
+    গিয়ে native check fail করবে)।
+  - গেমের নিজস্ব `classes.dex`-এ Main Launcher Activity-র `onCreate`-এ কল যোগ করুন:
+      invoke-static {p0}, Lcom/android/support/Main;->Start(Landroid/content/Context;)V
+  - **Manifest (সর্বোত্তম সেটআপ):**
+      * <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+      * <uses-permission android:name="android.permission.INTERNET" />
+      * <service android:name="com.android.support.Launcher"
+                 android:enabled="true"
+                 android:exported="false"
+                 android:stopWithTask="true" />
+    (নোট: Host Manifest-এ `Launcher` না থাকলেও এখন fallback-এ মেনু চলবে, তবে
+     `SYSTEM_ALERT_WINDOW` ও `Launcher` রাখলে ভাসমান ওভারলে সবচেয়ে ভালো কাজ করে।)
+  - যদি গেমের Manifest-এ `android:extractNativeLibs="false"` থাকে:
+      * `.so` ফাইলটি ZIP-এ `STORE` (compression level 0, uncompressed) অবস্থায় রাখতে হবে
+      * এবং সাইন করার আগে `zipalign -p -f 4 input.apk aligned.apk` চালাতে হবে।
 
-১০.৩) MT Manager-এ নিজের Keystore ইম্পোর্ট ও Sign করা:
-  - ধাপ ৬ থেকে পাওয়া `release.keystore` ফাইলটি ফোনের `/sdcard/MT2/keystore/`
-    ফোল্ডারে কপি করুন।
-  - MT Manager -> Auto sign -> MORE -> Manage signing keys-এ যান।
-  - "Importable (MT2/keystore)" থেকে `release.keystore` সিলেক্ট করে `credentials.txt`
-    থেকে KEY_ALIAS ("modxlab"), KEYSTORE_PASSWORD ও KEY_PASSWORD দিয়ে ইম্পোর্ট করুন।
-  - এবার গেম APK-তে "Auto sign" করার সময়:
-      * Signing Key : অবশ্যই ইম্পোর্ট করা `modxlab` সিলেক্ট করুন (Default নয়!)
-      * Scheme      : `V1 + V2 + V3` সিলেক্ট করুন
-      * OK চাপুন এবং ইনস্টল করুন।
+১০.৩) নিজের Keystore দিয়ে Sign করা (V1 + V2 + V3 আবশ্যক):
+  - `release.keystore` দিয়ে গেম APK অবশ্যই **V2 + V3** (সাথে V1) enabled করে
+    সাইন করতে হবে। শুধু V1 দিলে native v2/v3 verifier fail করবে।
+  - Termux কমান্ড উদাহরণ:
+      zipalign -p -f 4 host_modded.apk host_aligned.apk
+      apksigner sign \
+        --ks "/storage/emulated/0/keystore/release.keystore" \
+        --ks-type PKCS12 \
+        --ks-key-alias modxlab \
+        --v1-signing-enabled true \
+        --v2-signing-enabled true \
+        --v3-signing-enabled true \
+        --out host_signed.apk \
+        host_aligned.apk
+      apksigner verify -v --print-certs host_signed.apk
+  - `apksigner verify`-তে অবশ্যই `v2: true` এবং `v3: true` দেখাতে হবে এবং SHA-256
+    digest আপনার CI Summary-র `Signing Cert SHA-256`-এর সাথে হুবহু মিলতে হবে।
 
 --------------------------------------------------------------------------------
 ১১. ভবিষ্যতে কোনো কিছু পরিবর্তন করতে হলে কোথায় কী করবেন (Cheat Sheet)
@@ -235,7 +268,7 @@ Termux বা PC-তে রিপোর ফোল্ডারের ভেতর
 
 ৩. Mod Menu-র নতুন ফিচার, অফসেট বা UI ডিজাইন পরিবর্তন:
    -> `app/src/main/jni/Main.cpp` / `Menu.java` / `LoginHelper.java` এডিট করে
-      GitHub-এ push করুন -> নতুন `classes11.dex` + `libModXLab.so` গেমে দিন।
+      GitHub-এ push করুন -> একই নতুন বিল্ডের `classes.dex` + `libModXLab.so` গেমে দিন।
 
 ৪. Firebase বা Appwrite ডোমেইন/প্রজেক্ট আইডি বদলাতে হলে:
    -> `app/src/main/jni/Security.cpp`-এর নিচের দিকের
@@ -247,5 +280,73 @@ Termux বা PC-তে রিপোর ফোল্ডারের ভেতর
    -> সার্ভারের SSL সার্টিফিকেট (বিশেষ করে Leaf/Intermediate) পরিবর্তন হয়েছে কি না
       ধাপ ৭-এর `openssl` কমান্ড দিয়ে চেক করুন, নতুন পিন `PinnedHttp.java`-তে বসিয়ে
       রি-বিল্ড করুন।
+
+--------------------------------------------------------------------------------
+১২. Troubleshooting টেবিল (গেমে মেনু না আসলে বা ফেল করলে করণীয়)
+--------------------------------------------------------------------------------
+১) ভুল Keystore বা Certificate মিলছে না (Stage 107 / 108):
+   - লক্ষণ: `MXL [108]` APK cert mismatch অথবা `[107]` PackageManager cert mismatch।
+   - কারণ: গেমটি Default/Test key বা অন্য keystore দিয়ে সাইন করা হয়েছে, যা CI-এর
+           `KEYSTORE_BASE64`-এর সাথে মেলে না।
+   - সমাধান: CI-এ যে `release.keystore` ব্যবহৃত হয়েছে ঠিক সেটি (`modxlab` alias)
+             দিয়ে গেম সাইন করুন এবং `apksigner verify --print-certs` দিয়ে SHA-256 মেলান।
+
+২) শুধু V1 Signing করা হয়েছে / V2+V3 নেই (Stage 106):
+   - লক্ষণ: `MXL [106]` APK v2/v3 signature block missing।
+   - কারণ: পুরনো zip-signer বা শুধু V1 scheme দিয়ে সাইন করলে v2/v3 ব্লক থাকে না।
+   - সমাধান: `apksigner sign --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true`
+             ব্যবহার করুন এবং Sign করার আগে `zipalign` করুন (পরে নয়!)।
+
+৩) `.dex` এবং `.so` ভিন্ন ভিন্ন বিল্ড থেকে নেওয়া (Stage 111):
+   - লক্ষণ: `MXL [111]` No .dex entry matched expected DEX hash।
+   - কারণ: `classes.dex` এক বিল্ডের আর `libModXLab.so` আগের/অন্য বিল্ডের, অথবা মোডের
+           `classesN.dex`-এ smali এডিট করা হয়েছে।
+   - সমাধান: সবসময় একই CI Artifact থেকে `classes.dex` ও `libModXLab.so` নিন এবং মোডের
+             `classesN.dex` কখনোই এডিট করবেন না।
+
+৪) ABI অমিল — 32-bit বনাম 64-bit (Stage 201 / UnsatisfiedLinkError):
+   - লক্ষণ: `MXL [201]` `System.loadLibrary(ModXLab) failed: UnsatisfiedLinkError`।
+   - কারণ: গেম APK শুধু `armeabi-v7a` বা শুধু `arm64-v8a` নেটিভ লাইব্রেরি রাখে, কিন্তু
+           আপনি ভুল ABI-এর `.so` দিয়েছেন (যেমন `lib/armeabi-v7a` থাকলে Android শুধু
+           32-bit মোডে লোড করতে চায় অথবা `arm64-v8a` মিসিং)।
+   - সমাধান: গেমের `lib/` ফোল্ডারে যেসব ABI আছে (`arm64-v8a`, `armeabi-v7a`) সবগুলোর
+             জন্য সংশ্লিষ্ট `libModXLab.so` কপি করুন।
+
+৫) DEX নাম্বারিংয়ে ফাঁক থাকা (Gap in `classesN.dex`):
+   - লক্ষণ: `Main.Start` কলই হয় না বা `ClassNotFoundException: com.android.support.Main`।
+   - কারণ: গেমে যদি `classes.dex`..`classes9.dex` থাকে আর আপনি `classes10.dex` না দিয়ে
+           সরাসরি `classes11.dex` যোগ করেন, Android `classes10.dex` না পেয়ে থেমে যায়।
+   - সমাধান: সবসময় শেষ `classes<k>.dex`-এর ঠিক পরের সংখ্যা `classes<k+1>.dex` ব্যবহার করুন।
+
+৬) `extractNativeLibs="false"` হলে `.so` লোড না হওয়া (Stage 201):
+   - লক্ষণ: Modern APK/Android 11+ এ ইনস্টল ফেল (`INSTALL_FAILED_INVALID_APK`) বা
+           `dlopen failed: couldn't map libModXLab.so`।
+   - কারণ: `extractNativeLibs="false"` থাকলে `.so` ফাইল ZIP-এ compress করা থাকলে বা
+           4KB page-aligned না হলে Android সরাসরি mmap করতে পারে না।
+   - সমাধান: `lib/*/libModXLab.so` অবশ্যই Stored (0% compression / uncompressed) হিসেবে
+             APK-তে রাখুন এবং সাইন করার আগে `zipalign -p -f 4` চালান।
+
+৭) Split APKs / XAPK / APKS প্যাকেজ সমস্যা:
+   - লক্ষণ: ইনস্টল ফেল (`INSTALL_FAILED_UPDATE_INCOMPATIBLE` / signature mismatch) বা
+           `base.apk`-তে সাইন করলেও split লোড না হওয়া।
+   - কারণ: গেম Split APK হলে `base.apk`, `split_config.arm64_v8a.apk`, `split_config.*.apk`
+           — সবগুলো ফাইল একই keystore দিয়ে সাইন না করলে Android ইনস্টল বা লোড করতে দেয় না।
+   - সমাধান: সব split APK একই `release.keystore` দিয়ে সাইন করুন, অথবা সাইন করার আগে
+             নির্ভরযোগ্য টুলে single universal APK-তে মার্জ করে তারপর `zipalign + apksigner` দিন।
+
+৮) Overlay Permission না থাকা (`SYSTEM_ALERT_WINDOW`) (Stage 202 / 203):
+   - লক্ষণ: `MXL [202]` Overlay permission missing অথবা ভাসমান আইকন Settings খোলার পরও
+           ডায়ালগ আসে না।
+   - কারণ: ফোনের Settings -> Display over other apps বন্ধ, অথবা Host Manifest-এ
+           `SYSTEM_ALERT_WINDOW` নেই।
+   - সমাধান: Host `AndroidManifest.xml`-এ `SYSTEM_ALERT_WINDOW` রাখুন এবং গেমের App Info
+             থেকে "Display over other apps" Allow করুন। সাময়িক fallback হিসেবে `Activity`
+             কনটেক্সট দিলে ইন-অ্যাপ উইন্ডোতেও মেনু খুলবে।
+
+৯) Root / LSPosed / Xposed / Frida ডিটেকশন (Stage 101 / 102 / 103):
+   - লক্ষণ: `MXL [101]` Frida, `[102]` Xposed/LSPosed, বা `[103]` TracerPid > 0।
+   - কারণ: ফোনে LSPosed/Xposed মডিউল বা Frida server চালু আছে বা ডিবাগার সংযুক্ত।
+   - সমাধান: গেমটিকে Magisk DenyList / Shamiko দিয়ে হাইড করুন, Xposed/LSPosed এই গেমে
+             অ্যাপ্লাই বন্ধ করুন এবং Frida server বা ডিবাগার বন্ধ করে গেম চালান।
 
 ================================================================================

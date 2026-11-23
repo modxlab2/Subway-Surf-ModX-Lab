@@ -44,8 +44,42 @@ public final class PinnedHttp {
     private static volatile SSLSocketFactory sFirebaseFactory = null;
     private static volatile SSLSocketFactory sAppwriteFactory = null;
     private static final Object sLock = new Object();
+    private static final ThreadLocal<String> sLastError = new ThreadLocal<String>();
 
     private PinnedHttp() { }
+
+    public static String getLastError() {
+        String err = sLastError.get();
+        return (err != null && !err.isEmpty()) ? err : "network";
+    }
+
+    private static String classifyException(Throwable t) {
+        Throwable cur = t;
+        int depth = 0;
+        while (cur != null && depth++ < 10) {
+            String msg = cur.getMessage();
+            if (msg != null && (msg.contains("SPKI pin") || msg.contains("Empty certificate chain"))) {
+                return "tls_pin";
+            }
+            if (cur instanceof java.net.UnknownHostException) {
+                return "no_internet";
+            }
+            if (cur instanceof java.net.ConnectException) {
+                return "connect_error";
+            }
+            if (cur instanceof java.net.SocketTimeoutException) {
+                return "timeout";
+            }
+            if (cur instanceof SecurityException) {
+                return "no_permission";
+            }
+            if (cur instanceof CertificateException || cur instanceof javax.net.ssl.SSLException) {
+                return "tls_error";
+            }
+            cur = cur.getCause();
+        }
+        return "network";
+    }
 
     public static final class HttpResponse {
         public final int code;
@@ -63,15 +97,25 @@ public final class PinnedHttp {
      * Performs a pinned HTTPS GET and returns the response body as a String.
      */
     public static String get(String urlStr) {
-        if (urlStr == null || urlStr.isEmpty()) return null;
+        sLastError.remove();
+        if (urlStr == null || urlStr.isEmpty()) {
+            sLastError.set("network");
+            return null;
+        }
 
         HttpsURLConnection conn = null;
         try {
             URL url = new URL(urlStr);
-            if (!"https".equalsIgnoreCase(url.getProtocol())) return null;
+            if (!"https".equalsIgnoreCase(url.getProtocol())) {
+                sLastError.set("network");
+                return null;
+            }
 
             SSLSocketFactory factory = getFactoryForHost(url.getHost());
-            if (factory == null) return null;
+            if (factory == null) {
+                sLastError.set("tls_error");
+                return null;
+            }
 
             conn = (HttpsURLConnection) url.openConnection();
             conn.setSSLSocketFactory(factory);
@@ -84,11 +128,13 @@ public final class PinnedHttp {
 
             int code = conn.getResponseCode();
             if (code != 200) {
+                sLastError.set("http_" + code);
                 return null;
             }
 
             return readStream(conn.getInputStream());
         } catch (Exception e) {
+            sLastError.set(classifyException(e));
             return null;
         } finally {
             if (conn != null) try { conn.disconnect(); } catch (Exception ignored) { }
@@ -99,15 +145,25 @@ public final class PinnedHttp {
      * Performs a pinned HTTPS POST with a JSON body.
      */
     public static HttpResponse postJson(String urlStr, String jsonBody, Map<String, String> headers) {
-        if (urlStr == null || urlStr.isEmpty()) return null;
+        sLastError.remove();
+        if (urlStr == null || urlStr.isEmpty()) {
+            sLastError.set("network");
+            return null;
+        }
 
         HttpsURLConnection conn = null;
         try {
             URL url = new URL(urlStr);
-            if (!"https".equalsIgnoreCase(url.getProtocol())) return null;
+            if (!"https".equalsIgnoreCase(url.getProtocol())) {
+                sLastError.set("network");
+                return null;
+            }
 
             SSLSocketFactory factory = getFactoryForHost(url.getHost());
-            if (factory == null) return null;
+            if (factory == null) {
+                sLastError.set("tls_error");
+                return null;
+            }
 
             conn = (HttpsURLConnection) url.openConnection();
             conn.setSSLSocketFactory(factory);
@@ -153,6 +209,7 @@ public final class PinnedHttp {
             }
             return new HttpResponse(code, body, cookies);
         } catch (Exception e) {
+            sLastError.set(classifyException(e));
             return null;
         } finally {
             if (conn != null) try { conn.disconnect(); } catch (Exception ignored) { }

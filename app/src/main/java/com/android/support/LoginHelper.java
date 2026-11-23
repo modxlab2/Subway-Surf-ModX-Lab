@@ -125,9 +125,25 @@ public class LoginHelper {
         this.tfBold    = Typeface.create("sans-serif", Typeface.BOLD);
     }
 
+    private static DisplayMetrics safeDisplayMetrics(Context context) {
+        DisplayMetrics dm = new DisplayMetrics();
+        try {
+            if (context != null) {
+                WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+                if (wm != null && wm.getDefaultDisplay() != null) {
+                    wm.getDefaultDisplay().getMetrics(dm);
+                    if (dm.widthPixels > 0 && dm.heightPixels > 0 && dm.density > 0f) {
+                        return dm;
+                    }
+                }
+            }
+        } catch (Exception ignored) { }
+        return android.content.res.Resources.getSystem().getDisplayMetrics();
+    }
+
     private int dp(float v) {
         return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v,
-                ctx.getResources().getDisplayMetrics());
+                safeDisplayMetrics(ctx));
     }
 
     public View buildView() {
@@ -653,14 +669,14 @@ public class LoginHelper {
         java.util.List<Integer> actions = new java.util.ArrayList<>();
 
         if (hasText) {
-            labels.add("Select all");  actions.add(android.R.id.selectAll);
+            labels.add("Select all");  actions.add(0x0102001f); // framework selectAll
             if (hasSelection) {
-                labels.add("Cut");     actions.add(android.R.id.cut);
+                labels.add("Cut");     actions.add(0x01020020); // framework cut
             }
-            labels.add("Copy");        actions.add(android.R.id.copy);
+            labels.add("Copy");        actions.add(0x01020021); // framework copy
         }
         if (hasClipboard) {
-            labels.add("Paste");       actions.add(android.R.id.paste);
+            labels.add("Paste");       actions.add(0x01020022); // framework paste
         }
         if (labels.isEmpty()) return;
 
@@ -750,8 +766,9 @@ public class LoginHelper {
         int ew = et.getWidth();
         int eh = et.getHeight();
 
-        int screenW = ctx.getResources().getDisplayMetrics().widthPixels;
-        int screenH = ctx.getResources().getDisplayMetrics().heightPixels;
+        DisplayMetrics dm = safeDisplayMetrics(ctx);
+        int screenW = dm.widthPixels;
+        int screenH = dm.heightPixels;
 
         int x = ex + (ew - tw) / 2;
         if (x < dp(4)) x = dp(4);
@@ -944,10 +961,26 @@ public class LoginHelper {
                                 setStatus("Invalid username or password", COLOR_DANGER);
                             } else if ("session_invalid".equals(fReason)) {
                                 setStatus("Invalid server signature", COLOR_DANGER);
+                            } else if ("no_permission".equals(fReason)) {
+                                setStatus("Missing INTERNET permission", COLOR_DANGER);
+                            } else if ("no_internet".equals(fReason)) {
+                                setStatus("No internet / DNS blocked", COLOR_DANGER);
+                            } else if ("connect_error".equals(fReason)) {
+                                setStatus("Server unreachable", COLOR_DANGER);
+                            } else if ("timeout".equals(fReason)) {
+                                setStatus("Connection timed out", COLOR_DANGER);
+                            } else if ("tls_pin".equals(fReason)) {
+                                setStatus("SSL pin mismatch", COLOR_DANGER);
+                            } else if ("tls_error".equals(fReason)) {
+                                setStatus("SSL handshake error", COLOR_DANGER);
+                            } else if ("native_config".equals(fReason)) {
+                                setStatus("Native config error", COLOR_DANGER);
+                            } else if (fReason != null && fReason.startsWith("http_")) {
+                                setStatus("Server error (" + fReason.toUpperCase() + ")", COLOR_DANGER);
                             } else if ("network".equals(fReason)) {
                                 setStatus("Connection failed", COLOR_DANGER);
                             } else {
-                                setStatus("Login failed", COLOR_DANGER);
+                                setStatus("Login failed (" + fReason + ")", COLOR_DANGER);
                             }
                         }
                     });
@@ -1129,7 +1162,7 @@ public class LoginHelper {
     private void presentPremiumDialog(final android.app.AlertDialog[] ref, final LinearLayout card,
                                        boolean cancelable,
                                        final android.content.DialogInterface.OnCancelListener onCancel) {
-        DisplayMetrics dm = ctx.getResources().getDisplayMetrics();
+        DisplayMetrics dm = safeDisplayMetrics(ctx);
         final int screenW = dm.widthPixels;
         final int screenH = dm.heightPixels;
 
@@ -1155,9 +1188,12 @@ public class LoginHelper {
         d.setCancelable(cancelable);
         if (cancelable && onCancel != null) d.setOnCancelListener(onCancel);
         if (d.getWindow() != null) {
-            d.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
-            if (Build.VERSION.SDK_INT >= 26) d.getWindow().setType(2038);
-            else d.getWindow().setType(2002);
+            d.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            boolean canOverlay = Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(ctx);
+            if (!(ctx instanceof android.app.Activity) || canOverlay) {
+                if (Build.VERSION.SDK_INT >= 26) d.getWindow().setType(2038);
+                else d.getWindow().setType(2002);
+            }
         }
         ref[0] = d;
         d.show();

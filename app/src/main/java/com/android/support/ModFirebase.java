@@ -27,19 +27,20 @@ public final class ModFirebase {
         if (ctx == null || username == null || username.isEmpty()
                 || password == null || password.isEmpty()
                 || deviceId == null || deviceId.isEmpty()) {
-            return null;
+            return errorJson("bad_input");
         }
         try {
             String endpoint = SecurityNative.getAppwriteEndpoint();
             String projectId = SecurityNative.getAppwriteProjectId();
             String functionId = SecurityNative.getVerifyLoginFunctionId();
             if (isEmpty(endpoint) || isEmpty(projectId) || isEmpty(functionId)) {
-                return null;
+                return errorJson("native_config");
             }
 
-            String sessionCookie = getOrCreateSessionCookie(ctx, endpoint, projectId, false);
+            String[] sessionErr = new String[1];
+            String sessionCookie = getOrCreateSessionCookie(ctx, endpoint, projectId, false, sessionErr);
             if (isEmpty(sessionCookie)) {
-                return null;
+                return errorJson(!isEmpty(sessionErr[0]) ? sessionErr[0] : "network");
             }
 
             PinnedHttp.HttpResponse execResp = executeVerifyLogin(
@@ -47,27 +48,44 @@ public final class ModFirebase {
 
             // If session expired/invalid, refresh anonymous session once and retry
             if (execResp != null && execResp.code == 401) {
-                sessionCookie = getOrCreateSessionCookie(ctx, endpoint, projectId, true);
-                if (isEmpty(sessionCookie)) return null;
+                sessionCookie = getOrCreateSessionCookie(ctx, endpoint, projectId, true, sessionErr);
+                if (isEmpty(sessionCookie)) {
+                    return errorJson(!isEmpty(sessionErr[0]) ? sessionErr[0] : "http_401");
+                }
                 execResp = executeVerifyLogin(
                         endpoint, projectId, functionId, sessionCookie, username, password, deviceId);
             }
 
-            if (execResp == null || isEmpty(execResp.body)) {
-                return null;
+            if (execResp == null) {
+                return errorJson(PinnedHttp.getLastError());
             }
 
             if (execResp.code < 200 || execResp.code >= 300) {
-                return null;
+                return errorJson("http_" + execResp.code);
+            }
+
+            if (isEmpty(execResp.body)) {
+                return errorJson("empty_body");
             }
 
             JSONObject wrapper = new JSONObject(execResp.body);
             String responseBody = wrapper.optString("responseBody", "");
             if (isEmpty(responseBody)) {
-                return null;
+                return errorJson("empty_func_body");
             }
             return new JSONObject(responseBody);
         } catch (Exception e) {
+            return errorJson("network");
+        }
+    }
+
+    private static JSONObject errorJson(String reason) {
+        try {
+            JSONObject obj = new JSONObject();
+            obj.put("ok", false);
+            obj.put("reason", reason);
+            return obj;
+        } catch (Exception ignored) {
             return null;
         }
     }
@@ -105,10 +123,12 @@ public final class ModFirebase {
     }
 
     private static String getOrCreateSessionCookie(
-            Context ctx, String endpoint, String projectId, boolean forceRefresh) {
+            Context ctx, String endpoint, String projectId, boolean forceRefresh, String[] errOut) {
         if (!forceRefresh) {
             String cached = SecureTokenStore.loadAppwriteSession(ctx);
-            if (!isEmpty(cached)) return cached;
+            if (!isEmpty(cached) && !cached.startsWith("a_session_" + projectId + "_legacy=")) {
+                return cached;
+            }
         } else {
             SecureTokenStore.clearAppwriteSession(ctx);
         }
@@ -118,20 +138,27 @@ public final class ModFirebase {
 
         String url = endpoint + "/account/sessions/anonymous";
         PinnedHttp.HttpResponse resp = PinnedHttp.postJson(url, "{}", headers);
-        if (resp == null || resp.code < 200 || resp.code >= 300) {
+        if (resp == null) {
+            if (errOut != null && errOut.length > 0) errOut[0] = PinnedHttp.getLastError();
+            return null;
+        }
+        if (resp.code < 200 || resp.code >= 300) {
+            if (errOut != null && errOut.length > 0) errOut[0] = "http_" + resp.code;
             return null;
         }
 
         String cookieName = "a_session_" + projectId;
         String cookieVal = null;
+        String fallbackCookie = null;
 
         for (String setCookie : resp.setCookies) {
             if (setCookie == null) continue;
             String firstPart = setCookie.split(";", 2)[0].trim();
-            if (firstPart.startsWith(cookieName + "=")
-                    || firstPart.startsWith("a_session_")) {
+            if (firstPart.startsWith(cookieName + "=")) {
                 cookieVal = firstPart;
                 break;
+            } else if (fallbackCookie == null && firstPart.startsWith("a_session_")) {
+                fallbackCookie = firstPart;
             }
         }
 
@@ -145,8 +172,14 @@ public final class ModFirebase {
             } catch (Exception ignored) { }
         }
 
+        if (isEmpty(cookieVal)) {
+            cookieVal = fallbackCookie;
+        }
+
         if (!isEmpty(cookieVal)) {
             SecureTokenStore.saveAppwriteSession(ctx, cookieVal);
+        } else if (errOut != null && errOut.length > 0) {
+            errOut[0] = "no_session_cookie";
         }
         return cookieVal;
     }
