@@ -272,6 +272,16 @@ private final HashMap<Integer, SpinnerHolder> mSpinners =
     private int savedWindowFlags = 0;
 private boolean windowIsFocusable = false;
 private boolean isLoggedIn = false;
+private boolean loginOverflowActive = false;
+private boolean loginResizingNow = false;
+private int lastLoginViewportH = -1;
+private int lastLoginContentH = -1;
+private int lastLoginScreenW = -1;
+private int lastLoginScreenH = -1;
+private int lastLoginVisBottom = -1;
+private View.OnLayoutChangeListener loginLayoutChangeListener = null;
+private android.view.ViewTreeObserver.OnGlobalLayoutListener loginGlobalLayoutListener = null;
+private LoginHelper activeLoginHelper = null;
 private PopupWindow activeDropdownPopup = null;
 private View sidebarDivider = null;
 private int effectivePosY = POS_Y;
@@ -604,6 +614,11 @@ mShimmerViewRef = shimmer;
         hideBtn.setOnLongClickListener(new View.OnLongClickListener() {
                 public boolean onLongClick(View view) {
                     Toast.makeText(view.getContext(), "Menu killed", Toast.LENGTH_LONG).show();
+                    detachLoginScrollListeners();
+                    if (activeLoginHelper != null) {
+                        activeLoginHelper.cleanup();
+                        activeLoginHelper = null;
+                    }
                     stopGlowAnimator();
                     rootFrame.removeView(mRootContainer);
                     mWindowManager.removeView(rootFrame);
@@ -884,11 +899,20 @@ new Titanic().start(proTitle);
             if (!isLoggedIn && !windowIsFocusable) {
                 setWindowFocusable(true);
             }
+            if (!isLoggedIn && activeLoginHelper != null) {
+                activeLoginHelper.onHostVisibilityChanged(true);
+            }
+            if (!isLoggedIn) {
+                updateLoginOverflowScroll(false);
+            }
         }
     });
 }
 
     private void collapseMenu(float iconAlpha) {
+        if (activeLoginHelper != null) {
+            activeLoginHelper.onHostVisibilityChanged(false);
+        }
         setWindowFocusable(false);
         stopGlowAnimator();
         mCollapsed.setVisibility(View.VISIBLE);
@@ -978,6 +1002,14 @@ new Titanic().start(proTitle);
                 vmParams.x = nx;
                 vmParams.y = ny;
                 mWindowManager.updateViewLayout(rootFrame, vmParams);
+            }
+            if (!isLoggedIn && contentScrollView != null) {
+                contentScrollView.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        updateLoginOverflowScroll(false);
+                    }
+                });
             }
         } catch (Exception ignored) {}
     }
@@ -1460,10 +1492,24 @@ new Titanic().start(proTitle);
     }
         private final RectF rect = new RectF();
         private final float density;
+        private final int touchSlop;
         private int barAlpha = IDLE_ALPHA;
         private boolean scrollingEnabled = true;
+        private boolean loginScrollMode = false;
+        private float downX, downY;
+        private boolean horizontalLock = false;
+        private boolean verticalLock = false;
+
+        void setLoginScrollMode(boolean loginMode) {
+            this.loginScrollMode = loginMode;
+            if (!loginMode) {
+                horizontalLock = false;
+                verticalLock = false;
+            }
+        }
 
         void setScrollingEnabled(boolean enabled) {
+            if (this.scrollingEnabled == enabled) return;
             this.scrollingEnabled = enabled;
             if (!enabled) {
                 removeCallbacks(fadeRunnable);
@@ -1471,8 +1517,16 @@ new Titanic().start(proTitle);
                 if (getScrollX() != 0 || getScrollY() != 0) {
                     super.scrollTo(0, 0);
                 }
+            } else {
+                flashBar();
             }
             invalidate();
+        }
+
+        void showScrollbarBriefly() {
+            if (scrollingEnabled) {
+                flashBar();
+            }
         }
 
         private final Runnable fadeRunnable = new Runnable() {
@@ -1487,6 +1541,7 @@ new Titanic().start(proTitle);
         SlimScrollView(Context context) {
             super(context);
             density = safeDisplayMetrics(context).density;
+            touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
             setVerticalScrollBarEnabled(false);
             setHorizontalScrollBarEnabled(false);
             setOverScrollMode(OVER_SCROLL_NEVER);
@@ -1504,6 +1559,34 @@ new Titanic().start(proTitle);
         @Override
         public boolean onInterceptTouchEvent(MotionEvent ev) {
             if (!scrollingEnabled) return false;
+            if (loginScrollMode) {
+                int action = ev.getActionMasked();
+                if (action == MotionEvent.ACTION_DOWN) {
+                    downX = ev.getX();
+                    downY = ev.getY();
+                    horizontalLock = false;
+                    verticalLock = false;
+                } else if (action == MotionEvent.ACTION_MOVE) {
+                    if (!horizontalLock && !verticalLock) {
+                        float adx = Math.abs(ev.getX() - downX);
+                        float ady = Math.abs(ev.getY() - downY);
+                        if (adx > touchSlop || ady > touchSlop) {
+                            if (adx > ady) {
+                                horizontalLock = true;
+                                return false;
+                            } else {
+                                verticalLock = true;
+                            }
+                        }
+                    }
+                    if (horizontalLock) {
+                        return false;
+                    }
+                } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    horizontalLock = false;
+                    verticalLock = false;
+                }
+            }
             return super.onInterceptTouchEvent(ev);
         }
 
@@ -1796,6 +1879,9 @@ new Titanic().start(proTitle);
                         if (startH <= 0) startH = Menu.this.dp(MENU_HEIGHT);
                         startX = event.getRawX();
                         startY = event.getRawY();
+                        if (!isLoggedIn) {
+                            loginResizingNow = true;
+                        }
                         v.setAlpha(0.6f);
                         return true;
                     }
@@ -1822,6 +1908,9 @@ new Titanic().start(proTitle);
                         if (mWindowManager != null && rootFrame != null && vmParams != null) {
                             try { mWindowManager.updateViewLayout(rootFrame, vmParams); } catch (Exception ignored) {}
                         }
+                        if (!isLoggedIn && contentScrollView instanceof SlimScrollView) {
+                            ((SlimScrollView) contentScrollView).showScrollbarBriefly();
+                        }
                         return true;
                     }
                 case MotionEvent.ACTION_UP:
@@ -1829,6 +1918,17 @@ new Titanic().start(proTitle);
                         v.setAlpha(1f);
                         if (mWindowManager != null && rootFrame != null && vmParams != null) {
                             try { mWindowManager.updateViewLayout(rootFrame, vmParams); } catch (Exception ignored) {}
+                        }
+                        if (!isLoggedIn && contentScrollView != null) {
+                            contentScrollView.post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    updateLoginOverflowScroll(true);
+                                    loginResizingNow = false;
+                                }
+                            });
+                        } else {
+                            loginResizingNow = false;
                         }
                         return true;
                     }
@@ -2332,8 +2432,70 @@ private void hideWaitingTexts(View root) {
         }
     }
 }
+private void updateLoginOverflowScroll(boolean flashIfOverflow) {
+    if (isLoggedIn || !(contentScrollView instanceof SlimScrollView) || contentLayout == null) {
+        return;
+    }
+    SlimScrollView ssv = (SlimScrollView) contentScrollView;
+    int viewportH = ssv.getHeight() - ssv.getPaddingTop() - ssv.getPaddingBottom();
+    if (viewportH <= 0) return;
+
+    int naturalContentH = contentLayout.getPaddingTop() + contentLayout.getPaddingBottom();
+    for (int i = 0; i < contentLayout.getChildCount(); i++) {
+        View child = contentLayout.getChildAt(i);
+        if (child.getVisibility() != View.GONE) {
+            naturalContentH += child.getHeight();
+            ViewGroup.LayoutParams clp = child.getLayoutParams();
+            if (clp instanceof ViewGroup.MarginLayoutParams) {
+                ViewGroup.MarginLayoutParams mlp = (ViewGroup.MarginLayoutParams) clp;
+                naturalContentH += mlp.topMargin + mlp.bottomMargin;
+            }
+        }
+    }
+    int effectiveContentH = Math.max(naturalContentH, contentLayout.getHeight());
+    boolean overflow = effectiveContentH > viewportH + 1;
+
+    loginOverflowActive = overflow;
+    ssv.setLoginScrollMode(overflow);
+    ssv.setScrollingEnabled(overflow);
+    if (overflow && flashIfOverflow) {
+        ssv.showScrollbarBriefly();
+    }
+}
+
+private void detachLoginScrollListeners() {
+    loginOverflowActive = false;
+    loginResizingNow = false;
+    lastLoginViewportH = -1;
+    lastLoginContentH = -1;
+    lastLoginScreenW = -1;
+    lastLoginScreenH = -1;
+    lastLoginVisBottom = -1;
+    if (contentScrollView != null && loginLayoutChangeListener != null) {
+        contentScrollView.removeOnLayoutChangeListener(loginLayoutChangeListener);
+    }
+    if (contentLayout != null && loginLayoutChangeListener != null) {
+        contentLayout.removeOnLayoutChangeListener(loginLayoutChangeListener);
+    }
+    if (contentScrollView != null && loginGlobalLayoutListener != null) {
+        try {
+            android.view.ViewTreeObserver vto = contentScrollView.getViewTreeObserver();
+            if (vto.isAlive()) {
+                vto.removeOnGlobalLayoutListener(loginGlobalLayoutListener);
+            }
+        } catch (Exception ignored) { }
+    }
+    if (contentScrollView instanceof SlimScrollView) {
+        ((SlimScrollView) contentScrollView).setLoginScrollMode(false);
+    }
+    loginLayoutChangeListener = null;
+    loginGlobalLayoutListener = null;
+}
+
 private void showLoginScreen() {
     if (isLoggedIn) return;
+
+    detachLoginScrollListeners();
 
     if (mHeaderView  != null) mHeaderView.setVisibility(View.GONE);
     if (mShimmerView != null) mShimmerView.setVisibility(View.GONE);
@@ -2342,13 +2504,24 @@ private void showLoginScreen() {
 
     contentLayout.removeAllViews();
     if (contentScrollView instanceof SlimScrollView) {
+        ((SlimScrollView) contentScrollView).setLoginScrollMode(false);
         ((SlimScrollView) contentScrollView).setScrollingEnabled(false);
     }
     setWindowFocusable(true);
 
-    LoginHelper loginHelper = new LoginHelper(getContext, new LoginHelper.Callback() {
+    if (activeLoginHelper != null) {
+        activeLoginHelper.cleanup();
+        activeLoginHelper = null;
+    }
+
+    final LoginHelper loginHelper = new LoginHelper(getContext, overlayRequired, new LoginHelper.Callback() {
         @Override
         public void onLoginSuccess() {
+            detachLoginScrollListeners();
+            if (activeLoginHelper != null) {
+                activeLoginHelper.cleanup();
+                activeLoginHelper = null;
+            }
             setWindowFocusable(false);
             isLoggedIn = true;
 
@@ -2358,18 +2531,22 @@ private void showLoginScreen() {
             if (sidebarDivider != null) sidebarDivider.setVisibility(View.VISIBLE);
 
             if (contentScrollView instanceof SlimScrollView) {
+                ((SlimScrollView) contentScrollView).setLoginScrollMode(false);
                 ((SlimScrollView) contentScrollView).setScrollingEnabled(true);
             }
             contentLayout.removeAllViews();
             buildFeaturesAndCategories(GetFeatureList());
         }
     });
+    activeLoginHelper = loginHelper;
 
     final View loginView = loginHelper.buildView();
 
     // ================================================================
     // Drag wrapper — EditText touch সরাসরি EditText-কে দেই,
-    // card background বা অন্য জায়গায় drag করলে যেকোনো দিকে window move হয়।
+    // card background বা অন্য জায়গায় drag করলে window move হয়;
+    // আর login overflow scroll চালু থাকলে vertical drag scroll করে,
+    // horizontal drag window move করে।
     // ================================================================
     FrameLayout dragWrapper = new FrameLayout(Menu.this.getContext) {
         private float downX, downY;
@@ -2405,6 +2582,9 @@ private void showLoginScreen() {
                 touchInEditText = isPointInChildEditText(this, ev.getX(), ev.getY());
                 if (touchInEditText) {
                     dragging = false;
+                    if (loginOverflowActive && getParent() != null) {
+                        getParent().requestDisallowInterceptTouchEvent(true);
+                    }
                     return super.dispatchTouchEvent(ev);
                 }
                 downX = ev.getRawX();
@@ -2431,14 +2611,24 @@ private void showLoginScreen() {
                 case MotionEvent.ACTION_MOVE: {
                     float dx = ev.getRawX() - downX;
                     float dy = ev.getRawY() - downY;
-                    if (!dragging
-                            && (Math.abs(dx) > slop || Math.abs(dy) > slop)) {
-                        dragging = true;
-                        // Cancel children's gesture
-                        MotionEvent cancel = MotionEvent.obtain(ev);
-                        cancel.setAction(MotionEvent.ACTION_CANCEL);
-                        super.dispatchTouchEvent(cancel);
-                        cancel.recycle();
+                    if (!dragging) {
+                        float adx = Math.abs(dx);
+                        float ady = Math.abs(dy);
+                        if (adx > slop || ady > slop) {
+                            if (loginOverflowActive && ady >= adx) {
+                                return false;
+                            }
+                            dragging = true;
+                            if (getParent() != null) {
+                                getParent().requestDisallowInterceptTouchEvent(true);
+                            }
+                            loginHelper.dismissTextActionMode();
+                            // Cancel children's gesture
+                            MotionEvent cancel = MotionEvent.obtain(ev);
+                            cancel.setAction(MotionEvent.ACTION_CANCEL);
+                            super.dispatchTouchEvent(cancel);
+                            cancel.recycle();
+                        }
                     }
                     if (dragging) {
                         if (vmParams != null) {
@@ -2458,7 +2648,7 @@ private void showLoginScreen() {
                     menuFrame.setAlpha(1f);
                     boolean wasDragging = dragging;
                     dragging = false;
-                    if (!wasDragging) {
+                    if (!wasDragging || action == MotionEvent.ACTION_CANCEL) {
                         super.dispatchTouchEvent(ev);
                     }
                     return true;
@@ -2472,6 +2662,61 @@ private void showLoginScreen() {
             new FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
     contentLayout.addView(dragWrapper,
             new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
+
+    loginLayoutChangeListener = new View.OnLayoutChangeListener() {
+        @Override
+        public void onLayoutChange(View v, int left, int top, int right, int bottom,
+                                   int oldLeft, int oldTop, int oldRight, int oldBottom) {
+            if (isLoggedIn) return;
+            if (left != oldLeft || top != oldTop || right != oldRight || bottom != oldBottom) {
+                updateLoginOverflowScroll(loginResizingNow);
+            }
+        }
+    };
+    contentScrollView.addOnLayoutChangeListener(loginLayoutChangeListener);
+    contentLayout.addOnLayoutChangeListener(loginLayoutChangeListener);
+
+    lastLoginScreenW = screenW();
+    lastLoginScreenH = screenH();
+    loginGlobalLayoutListener = new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
+        private final Rect visRect = new Rect();
+        @Override
+        public void onGlobalLayout() {
+            if (isLoggedIn || contentScrollView == null || contentLayout == null) return;
+            int sw = screenW();
+            int sh = screenH();
+            if (sw != lastLoginScreenW || sh != lastLoginScreenH) {
+                lastLoginScreenW = sw;
+                lastLoginScreenH = sh;
+                keepInsideScreen();
+            }
+            int vh = contentScrollView.getHeight();
+            int ch = contentLayout.getHeight();
+            int visBottom = -1;
+            if (rootFrame != null) {
+                try {
+                    rootFrame.getWindowVisibleDisplayFrame(visRect);
+                    visBottom = visRect.bottom;
+                } catch (Exception ignored) { }
+            }
+            if (vh != lastLoginViewportH || ch != lastLoginContentH || visBottom != lastLoginVisBottom) {
+                boolean kbChanged = (visBottom != lastLoginVisBottom);
+                lastLoginViewportH = vh;
+                lastLoginContentH = ch;
+                lastLoginVisBottom = visBottom;
+                updateLoginOverflowScroll(loginResizingNow);
+                if (kbChanged && loginOverflowActive && rootFrame != null) {
+                    View focused = rootFrame.findFocus();
+                    if (focused instanceof EditText && focused.getHeight() > 0) {
+                        focused.requestRectangleOnScreen(
+                                new Rect(0, 0, focused.getWidth(), focused.getHeight()), false);
+                    }
+                }
+            }
+        }
+    };
+    contentScrollView.getViewTreeObserver().addOnGlobalLayoutListener(loginGlobalLayoutListener);
+
 // ★ Login screen থেকে "Waiting for game lib" সরাই
 // ★ Multiple passes — LoginHelper যা-ই add করুক, hide হবে
 for (final long delay : new long[]{ 50, 200, 500, 1000, 2000, 4000 }) {
@@ -2494,6 +2739,7 @@ for (final long delay : new long[]{ 50, 200, 500, 1000, 2000, 4000 }) {
     menuFrame.postDelayed(new Runnable() {
         @Override
         public void run() {
+            if (isLoggedIn) return;
             try {
                 ViewGroup.LayoutParams lp = menuFrame.getLayoutParams();
                 int orientation = (screenW() > screenH())
@@ -2515,6 +2761,12 @@ for (final long delay : new long[]{ 50, 200, 500, 1000, 2000, 4000 }) {
                         mWindowManager.updateViewLayout(rootFrame, vmParams);
                     }
                 }
+                contentScrollView.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        updateLoginOverflowScroll(false);
+                    }
+                });
             } catch (Exception ignored) { }
         }
     }, 250);
@@ -2548,7 +2800,12 @@ for (final long delay : new long[]{ 50, 200, 500, 1000, 2000, 4000 }) {
     private int convertDipToPixels(int i) { return (int)((i * safeDisplayMetrics(getContext).density) + 0.5f); }
     private int dp(int i) { return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, (float) i, safeDisplayMetrics(getContext)); }
     private float dpf(float v) { return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, safeDisplayMetrics(getContext)); }
-    public void setVisibility(int view) { if (rootFrame != null) rootFrame.setVisibility(view); }
+    public void setVisibility(int view) {
+        if (rootFrame != null) rootFrame.setVisibility(view);
+        if (activeLoginHelper != null) {
+            activeLoginHelper.onHostVisibilityChanged(view == View.VISIBLE && !isLoggedIn);
+        }
+    }
 
 private void setWindowFocusable(boolean focusable) {
     if (vmParams == null || mWindowManager == null || rootFrame == null) return;
@@ -2599,6 +2856,11 @@ public void setTeleportPadVisible(boolean visible) {
     if (!visible) tpPadView.invalidate();
 }
         public void onDestroy() {
+    detachLoginScrollListeners();
+    if (activeLoginHelper != null) {
+        activeLoginHelper.cleanup();
+        activeLoginHelper = null;
+    }
     stopGlowAnimator();
     if (rootFrame != null && mWindowManager != null) {
         try { mWindowManager.removeView(rootFrame); } catch (Exception e) {}

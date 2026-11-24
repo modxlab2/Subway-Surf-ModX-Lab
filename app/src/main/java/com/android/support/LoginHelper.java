@@ -97,6 +97,7 @@ public class LoginHelper {
 
     private final Context ctx;
     private final Callback callback;
+    private final TextActionModeHost actionModeHost;
 
     private EditText editUser, editPass;
     private LinearLayout userBox, passBox;
@@ -111,12 +112,35 @@ public class LoginHelper {
     private Typeface tfRegular, tfMedium, tfBold;
 
     public LoginHelper(Context context, Callback cb) {
+        this(context, !(context instanceof android.app.Activity), cb);
+    }
+
+    public LoginHelper(Context context, boolean overlayRequired, Callback cb) {
         this.ctx = context;
         this.callback = cb;
+        this.actionModeHost = new TextActionModeHost(context, overlayRequired);
         SecureTokenStore.purgeLegacyPlaintext(context);
         this.tfRegular = Typeface.create("sans-serif", Typeface.NORMAL);
         this.tfMedium  = Typeface.create("sans-serif-medium", Typeface.NORMAL);
         this.tfBold    = Typeface.create("sans-serif", Typeface.BOLD);
+    }
+
+    public void dismissTextActionMode() {
+        if (actionModeHost != null) {
+            actionModeHost.finishActiveMode();
+        }
+    }
+
+    public void onHostVisibilityChanged(boolean visible) {
+        if (actionModeHost != null) {
+            actionModeHost.onVisibilityChanged(visible);
+        }
+    }
+
+    public void cleanup() {
+        if (actionModeHost != null) {
+            actionModeHost.destroy();
+        }
     }
 
     private static DisplayMetrics safeDisplayMetrics(Context context) {
@@ -172,7 +196,8 @@ public class LoginHelper {
         editUser.setLayoutParams(ueLp);
         enableRichTextInteraction(editUser);
         userBox.addView(editUser);
-        userBox.addView(makePasteButton(editUser));
+        final ImageView userPasteBtn = makePasteButton(editUser);
+        userBox.addView(userPasteBtn);
 
         LinearLayout.LayoutParams uLp = new LinearLayout.LayoutParams(MATCH_PARENT, dp(48));
         uLp.setMargins(0, 0, 0, dp(10));
@@ -198,15 +223,16 @@ public class LoginHelper {
         editPass.setLayoutParams(peLp);
         enableRichTextInteraction(editPass);
         passBox.addView(editPass);
-        passBox.addView(makePasteButton(editPass));
+        final ImageView passPasteBtn = makePasteButton(editPass);
+        passBox.addView(passPasteBtn);
 
         LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(MATCH_PARENT, dp(48));
         pLp.setMargins(0, 0, 0, dp(8));
         passBox.setLayoutParams(pLp);
         card.addView(passBox);
 
-        attachFieldFocus(userBox, editUser, userIconView, userChip, "user");
-        attachFieldFocus(passBox, editPass, passIconView, passChip, "pass");
+        attachFieldFocus(userBox, editUser, userIconView, userPasteBtn, "user");
+        attachFieldFocus(passBox, editPass, passIconView, passPasteBtn, "pass");
 
         editUser.setOnEditorActionListener(new TextView.OnEditorActionListener() {
             @Override
@@ -227,6 +253,7 @@ public class LoginHelper {
             public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
                 if (actionId == EditorInfo.IME_ACTION_DONE
                         || (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER)) {
+                    dismissTextActionMode();
                     hideKeyboard(editPass);
                     performLogin();
                     return true;
@@ -266,6 +293,9 @@ public class LoginHelper {
                 int len = editPass.getText() != null ? editPass.getText().length() : 0;
                 if (selStart >= 0 && selEnd >= 0 && selStart <= len && selEnd <= len) {
                     editPass.setSelection(selStart, selEnd);
+                }
+                if (actionModeHost != null) {
+                    actionModeHost.invalidateMenuIfOwner(editPass);
                 }
             }
         });
@@ -339,6 +369,7 @@ public class LoginHelper {
                                         .start();
                             }
                         }).start();
+                dismissTextActionMode();
                 hideKeyboard(editUser);
                 hideKeyboard(editPass);
                 performLogin();
@@ -374,6 +405,20 @@ public class LoginHelper {
                 card.getViewTreeObserver().removeOnGlobalLayoutListener(this);
                 card.animate().alpha(1f).translationY(0f).setDuration(340)
                         .setInterpolator(new DecelerateInterpolator(1.6f)).start();
+            }
+        });
+
+        wrapper.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+            @Override
+            public void onViewAttachedToWindow(View v) {
+                if (actionModeHost != null) {
+                    actionModeHost.prepare();
+                }
+            }
+
+            @Override
+            public void onViewDetachedFromWindow(View v) {
+                cleanup();
             }
         });
 
@@ -433,23 +478,14 @@ public class LoginHelper {
         ImageView iv = new ImageView(ctx);
         iv.setImageDrawable(new FieldIcon(iconType, COLOR_TEXT_MUTED));
         iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        FrameLayout.LayoutParams ivLp = new FrameLayout.LayoutParams(dp(17), dp(17), Gravity.CENTER);
+        FrameLayout.LayoutParams ivLp = new FrameLayout.LayoutParams(dp(18), dp(18), Gravity.CENTER);
         iv.setLayoutParams(ivLp);
         chip.addView(iv);
         return chip;
     }
 
     private EditText makeInput(final String which, final boolean isPasswordField) {
-        EditText e = isPasswordField ? new EditText(ctx) {
-            @Override
-            public boolean onTextContextMenuItem(int id) {
-                if (isPasswordMasked(this)
-                        && (id == android.R.id.cut || id == android.R.id.copy)) {
-                    return false;
-                }
-                return super.onTextContextMenuItem(id);
-            }
-        } : new EditText(ctx);
+        EditText e = new HostAwareEditText(ctx, actionModeHost, isPasswordField);
         e.setTag(which);
         e.setHintTextColor(COLOR_HINT);
         e.setTextColor(COLOR_TEXT);
@@ -464,7 +500,7 @@ public class LoginHelper {
         e.setBackground(null);
         e.setIncludeFontPadding(false);
         e.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-        e.setPadding(dp(8), 0, dp(14), 0);
+        e.setPadding(dp(8), 0, dp(4), 0);
         e.setHighlightColor(withAlpha(COLOR_ACCENT, 0x55));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             e.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
@@ -477,6 +513,86 @@ public class LoginHelper {
 
     private static boolean isPasswordMasked(EditText et) {
         return et != null && (et.getTransformationMethod() instanceof PasswordTransformationMethod);
+    }
+
+    private static final class HostAwareEditText extends EditText {
+        private final TextActionModeHost host;
+        private final boolean isPasswordField;
+
+        HostAwareEditText(Context context, TextActionModeHost host, boolean isPasswordField) {
+            super(context);
+            this.host = host;
+            this.isPasswordField = isPasswordField;
+        }
+
+        @Override
+        public boolean onTextContextMenuItem(int id) {
+            if (isPasswordField && isPasswordMasked(this)
+                    && (id == android.R.id.cut || id == android.R.id.copy)) {
+                return false;
+            }
+            return super.onTextContextMenuItem(id);
+        }
+
+        @Override
+        public ActionMode startActionMode(ActionMode.Callback callback) {
+            if (host != null) {
+                return host.startActionMode(this, callback);
+            }
+            return super.startActionMode(callback);
+        }
+
+        @Override
+        public ActionMode startActionMode(ActionMode.Callback callback, int type) {
+            if (host != null) {
+                return host.startActionMode(this, callback, type);
+            }
+            return super.startActionMode(callback, type);
+        }
+
+        @Override
+        protected void onAttachedToWindow() {
+            super.onAttachedToWindow();
+            if (host != null) {
+                host.prepare();
+            }
+        }
+
+        @Override
+        protected void onDetachedFromWindow() {
+            if (host != null) {
+                host.onEditTextDetached(this);
+            }
+            super.onDetachedFromWindow();
+        }
+
+        @Override
+        protected void onWindowVisibilityChanged(int visibility) {
+            super.onWindowVisibilityChanged(visibility);
+            if (host != null) {
+                if (visibility == View.VISIBLE) {
+                    host.prepare();
+                } else {
+                    host.onEditTextDetached(this);
+                }
+            }
+        }
+
+        @Override
+        protected void onFocusChanged(boolean focused, int direction, Rect previouslyFocusedRect) {
+            super.onFocusChanged(focused, direction, previouslyFocusedRect);
+            if (!focused && host != null) {
+                host.onEditTextFocusLost(this);
+            }
+        }
+
+        @Override
+        protected void onSelectionChanged(int selStart, int selEnd) {
+            super.onSelectionChanged(selStart, selEnd);
+            if (host != null) {
+                host.invalidateContentRectIfOwner(this);
+            }
+        }
     }
 
     private void attachPasswordActionModeGuard(final EditText passField) {
@@ -549,9 +665,10 @@ public class LoginHelper {
         final PasteIcon pasteIcon = new PasteIcon(COLOR_TEXT_MUTED);
         btn.setImageDrawable(pasteIcon);
         btn.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        btn.setPadding(dp(8), dp(8), dp(8), dp(8));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(32), dp(32));
-        lp.setMargins(dp(2), 0, dp(6), 0);
+        // 40x42dp transparent touch area; padding leaves 24x24dp bounds so the glyph (15x19.3dp) renders at ~18-20dp
+        btn.setPadding(dp(8), dp(9), dp(8), dp(9));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(40), dp(42));
+        lp.setMargins(0, 0, dp(4), 0);
         btn.setLayoutParams(lp);
         btn.setClickable(true);
         btn.setFocusable(true);
@@ -575,7 +692,7 @@ public class LoginHelper {
                         break;
                     case MotionEvent.ACTION_UP:
                     case MotionEvent.ACTION_CANCEL:
-                        pasteIcon.setColor(COLOR_TEXT_MUTED);
+                        pasteIcon.setColor(target.hasFocus() ? COLOR_ACCENT_HI : COLOR_TEXT_MUTED);
                         break;
                 }
                 return false;
@@ -617,6 +734,7 @@ public class LoginHelper {
                 return;
             }
             String text = pasted.toString().trim();
+            dismissTextActionMode();
             target.setText(text);
             target.setSelection(target.getText().length());
             target.requestFocus();
@@ -627,7 +745,7 @@ public class LoginHelper {
     }
 
     private void attachFieldFocus(final LinearLayout box, final EditText et,
-                                   final ImageView icon, final FrameLayout chip,
+                                   final ImageView icon, final ImageView pasteBtn,
                                    final String tag) {
         et.setOnFocusChangeListener(new View.OnFocusChangeListener() {
             @Override
@@ -650,11 +768,19 @@ public class LoginHelper {
                 if (fi != null) {
                     fi.animateColor(hasFocus ? COLOR_ACCENT_HI : COLOR_TEXT_MUTED, 200);
                 }
+                if (pasteBtn != null && pasteBtn.getDrawable() instanceof PasteIcon) {
+                    ((PasteIcon) pasteBtn.getDrawable()).animateColor(
+                            hasFocus ? COLOR_ACCENT_HI : COLOR_TEXT_MUTED, 200);
+                }
                 if (hasFocus) {
                     et.post(new Runnable() {
                         @Override
                         public void run() {
                             forceShowKeyboard(et);
+                            if (et.getWidth() > 0 && et.getHeight() > 0) {
+                                et.requestRectangleOnScreen(
+                                        new Rect(0, 0, et.getWidth(), et.getHeight()), false);
+                            }
                         }
                     });
                 }
@@ -916,6 +1042,7 @@ public class LoginHelper {
         new Handler(Looper.getMainLooper()).post(new Runnable() {
             @Override
             public void run() {
+                cleanup();
                 if (callback != null) callback.onLoginSuccess();
             }
         });
@@ -1075,6 +1202,7 @@ public class LoginHelper {
 
     private void showUpdateDialog(String version, String msg,
                                   final String token, final String user, final String deviceId) {
+        dismissTextActionMode();
         final android.app.AlertDialog[] ref = new android.app.AlertDialog[1];
         final LinearLayout card = newDialogCard();
         card.addView(newDialogIconHolder(COLOR_CTA, new UpdateIcon(COLOR_ON_ACCENT)));
@@ -1154,6 +1282,7 @@ public class LoginHelper {
     private void showKeyExpiredDialog() {
         if (keyExpiredDialogShowing) return;
         keyExpiredDialogShowing = true;
+        dismissTextActionMode();
 
         final android.app.AlertDialog[] ref = new android.app.AlertDialog[1];
         final LinearLayout card = newDialogCard();
@@ -1325,10 +1454,10 @@ public class LoginHelper {
             canvas.scale(s, s);
             path.reset();
             if (type == USER) {
-                canvas.drawCircle(12f, 8f, 3.9f, paint);
-                path.moveTo(4.5f, 21f);
+                canvas.drawCircle(12f, 8f, 3.8f, paint);
+                path.moveTo(4.5f, 20.5f);
                 path.cubicTo(4.5f, 15.5f, 8f, 13.8f, 12f, 13.8f);
-                path.cubicTo(16f, 13.8f, 19.5f, 15.5f, 19.5f, 21f);
+                path.cubicTo(16f, 13.8f, 19.5f, 15.5f, 19.5f, 20.5f);
                 canvas.drawPath(path, paint);
             } else {
                 rect.set(5f, 10.5f, 19f, 21f);
@@ -1339,14 +1468,7 @@ public class LoginHelper {
                 path.cubicTo(13.8f, 3f, 15.5f, 5.0f, 15.5f, 7.5f);
                 path.lineTo(15.5f, 10.5f);
                 canvas.drawPath(path, paint);
-                Paint.Style prevStyle = paint.getStyle();
-                paint.setStyle(Paint.Style.FILL);
-                canvas.drawCircle(12f, 15.2f, 1.2f, paint);
-                path.reset();
-                path.moveTo(12f, 15.9f); path.lineTo(12f, 17.6f);
-                paint.setStyle(Paint.Style.STROKE);
-                canvas.drawPath(path, paint);
-                paint.setStyle(prevStyle);
+                canvas.drawCircle(12f, 15.7f, 1.15f, paint);
             }
             canvas.restore();
         }
@@ -1360,8 +1482,10 @@ public class LoginHelper {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Path path = new Path();
         private final RectF rect = new RectF();
+        private int currentColor;
 
         PasteIcon(int color) {
+            this.currentColor = color;
             paint.setColor(color);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeCap(Paint.Cap.ROUND);
@@ -1369,10 +1493,25 @@ public class LoginHelper {
         }
 
         void setColor(int color) {
-            if (paint.getColor() != color) {
+            if (this.currentColor != color) {
+                this.currentColor = color;
                 paint.setColor(color);
                 invalidateSelf();
             }
+        }
+
+        void animateColor(int toColor, int durationMs) {
+            if (this.currentColor == toColor) return;
+            ValueAnimator va = ValueAnimator.ofObject(new ArgbEvaluator(), currentColor, toColor);
+            va.setDuration(durationMs);
+            va.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+                @Override public void onAnimationUpdate(ValueAnimator a) {
+                    currentColor = (Integer) a.getAnimatedValue();
+                    paint.setColor(currentColor);
+                    invalidateSelf();
+                }
+            });
+            va.start();
         }
 
         @Override
@@ -1381,32 +1520,33 @@ public class LoginHelper {
             if (b.width() <= 0 || b.height() <= 0) return;
             float size = Math.min(b.width(), b.height());
             float s = size / 24f;
-            paint.setStrokeWidth(1.5f * s);
+            paint.setStrokeWidth(1.35f * s);
             canvas.save();
             canvas.translate(b.left + (b.width() - size) / 2f,
                              b.top + (b.height() - size) / 2f);
             canvas.scale(s, s);
 
-            // Top clip tab
-            rect.set(9.2f, 3.2f, 14.8f, 6.2f);
-            canvas.drawRoundRect(rect, 1.3f, 1.3f, paint);
+            // Top clip tab overlapping top edge
+            rect.set(8.5f, 2.2f, 15.5f, 6.2f);
+            canvas.drawRoundRect(rect, 1.5f, 1.5f, paint);
 
-            // Clipboard body (clean outline opening around top clip tab)
+            // Wide rounded clipboard body (open across top clip tab)
             path.reset();
-            path.moveTo(9.2f, 5.2f);
-            path.lineTo(7.8f, 5.2f);
-            path.quadTo(6f, 5.2f, 6f, 7f);
-            path.lineTo(6f, 18.7f);
-            path.quadTo(6f, 20.5f, 7.8f, 20.5f);
-            path.lineTo(16.2f, 20.5f);
-            path.quadTo(18f, 20.5f, 18f, 18.7f);
-            path.lineTo(18f, 7f);
-            path.quadTo(18f, 5.2f, 16.2f, 5.2f);
-            path.lineTo(14.8f, 5.2f);
+            path.moveTo(8.5f, 4.2f);
+            path.lineTo(6.7f, 4.2f);
+            path.quadTo(4.5f, 4.2f, 4.5f, 6.4f);
+            path.lineTo(4.5f, 19.3f);
+            path.quadTo(4.5f, 21.5f, 6.7f, 21.5f);
+            path.lineTo(17.3f, 21.5f);
+            path.quadTo(19.5f, 21.5f, 19.5f, 19.3f);
+            path.lineTo(19.5f, 6.4f);
+            path.quadTo(19.5f, 4.2f, 17.3f, 4.2f);
+            path.lineTo(15.5f, 4.2f);
             canvas.drawPath(path, paint);
 
-            // Single subtle inner line
-            canvas.drawLine(9.5f, 12.2f, 14.5f, 12.2f, paint);
+            // Two short text lines inside (different lengths)
+            canvas.drawLine(8.2f, 11.2f, 15.8f, 11.2f, paint);
+            canvas.drawLine(8.2f, 15.2f, 13.0f, 15.2f, paint);
 
             canvas.restore();
         }
