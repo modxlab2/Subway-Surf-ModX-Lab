@@ -1,34 +1,76 @@
 package com.android.support;
 
 import android.content.Context;
+import android.util.Base64;
 
 import org.json.JSONObject;
 
+import java.security.SecureRandom;
 import java.util.HashMap;
 import java.util.Map;
 
 /**
  * Server-backed authentication and public update access.
  *
- * - Login verification runs inside Appwrite Function "verifyLogin"
+ * - Login & session verification run inside Appwrite Function "verifyLogin"
  *   (requires an Appwrite user session, obtained via anonymous session).
  * - Never fetches /User records or compares passwords on the client.
  * - Endpoint, project ID, and function ID come from native obfuscated getters.
  */
 public final class ModFirebase {
 
+    private static final SecureRandom sNonceRandom = new SecureRandom();
+
     private ModFirebase() { }
+
+    public static String generateNonce() {
+        byte[] bytes = new byte[24];
+        sNonceRandom.nextBytes(bytes);
+        return Base64.encodeToString(bytes, Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
+    }
 
     /**
      * Authenticates against the Appwrite "verifyLogin" server function.
-     * Returns the parsed function JSON response (or null on transport failure).
+     * Returns the parsed function JSON response.
      */
-    public static JSONObject login(Context ctx, String username, String password, String deviceId) {
-        if (ctx == null || username == null || username.isEmpty()
-                || password == null || password.isEmpty()
-                || deviceId == null || deviceId.isEmpty()) {
+    public static JSONObject login(Context ctx, String username, String password, String deviceId, String nonce) {
+        if (ctx == null || isEmpty(username) || isEmpty(password)
+                || isEmpty(deviceId) || isEmpty(nonce)) {
             return errorJson("bad_input");
         }
+        try {
+            JSONObject innerPayload = new JSONObject();
+            innerPayload.put("action", "login");
+            innerPayload.put("username", username);
+            innerPayload.put("password", password);
+            innerPayload.put("deviceId", deviceId);
+            innerPayload.put("nonce", nonce);
+            return callVerifyFunction(ctx, innerPayload);
+        } catch (Exception e) {
+            return errorJson("bad_input");
+        }
+    }
+
+    /**
+     * Online verification for a remembered or active session token.
+     */
+    public static JSONObject verifySession(Context ctx, String token, String deviceId, String nonce) {
+        if (ctx == null || isEmpty(token) || isEmpty(deviceId) || isEmpty(nonce)) {
+            return errorJson("bad_input");
+        }
+        try {
+            JSONObject innerPayload = new JSONObject();
+            innerPayload.put("action", "verify_session");
+            innerPayload.put("token", token);
+            innerPayload.put("deviceId", deviceId);
+            innerPayload.put("nonce", nonce);
+            return callVerifyFunction(ctx, innerPayload);
+        } catch (Exception e) {
+            return errorJson("bad_input");
+        }
+    }
+
+    private static JSONObject callVerifyFunction(Context ctx, JSONObject innerPayload) {
         try {
             String endpoint = SecurityNative.getAppwriteEndpoint();
             String projectId = SecurityNative.getAppwriteProjectId();
@@ -44,7 +86,7 @@ public final class ModFirebase {
             }
 
             PinnedHttp.HttpResponse execResp = executeVerifyLogin(
-                    endpoint, projectId, functionId, sessionCookie, username, password, deviceId);
+                    endpoint, projectId, functionId, sessionCookie, innerPayload);
 
             // If session expired/invalid, refresh anonymous session once and retry
             if (execResp != null && execResp.code == 401) {
@@ -53,7 +95,7 @@ public final class ModFirebase {
                     return errorJson(!isEmpty(sessionErr[0]) ? sessionErr[0] : "http_401");
                 }
                 execResp = executeVerifyLogin(
-                        endpoint, projectId, functionId, sessionCookie, username, password, deviceId);
+                        endpoint, projectId, functionId, sessionCookie, innerPayload);
             }
 
             if (execResp == null) {
@@ -95,14 +137,7 @@ public final class ModFirebase {
             String projectId,
             String functionId,
             String sessionCookie,
-            String username,
-            String password,
-            String deviceId) throws Exception {
-
-        JSONObject innerPayload = new JSONObject();
-        innerPayload.put("username", username);
-        innerPayload.put("password", password);
-        innerPayload.put("deviceId", deviceId);
+            JSONObject innerPayload) throws Exception {
 
         JSONObject innerHeaders = new JSONObject();
         innerHeaders.put("content-type", "application/json");

@@ -92,6 +92,7 @@ static uint64_t g_ExpectedApkInode = 0;
 static std::string g_ActiveToken;
 static std::string g_ActiveUser;
 static std::string g_ActiveDeviceId;
+static std::string g_ActiveNonce;
 
 static std::atomic<bool> g_WatchdogStarted{false};
 static std::atomic<SecurityGuard::LockdownCallback> g_LockdownCb{nullptr};
@@ -129,6 +130,7 @@ static void triggerLockdown(bool forceExit) {
         g_ActiveToken.clear();
         g_ActiveUser.clear();
         g_ActiveDeviceId.clear();
+        g_ActiveNonce.clear();
     }
 
     SecurityGuard::LockdownCallback cb = g_LockdownCb.load(std::memory_order_acquire);
@@ -1150,8 +1152,9 @@ static bool verifyApkHashesOnDisk(const std::string& apkPath, const std::string&
 static bool verifyTokenInternal(const std::string& token,
                                 const std::string& expectedUser,
                                 const std::string& expectedDevice,
+                                const std::string& expectedNonce,
                                 int64_t* outExpiryMs) {
-    if (token.empty() || expectedUser.empty() || expectedDevice.empty()) {
+    if (token.empty() || expectedUser.empty() || expectedDevice.empty() || expectedNonce.empty()) {
         return false;
     }
 
@@ -1205,8 +1208,9 @@ static bool verifyTokenInternal(const std::string& token,
     std::string tokUser   = getJsonField(payloadJson, "u");
     std::string tokDevice = getJsonField(payloadJson, "d");
     std::string tokExpiry = getJsonField(payloadJson, "e");
+    std::string tokNonce  = getJsonField(payloadJson, "n");
 
-    if (tokUser.empty() || tokDevice.empty()) {
+    if (tokUser.empty() || tokDevice.empty() || tokNonce.empty()) {
         SEC_DIAG_LOG(204, "Token claims incomplete");
         return false;
     }
@@ -1216,6 +1220,10 @@ static bool verifyTokenInternal(const std::string& token,
     }
     if (!constTimeEquals(tokDevice, expectedDevice)) {
         SEC_DIAG_LOG(204, "Token device mismatch");
+        return false;
+    }
+    if (!constTimeEquals(tokNonce, expectedNonce)) {
+        SEC_DIAG_LOG(204, "Token nonce mismatch");
         return false;
     }
 
@@ -1397,15 +1405,16 @@ bool verifyPathFeatureGate(JNIEnv* env) {
         return false;
     }
 
-    std::string tok, usr, dev;
+    std::string tok, usr, dev, nonce;
     {
         std::lock_guard<std::mutex> lock(g_SecMutex);
         tok = g_ActiveToken;
         usr = g_ActiveUser;
         dev = g_ActiveDeviceId;
+        nonce = g_ActiveNonce;
     }
     int64_t expMs = 0;
-    if (!verifyTokenInternal(tok, usr, dev, &expMs)) {
+    if (!verifyTokenInternal(tok, usr, dev, nonce, &expMs)) {
         triggerLockdown(false);
         return false;
     }
@@ -1442,7 +1451,7 @@ bool verifyPathToggle(JNIEnv* env, jobject ctx, int featNum) {
             triggerLockdown(true);
             return false;
         }
-        std::string cachedPath, tok, usr, dev;
+        std::string cachedPath, tok, usr, dev, nonce;
         bool hasStat = false;
         uint64_t expSize = 0, expInode = 0;
         {
@@ -1454,8 +1463,9 @@ bool verifyPathToggle(JNIEnv* env, jobject ctx, int featNum) {
             tok = g_ActiveToken;
             usr = g_ActiveUser;
             dev = g_ActiveDeviceId;
+            nonce = g_ActiveNonce;
         }
-        if (!verifyTokenInternal(tok, usr, dev, nullptr)) {
+        if (!verifyTokenInternal(tok, usr, dev, nonce, nullptr)) {
             triggerLockdown(false);
             return false;
         }
@@ -1484,13 +1494,14 @@ bool isReadyForHooks() {
         return false;
     }
 
-    std::string cachedPath, tok, usr, dev;
+    std::string cachedPath, tok, usr, dev, nonce;
     {
         std::lock_guard<std::mutex> lock(g_SecMutex);
         cachedPath = g_CachedApkPath;
         tok = g_ActiveToken;
         usr = g_ActiveUser;
         dev = g_ActiveDeviceId;
+        nonce = g_ActiveNonce;
     }
 
     if (!isEnvironmentSafe()) {
@@ -1501,7 +1512,7 @@ bool isReadyForHooks() {
         triggerLockdown(true);
         return false;
     }
-    if (!verifyTokenInternal(tok, usr, dev, nullptr)) {
+    if (!verifyTokenInternal(tok, usr, dev, nonce, nullptr)) {
         return false;
     }
     return true;
@@ -1510,7 +1521,7 @@ bool isReadyForHooks() {
 bool periodicReverify() {
     if (!isEnvironmentSafe()) return false;
 
-    std::string cachedPath, tok, usr, dev;
+    std::string cachedPath, tok, usr, dev, nonce;
     bool tokActive = false;
     {
         std::lock_guard<std::mutex> lock(g_SecMutex);
@@ -1519,13 +1530,14 @@ bool periodicReverify() {
         tok = g_ActiveToken;
         usr = g_ActiveUser;
         dev = g_ActiveDeviceId;
+        nonce = g_ActiveNonce;
     }
 
     if (!cachedPath.empty() && !verifyApkHashesOnDisk(cachedPath, "")) {
         return false;
     }
 
-    if (tokActive && !verifyTokenInternal(tok, usr, dev, nullptr)) {
+    if (tokActive && !verifyTokenInternal(tok, usr, dev, nonce, nullptr)) {
         return false;
     }
     return true;
@@ -1543,16 +1555,16 @@ Java_com_android_support_SecurityNative_verifyNative(
 }
 
 // ================================================================
-// JNI: verifySessionToken (Ed25519 public-key verification)
+// JNI: verifySessionToken (Ed25519 public-key verification + nonce binding)
 // Token format: <base64url(json_payload)>.<base64url(ed25519_sig)>
-// Payload fields: {"u":"<user>","e":<expiryMs>,"d":"<deviceId>","i":<iatMs>}
+// Payload fields: {"u":"<user>","e":<expiryMs>,"d":"<deviceId>","i":<iatMs>,"n":"<nonce>"}
 // ================================================================
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_android_support_SecurityNative_verifySessionToken(
         JNIEnv* env, jclass,
-        jstring jToken, jstring jUser, jstring jDeviceId) {
+        jstring jToken, jstring jUser, jstring jDeviceId, jstring jNonce) {
 
-    if (!jToken || !jUser || !jDeviceId) {
+    if (!jToken || !jUser || !jDeviceId || !jNonce) {
         SEC_DIAG_LOG(204, "verifySessionToken missing arguments");
         return JNI_FALSE;
     }
@@ -1568,21 +1580,24 @@ Java_com_android_support_SecurityNative_verifySessionToken(
     const char* ct = env->GetStringUTFChars(jToken, nullptr);
     const char* cu = env->GetStringUTFChars(jUser, nullptr);
     const char* cd = env->GetStringUTFChars(jDeviceId, nullptr);
+    const char* cn = env->GetStringUTFChars(jNonce, nullptr);
 
-    if (!ct || !cu || !cd) {
+    if (!ct || !cu || !cd || !cn) {
         if (ct) env->ReleaseStringUTFChars(jToken, ct);
         if (cu) env->ReleaseStringUTFChars(jUser, cu);
         if (cd) env->ReleaseStringUTFChars(jDeviceId, cd);
+        if (cn) env->ReleaseStringUTFChars(jNonce, cn);
         return JNI_FALSE;
     }
 
-    std::string token(ct), expectedUser(cu), expectedDevice(cd);
+    std::string token(ct), expectedUser(cu), expectedDevice(cd), expectedNonce(cn);
     env->ReleaseStringUTFChars(jToken, ct);
     env->ReleaseStringUTFChars(jUser, cu);
     env->ReleaseStringUTFChars(jDeviceId, cd);
+    env->ReleaseStringUTFChars(jNonce, cn);
 
     int64_t expiryMs = 0;
-    if (!verifyTokenInternal(token, expectedUser, expectedDevice, &expiryMs)) {
+    if (!verifyTokenInternal(token, expectedUser, expectedDevice, expectedNonce, &expiryMs)) {
         return JNI_FALSE;
     }
 
@@ -1591,6 +1606,7 @@ Java_com_android_support_SecurityNative_verifySessionToken(
         g_ActiveToken = token;
         g_ActiveUser = expectedUser;
         g_ActiveDeviceId = expectedDevice;
+        g_ActiveNonce = expectedNonce;
     }
     g_TokenExpiryMs.store(expiryMs, std::memory_order_release);
     g_TokenWord.store(kSeedT1 ^ kSeedA2, std::memory_order_release);
@@ -1598,6 +1614,22 @@ Java_com_android_support_SecurityNative_verifySessionToken(
     ensureWatchdogStarted();
 
     return JNI_TRUE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_android_support_SecurityNative_clearVerifiedSession(JNIEnv*, jclass) {
+    g_TokenVerified.store(false, std::memory_order_release);
+    g_TokenWord.store(0u, std::memory_order_release);
+    g_TokenExpiryMs.store(0, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(g_SecMutex);
+        g_ActiveToken.clear();
+        g_ActiveUser.clear();
+        g_ActiveDeviceId.clear();
+        g_ActiveNonce.clear();
+    }
+    SecurityGuard::LockdownCallback cb = g_LockdownCb.load(std::memory_order_acquire);
+    if (cb) cb();
 }
 
 // ================================================================

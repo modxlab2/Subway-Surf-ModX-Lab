@@ -278,12 +278,16 @@ jobs:
 
           if [ "${IS_DIAG}" != "true" ]; then
             for bin in "${INSPECT_DIR}/classes.dex" "${INSPECT_DIR}"/lib/*/libModXLab.so; do
-              if strings "${bin}" | grep -Fq "MXL"; then
-                echo "::error::Diagnostic string 'MXL' leaked into normal release binary: ${bin}"
+              if strings "${bin}" | grep -Eq "MXL_UI|MXL|DiagLogViewer"; then
+                echo "::error::Diagnostic string leaked into normal release binary: ${bin}"
                 exit 1
               fi
             done
           else
+            if ! strings "${INSPECT_DIR}/classes.dex" | grep -Fq "MXL_UI"; then
+              echo "::error::Expected diagnostic string 'MXL_UI' missing from diagnostic classes.dex"
+              exit 1
+            fi
             for so in "${INSPECT_DIR}"/lib/*/libModXLab.so; do
               if ! strings "${so}" | grep -Fq "MXL"; then
                 echo "::error::Expected diagnostic string 'MXL' missing from diagnostic binary: ${so}"

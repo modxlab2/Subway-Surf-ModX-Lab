@@ -53,12 +53,16 @@ public class Launcher extends Service {
     //Destroy our View
     public void onDestroy() {
         super.onDestroy();
-        menu.onDestroy();
+        Preferences.flush("launcher_onDestroy");
+        if (menu != null) {
+            menu.onDestroy();
+        }
     }
 
     //Same as above so it wont crash in the background and therefore use alot of Battery life
     public void onTaskRemoved(Intent intent) {
         super.onTaskRemoved(intent);
+        Preferences.flush("launcher_onTaskRemoved");
         try {
             Thread.sleep(100);
         } catch (InterruptedException e) {

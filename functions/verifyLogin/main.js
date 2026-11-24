@@ -14,6 +14,7 @@ const RATE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const MAX_FAILED_PER_USER = 5;
 const MAX_FAILED_PER_IP = 15;
 const LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
+const MAX_SESSION_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days for remembered tokens
 
 // In-memory fallback rate-limit cache (per warm container) + RTDB persistence
 const memRateCache = new Map();
@@ -28,6 +29,22 @@ function base64UrlEncode(buf) {
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/g, '');
+}
+
+function base64UrlDecode(str) {
+  if (!str || typeof str !== 'string') return null;
+  if (!/^[A-Za-z0-9_-]+={0,2}$/.test(str)) return null;
+  const normalized = str.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = (4 - (normalized.length % 4)) % 4;
+  return Buffer.from(normalized + '='.repeat(pad), 'base64');
+}
+
+function normalizeNonce(raw) {
+  if (raw === undefined || raw === null) return '';
+  const s = String(raw).trim();
+  if (!s || s.length < 16 || s.length > 128) return '';
+  if (!/^[A-Za-z0-9_-]+$/.test(s)) return '';
+  return s;
 }
 
 function parseEd25519PrivateKey(raw) {
@@ -324,6 +341,83 @@ function signEd25519Token(privateKey, payloadObj) {
   return `${payloadB64}.${base64UrlEncode(sig)}`;
 }
 
+function verifyEd25519Token(privateKey, token, expectedDeviceId) {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
+
+  const [payloadB64, sigB64] = parts;
+  const sigBuf = base64UrlDecode(sigB64);
+  if (!sigBuf || sigBuf.length !== 64) return null;
+
+  const publicKey = crypto.createPublicKey(privateKey);
+  const sigOk = crypto.verify(null, Buffer.from(payloadB64, 'ascii'), publicKey, sigBuf);
+  if (!sigOk) return null;
+
+  const payloadBuf = base64UrlDecode(payloadB64);
+  if (!payloadBuf || payloadBuf.length === 0) return null;
+
+  let payload;
+  try {
+    payload = JSON.parse(payloadBuf.toString('utf8'));
+  } catch (_) {
+    return null;
+  }
+  if (!payload || typeof payload !== 'object') return null;
+
+  const tokUser = String(payload.u || '').trim().toLowerCase();
+  const tokDevice = String(payload.d || '').trim();
+  const tokIssued = Number(payload.i);
+  const tokExpiry = Number(payload.e);
+  const now = Date.now();
+
+  if (!tokUser || tokUser.length > 128) return null;
+  if (!tokDevice || tokDevice !== expectedDeviceId) return null;
+  if (!Number.isFinite(tokIssued) || tokIssued <= 0) return null;
+  if (tokIssued > now + 5 * 60 * 1000) return null;
+  if (now - tokIssued > MAX_SESSION_AGE_MS) return null;
+  if (!Number.isFinite(tokExpiry) || tokExpiry < 0) return null;
+  if (tokExpiry > 0 && now > tokExpiry) return null;
+
+  return {
+    username: tokUser,
+    deviceId: tokDevice,
+    issuedAt: tokIssued,
+    expiryMs: tokExpiry,
+  };
+}
+
+async function fetchUserRecord(username) {
+  const encodedUser = encodeURIComponent(`"${username}"`);
+  const matched = await rtdbFetch(`/User.json?orderBy=%22user%22&equalTo=${encodedUser}`);
+  if (!matched || typeof matched !== 'object') return null;
+  for (const k of Object.keys(matched)) {
+    const candidate = matched[k];
+    if (
+      candidate &&
+      typeof candidate === 'object' &&
+      String(candidate.user || '').trim().toLowerCase() === username
+    ) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function checkAccountEligibility(userRecord, deviceId) {
+  if (String(userRecord.status) !== 'true') {
+    return { ok: false, status: 403, reason: 'blocked' };
+  }
+  if (userRecord.device_id && String(userRecord.device_id).trim() !== deviceId) {
+    return { ok: false, status: 403, reason: 'device_mismatch' };
+  }
+  const expiryMs = computeExpiryMs(userRecord);
+  if (expiryMs > 0 && Date.now() > expiryMs) {
+    return { ok: false, status: 403, reason: 'expired' };
+  }
+  return { ok: true, expiryMs };
+}
+
 module.exports = async ({ req, res, error }) => {
   try {
     let body = {};
@@ -335,14 +429,101 @@ module.exports = async ({ req, res, error }) => {
       body = req.body;
     }
 
+    const action = String(body.action || 'login').trim().toLowerCase();
+    const clientIp = getClientIp(req);
+    const ipBucket = safeKey('ip', clientIp);
+
+    if (action === 'verify_session') {
+      const token = String(body.token || '').trim();
+      const deviceId = String(body.deviceId || '').trim();
+      const nonce = normalizeNonce(body.nonce);
+
+      if (
+        !token ||
+        token.length > 4096 ||
+        !deviceId ||
+        deviceId.length > 128 ||
+        !nonce
+      ) {
+        return res.json({ ok: false, reason: 'bad_input' }, 400);
+      }
+
+      const ipLimit = await checkRateLimit(ipBucket, MAX_FAILED_PER_IP);
+      if (ipLimit.blocked) {
+        return res.json(
+          { ok: false, reason: 'rate_limited', retryAfterSec: ipLimit.retryAfterSec },
+          429
+        );
+      }
+
+      const privateKey = parseEd25519PrivateKey(process.env.ED25519_PRIVATE_KEY);
+      const claims = verifyEd25519Token(privateKey, token, deviceId);
+      if (!claims) {
+        await recordFailure(ipBucket, MAX_FAILED_PER_IP);
+        return res.json({ ok: false, reason: 'session_invalid' }, 401);
+      }
+
+      const userBucket = safeKey('u', claims.username);
+      const userLimit = await checkRateLimit(userBucket, MAX_FAILED_PER_USER);
+      if (userLimit.blocked) {
+        return res.json(
+          { ok: false, reason: 'rate_limited', retryAfterSec: userLimit.retryAfterSec },
+          429
+        );
+      }
+
+      const userRecord = await fetchUserRecord(claims.username);
+      if (!userRecord) {
+        await Promise.all([
+          recordFailure(userBucket, MAX_FAILED_PER_USER),
+          recordFailure(ipBucket, MAX_FAILED_PER_IP),
+        ]);
+        return res.json({ ok: false, reason: 'user_not_found' }, 404);
+      }
+
+      const eligibility = checkAccountEligibility(userRecord, deviceId);
+      if (!eligibility.ok) {
+        return res.json({ ok: false, reason: eligibility.reason }, eligibility.status);
+      }
+
+      await clearRateLimit(userBucket);
+
+      const dbUser = String(userRecord.user || claims.username).trim();
+      const freshToken = signEd25519Token(privateKey, {
+        u: dbUser,
+        e: eligibility.expiryMs,
+        d: deviceId,
+        i: Date.now(),
+        n: nonce,
+      });
+
+      return res.json(
+        {
+          ok: true,
+          token: freshToken,
+          user: dbUser,
+          status: 'true',
+          expiry: String(eligibility.expiryMs),
+          nonce,
+        },
+        200
+      );
+    }
+
+    if (action !== 'login') {
+      return res.json({ ok: false, reason: 'bad_input' }, 400);
+    }
+
     const username = String(body.username || '').trim().toLowerCase();
     const password = String(body.password || '');
     const deviceId = String(body.deviceId || '').trim();
+    const nonce = normalizeNonce(body.nonce);
 
     if (
       !username ||
       !password ||
       !deviceId ||
+      !nonce ||
       username.length > 128 ||
       password.length > 256 ||
       deviceId.length > 128
@@ -350,9 +531,7 @@ module.exports = async ({ req, res, error }) => {
       return res.json({ ok: false, reason: 'bad_input' }, 400);
     }
 
-    const clientIp = getClientIp(req);
     const userBucket = safeKey('u', username);
-    const ipBucket = safeKey('ip', clientIp);
 
     const [userLimit, ipLimit] = await Promise.all([
       checkRateLimit(userBucket, MAX_FAILED_PER_USER),
@@ -364,23 +543,7 @@ module.exports = async ({ req, res, error }) => {
       return res.json({ ok: false, reason: 'rate_limited', retryAfterSec }, 429);
     }
 
-    const encodedUser = encodeURIComponent(`"${username}"`);
-    const matched = await rtdbFetch(`/User.json?orderBy=%22user%22&equalTo=${encodedUser}`);
-
-    let userRecord = null;
-    if (matched && typeof matched === 'object') {
-      for (const k of Object.keys(matched)) {
-        const candidate = matched[k];
-        if (
-          candidate &&
-          typeof candidate === 'object' &&
-          String(candidate.user || '').trim().toLowerCase() === username
-        ) {
-          userRecord = candidate;
-          break;
-        }
-      }
-    }
+    const userRecord = await fetchUserRecord(username);
 
     if (!userRecord || !userRecord.passHash) {
       await Promise.all([
@@ -399,17 +562,9 @@ module.exports = async ({ req, res, error }) => {
       return res.json({ ok: false, reason: 'invalid_credentials' }, 401);
     }
 
-    if (String(userRecord.status) !== 'true') {
-      return res.json({ ok: false, reason: 'blocked' }, 403);
-    }
-
-    if (userRecord.device_id && String(userRecord.device_id).trim() !== deviceId) {
-      return res.json({ ok: false, reason: 'device_mismatch' }, 403);
-    }
-
-    const expiryMs = computeExpiryMs(userRecord);
-    if (expiryMs > 0 && Date.now() > expiryMs) {
-      return res.json({ ok: false, reason: 'expired' }, 403);
+    const eligibility = checkAccountEligibility(userRecord, deviceId);
+    if (!eligibility.ok) {
+      return res.json({ ok: false, reason: eligibility.reason }, eligibility.status);
     }
 
     await clearRateLimit(userBucket);
@@ -418,9 +573,10 @@ module.exports = async ({ req, res, error }) => {
     const dbUser = String(userRecord.user || username).trim();
     const token = signEd25519Token(privateKey, {
       u: dbUser,
-      e: expiryMs,
+      e: eligibility.expiryMs,
       d: deviceId,
       i: Date.now(),
+      n: nonce,
     });
 
     return res.json(
@@ -429,7 +585,8 @@ module.exports = async ({ req, res, error }) => {
         token,
         user: dbUser,
         status: 'true',
-        expiry: String(expiryMs),
+        expiry: String(eligibility.expiryMs),
+        nonce,
       },
       200
     );

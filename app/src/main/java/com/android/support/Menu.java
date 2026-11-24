@@ -10,6 +10,7 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
@@ -36,17 +37,22 @@ import android.graphics.drawable.LayerDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
+import android.text.Editable;
 import android.text.Html;
 import android.text.InputFilter;
 import android.text.InputType;
 import android.widget.PopupWindow;
 import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.text.method.DigitsKeyListener;
 import android.util.Base64;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.TypedValue;
+import android.view.ContextThemeWrapper;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -60,6 +66,7 @@ import android.view.animation.Animation;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.LinearInterpolator;
 import android.view.animation.OvershootInterpolator;
+import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebSettings;
@@ -86,9 +93,11 @@ import android.view.ViewParent;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.WeakHashMap;
+import android.os.Looper;
 
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
@@ -223,48 +232,202 @@ public static native boolean IsSmoothTeleportActive();
     private final WeakHashMap<TextView, float[]> textBase = new WeakHashMap<TextView, float[]>();
     private final ArrayList<TabHolder> tabHolders = new ArrayList<TabHolder>();
     private final ArrayList<ArrayAdapter<String>> spinnerAdapters = new ArrayList<ArrayAdapter<String>>();
-        // ===== Mode buttons mutual exclusion =====
+    // ================================================================
+    // Mode Preset Specification (matches Main.cpp cases 800 / 801 / 802)
+    // Edit this single table to customize Simple / Max / Ultra Max.
+    // Max is a strict superset of Simple; Ultra Max is a strict superset of Max.
+    // ================================================================
+    private static final int MODE_SIMPLE = 800;
+    private static final int MODE_MAX    = 801;
+    private static final int MODE_ULTRA  = 802;
+    private static final int MODE_RESET  = 803;
+
+    private static final int PRESET_TOGGLE  = 1;
+    private static final int PRESET_SEEKBAR = 2;
+    private static final int PRESET_SPINNER = 3;
+    private static final int PRESET_COLOR   = 4;
+
+    private static final class PresetItem {
+        final int featNum;
+        final int type;
+        final int onValue;
+        final int offValue;
+
+        PresetItem(int featNum, int type, int onValue, int offValue) {
+            this.featNum  = featNum;
+            this.type     = type;
+            this.onValue  = onValue;
+            this.offValue = offValue;
+        }
+    }
+
+    private static final PresetItem[] SIMPLE_PRESET_ITEMS = new PresetItem[] {
+        new PresetItem(104, PRESET_TOGGLE,  1,    0), // Auto Revive
+        new PresetItem(110, PRESET_TOGGLE,  1,    0), // Unlimited Coins
+        new PresetItem(150, PRESET_TOGGLE,  1,    0), // Free Shipping
+        new PresetItem(103, PRESET_SEEKBAR, 5,    0), // Jump Height (displays 35)
+        new PresetItem(151, PRESET_SEEKBAR, 9999, 0)  // Extra Coins
+    };
+
+    private static final PresetItem[] MAX_EXTRA_ITEMS = new PresetItem[] {
+        new PresetItem(108, PRESET_TOGGLE,  1,   0), // God Mode
+        new PresetItem(106, PRESET_TOGGLE,  1,   0), // Fast Lane
+        new PresetItem(140, PRESET_TOGGLE,  1,   0), // Infinite Powerup
+        new PresetItem(102, PRESET_SEEKBAR, 999, 0), // Max Jumps
+        new PresetItem(145, PRESET_SEEKBAR, 999, 0)  // Power Duration
+    };
+
+    private static final PresetItem[] ULTRA_EXTRA_ITEMS = new PresetItem[] {
+        new PresetItem(130, PRESET_TOGGLE,  1,    0), // Low Gravity
+        new PresetItem(131, PRESET_TOGGLE,  1,    0), // Wall Hack
+        new PresetItem(132, PRESET_TOGGLE,  1,    0), // No Impact
+        new PresetItem(142, PRESET_TOGGLE,  1,    0), // Freeze Trains
+        new PresetItem(119, PRESET_TOGGLE,  1,    0), // Enable Chams
+        new PresetItem(161, PRESET_SPINNER, 1,    0), // Camera Mode -> Follow Camera (1)
+        new PresetItem(152, PRESET_SEEKBAR, 9999, 0), // Extra Keys
+        new PresetItem(153, PRESET_SEEKBAR, 9999, 0)  // Extra Score
+    };
+
+    private static PresetItem[] concatPresetItems(PresetItem[]... groups) {
+        int total = 0;
+        for (PresetItem[] g : groups) total += g.length;
+        PresetItem[] out = new PresetItem[total];
+        int idx = 0;
+        for (PresetItem[] g : groups) {
+            System.arraycopy(g, 0, out, idx, g.length);
+            idx += g.length;
+        }
+        return out;
+    }
+
+    private static LinkedHashMap<Integer, PresetItem[]> buildModePresets() {
+        LinkedHashMap<Integer, PresetItem[]> map = new LinkedHashMap<Integer, PresetItem[]>();
+        map.put(MODE_SIMPLE, SIMPLE_PRESET_ITEMS);
+        map.put(MODE_MAX,    concatPresetItems(SIMPLE_PRESET_ITEMS, MAX_EXTRA_ITEMS));
+        map.put(MODE_ULTRA,  concatPresetItems(SIMPLE_PRESET_ITEMS, MAX_EXTRA_ITEMS, ULTRA_EXTRA_ITEMS));
+        return map;
+    }
+
+    private static final LinkedHashMap<Integer, PresetItem[]> MODE_PRESETS = buildModePresets();
+    private static final int[] MODE_FEATNUMS = { MODE_SIMPLE, MODE_MAX, MODE_ULTRA };
+
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private boolean mProgrammaticModeUpdate = false;
+
+    // ===== Mode buttons mutual exclusion =====
     private static class ModeButtonHolder {
         int featNum;
         String name;
         Button button;
         boolean[] state;
     }
-    private final java.util.HashMap<Integer, ModeButtonHolder> mModeButtons =
-            new java.util.HashMap<Integer, ModeButtonHolder>();
-    private static final int[] MODE_FEATNUMS = { 800, 801, 802, 803 };
-    
-    // ===== Toggle tracking (for Mode sync) =====
-private static class ToggleHolder {
-    int featNum;
-    String featName;
-    ToggleView toggle;
-    GradientDrawable rowBg;
-    boolean[] state;
-}
-private final HashMap<Integer, ToggleHolder> mToggles =
-        new HashMap<Integer, ToggleHolder>();
-        
-            // ===== SeekBar tracking (for Mode sync) =====
-private static class SeekBarHolder {
-    int featNum;
-    String featName;
-    SeekBar seekBar;
-    TextView chip;
-}
-private final HashMap<Integer, SeekBarHolder> mSeekBars =
-        new HashMap<Integer, SeekBarHolder>();
+    private final HashMap<Integer, ModeButtonHolder> mModeButtons =
+            new HashMap<Integer, ModeButtonHolder>();
 
-    // ===== Spinner tracking (for Mode sync) =====
-private static class SpinnerHolder {
-    int featNum;
-    String featName;
-    TextView nameView;
-    LinearLayout dropdownList;
-    String[] items;
-}
-private final HashMap<Integer, SpinnerHolder> mSpinners =
-        new HashMap<Integer, SpinnerHolder>();
+    private static class OtherButtonOnOffHolder {
+        int featNum;
+        String name;
+        Button button;
+        boolean[] state;
+        boolean defaultVal;
+    }
+    private final HashMap<Integer, OtherButtonOnOffHolder> mOtherButtonOnOffs =
+            new HashMap<Integer, OtherButtonOnOffHolder>();
+
+    // ===== Toggle tracking (for Mode & Reset sync) =====
+    private static class ToggleHolder {
+        int featNum;
+        String featName;
+        ToggleView toggle;
+        GradientDrawable rowBg;
+        boolean[] state;
+        boolean defaultVal;
+    }
+    private final HashMap<Integer, ToggleHolder> mToggles =
+            new HashMap<Integer, ToggleHolder>();
+
+    // ===== SeekBar tracking (for Mode & Reset sync) =====
+    private static class SeekBarHolder {
+        int featNum;
+        String featName;
+        SeekBar seekBar;
+        TextView chip;
+        SeekTrackDrawable trackDrawable;
+        GradientDrawable thumbGlow;
+        GradientDrawable thumbCore;
+        int min;
+        int max;
+        int defaultVal;
+    }
+    private final HashMap<Integer, SeekBarHolder> mSeekBars =
+            new HashMap<Integer, SeekBarHolder>();
+
+    // ===== Spinner tracking (for Mode & Reset sync) =====
+    private static class SpinnerHolder {
+        int featNum;
+        String featName;
+        TextView nameView;
+        LinearLayout dropdownList;
+        TabIcon chevIcon;
+        String[] items;
+        int currentIdx;
+    }
+    private final HashMap<Integer, SpinnerHolder> mSpinners =
+            new HashMap<Integer, SpinnerHolder>();
+
+    // ===== CheckBox / Radio / ColorPicker / Input holders (for Reset & Preset sync) =====
+    private static class CheckBoxHolder {
+        int featNum;
+        String featName;
+        CheckBox checkBox;
+        GradientDrawable bg;
+        boolean defaultVal;
+    }
+    private final HashMap<Integer, CheckBoxHolder> mCheckBoxes =
+            new HashMap<Integer, CheckBoxHolder>();
+
+    private static class RadioGroupHolder {
+        int featNum;
+        String featName;
+        RadioGroup radioGroup;
+        TextView titleView;
+        String selectedName;
+    }
+    private final HashMap<Integer, RadioGroupHolder> mRadioGroups =
+            new HashMap<Integer, RadioGroupHolder>();
+
+    private static class ColorPickerHolder {
+        int featNum;
+        String featName;
+        Button button;
+        int defaultColor;
+        int currentColor;
+    }
+    private final HashMap<Integer, ColorPickerHolder> mColorPickers =
+            new HashMap<Integer, ColorPickerHolder>();
+
+    private static class InputHolder {
+        int featNum;
+        String featName;
+        Button button;
+        String currentValueText = "";
+    }
+    private final HashMap<Integer, InputHolder> mInputNums   = new HashMap<Integer, InputHolder>();
+    private final HashMap<Integer, InputHolder> mInputLNums  = new HashMap<Integer, InputHolder>();
+    private final HashMap<Integer, InputHolder> mInputTexts  = new HashMap<Integer, InputHolder>();
+
+    private static class CollapseHolder {
+        LinearLayout headRow;
+        TextView titleView;
+        TabIcon chevIcon;
+    }
+    private final ArrayList<TextView> mCategoryViews = new ArrayList<TextView>();
+    private final ArrayList<CollapseHolder> mCollapseHolders = new ArrayList<CollapseHolder>();
+    private final ArrayList<Button> mLinkButtons = new ArrayList<Button>();
+    private Button mMenuColorBtn = null;
+    private View mBottomDivider = null;
+    private TeleportPadView mMenuTeleportPad = null;
+    private AlertDialog activeColorPickerDialog = null;
 
     boolean stopChecking, overlayRequired;
     Context getContext;
@@ -279,12 +442,20 @@ private int lastLoginContentH = -1;
 private int lastLoginScreenW = -1;
 private int lastLoginScreenH = -1;
 private int lastLoginVisBottom = -1;
+private int lastLoggedLoginDelta = Integer.MIN_VALUE;
 private View.OnLayoutChangeListener loginLayoutChangeListener = null;
 private android.view.ViewTreeObserver.OnGlobalLayoutListener loginGlobalLayoutListener = null;
 private LoginHelper activeLoginHelper = null;
 private PopupWindow activeDropdownPopup = null;
 private View sidebarDivider = null;
 private int effectivePosY = POS_Y;
+private static final long SESSION_REVERIFY_INTERVAL_MS = 30L * 60L * 1000L;
+private final Handler sessionVerifyHandler = new Handler(android.os.Looper.getMainLooper());
+private String activeSessionToken = "";
+private String activeSessionUser = "";
+private String activeSessionDeviceId = "";
+private boolean sessionReverifyInFlight = false;
+private Runnable sessionReverifyRunnable = null;
     private static final HashMap<Integer, Integer> SEEK_DEFAULTS = new HashMap<Integer, Integer>();
     // (empty — no defaults needed for current features)
     
@@ -308,25 +479,25 @@ public static native boolean GetTeleportEnabled();
 Preferences.init(context);
 
         
-        // ==== Load saved theme color ====
-try {
-    android.content.SharedPreferences themePrefs =
-            context.getSharedPreferences("menu_theme", Context.MODE_PRIVATE);
-    int savedAccent = themePrefs.getInt("accent", 0);
-    if (savedAccent != 0) {
-        COLOR_ACCENT   = savedAccent;
-        COLOR_ACCENT_2 = darken(savedAccent, 0.65f);
-        COLOR_ACCENT_3 = lighten(savedAccent, 0.35f);
-        TEXT_COLOR = savedAccent;
-        BTN_COLOR  = savedAccent;
-        BORDER_COLOR = savedAccent;
-        SeekBarColor = savedAccent;
-        SeekBarProgressColor = savedAccent;
-        CheckBoxColor = savedAccent;
-        RadioColor    = savedAccent;
-        NumberTxtColor = String.format("#%06X", (0xFFFFFF & savedAccent));
-    }
-} catch (Exception ignored) { }
+        // ==== Load saved theme color (only persisted when Save is ON) ====
+        try {
+            int savedAccent = Preferences.getMenuAccentColor();
+            if (savedAccent != 0) {
+                int safe = ensureReadableAccent(savedAccent);
+                COLOR_ACCENT   = safe;
+                COLOR_ACCENT_2 = darken(safe, 0.65f);
+                COLOR_ACCENT_3 = lighten(safe, 0.35f);
+                TEXT_COLOR = safe;
+                BTN_COLOR  = safe;
+                BORDER_COLOR = safe;
+                SeekBarColor = safe;
+                SeekBarProgressColor = safe;
+                CheckBoxColor = safe;
+                RadioColor    = safe;
+                NumberTxtColor = String.format("#%06X", (0xFFFFFF & safe));
+            }
+            mCurrentHueF = getHueFromColor(COLOR_ACCENT);
+        } catch (Exception ignored) { }
 
         // Drop Poppins / Inter files into assets/fonts to upgrade the typography.
         fontRegular = loadFont(new String[]{"fonts/poppins_regular.ttf", "fonts/inter_regular.ttf"}, "sans-serif", Typeface.NORMAL);
@@ -613,7 +784,13 @@ mShimmerViewRef = shimmer;
             });
         hideBtn.setOnLongClickListener(new View.OnLongClickListener() {
                 public boolean onLongClick(View view) {
+                    Preferences.flush("menu_hide_kill");
                     Toast.makeText(view.getContext(), "Menu killed", Toast.LENGTH_LONG).show();
+                    stopChecking = true;
+                    stopPeriodicSessionCheck();
+                    activeSessionToken = "";
+                    activeSessionUser = "";
+                    activeSessionDeviceId = "";
                     detachLoginScrollListeners();
                     if (activeLoginHelper != null) {
                         activeLoginHelper.cleanup();
@@ -660,7 +837,8 @@ mShimmerView = shimmer;
 mExpanded.addView(shimmer);
 
         mExpanded.addView(mainContainer);
-        mExpanded.addView(makeDivider(false));
+        mBottomDivider = makeDivider(false);
+        mExpanded.addView(mBottomDivider);
         mExpanded.addView(bottomBar);
 
         mRootContainer.addView(mCollapsed);
@@ -772,9 +950,82 @@ new Titanic().start(proTitle);
         return (color & 0x00FFFFFF) | ((alpha & 0xFF) << 24);
     }
 
+    private static double linearizeChannel(double c) {
+        return (c <= 0.04045) ? (c / 12.92) : Math.pow((c + 0.055) / 1.055, 2.4);
+    }
+
+    private static double relativeLuminance(int color) {
+        double r = linearizeChannel(Color.red(color) / 255.0);
+        double g = linearizeChannel(Color.green(color) / 255.0);
+        double b = linearizeChannel(Color.blue(color) / 255.0);
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    }
+
+    private static double contrastRatio(int c1, int c2) {
+        double l1 = relativeLuminance(c1);
+        double l2 = relativeLuminance(c2);
+        double bright = Math.max(l1, l2);
+        double dark = Math.min(l1, l2);
+        return (bright + 0.05) / (dark + 0.05);
+    }
+
+    private static int bestTextOnColor(int bgColor) {
+        int darkInk = Color.parseColor("#0B0D12");
+        return (contrastRatio(bgColor, darkInk) >= contrastRatio(bgColor, Color.WHITE))
+                ? darkInk
+                : Color.WHITE;
+    }
+
+    private int ensureReadableAccent(int rawColor) {
+        int opaque = 0xFF000000 | rawColor;
+        double minContrast = 3.5;
+        if (contrastRatio(opaque, COLOR_CARD) >= minContrast) {
+            return opaque;
+        }
+        float[] hsv = new float[3];
+        Color.colorToHSV(opaque, hsv);
+
+        // Step 1: raise brightness (V) up to 1.0 preserving hue & saturation
+        float[] test = new float[]{ hsv[0], hsv[1], 1.0f };
+        int fullV = 0xFF000000 | Color.HSVToColor(test);
+        if (contrastRatio(fullV, COLOR_CARD) >= minContrast) {
+            float lo = hsv[2];
+            float hi = 1.0f;
+            for (int i = 0; i < 18; i++) {
+                float mid = (lo + hi) * 0.5f;
+                test[2] = mid;
+                int c = 0xFF000000 | Color.HSVToColor(test);
+                if (contrastRatio(c, COLOR_CARD) >= minContrast) {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                }
+            }
+            test[2] = hi;
+            return 0xFF000000 | Color.HSVToColor(test);
+        }
+
+        // Step 2: for very deep pure blues/violets where V=1 is still < 3.5:1,
+        // slightly reduce saturation toward white until contrast >= 3.5
+        test[2] = 1.0f;
+        float lo = 0f;
+        float hi = hsv[1];
+        for (int i = 0; i < 18; i++) {
+            float mid = (lo + hi) * 0.5f;
+            test[1] = mid;
+            int c = 0xFF000000 | Color.HSVToColor(test);
+            if (contrastRatio(c, COLOR_CARD) >= minContrast) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        test[1] = lo;
+        return 0xFF000000 | Color.HSVToColor(test);
+    }
+
     private static boolean isLight(int color) {
-        double lum = 0.299 * Color.red(color) + 0.587 * Color.green(color) + 0.114 * Color.blue(color);
-        return lum > 165;
+        return bestTextOnColor(color) != Color.WHITE;
     }
 
     private static String hex(int color) {
@@ -900,6 +1151,7 @@ new Titanic().start(proTitle);
                 setWindowFocusable(true);
             }
             if (!isLoggedIn && activeLoginHelper != null) {
+                activeLoginHelper.prepareActionModeHost();
                 activeLoginHelper.onHostVisibilityChanged(true);
             }
             if (!isLoggedIn) {
@@ -910,6 +1162,7 @@ new Titanic().start(proTitle);
 }
 
     private void collapseMenu(float iconAlpha) {
+        Preferences.flush("menu_collapse");
         if (activeLoginHelper != null) {
             activeLoginHelper.onHostVisibilityChanged(false);
         }
@@ -975,7 +1228,13 @@ new Titanic().start(proTitle);
         int maxY = Math.max(0, screenH() - vh);
         vmParams.x = Math.max(0, Math.min(x, maxX));
         vmParams.y = Math.max(0, Math.min(y, maxY));
-        try { mWindowManager.updateViewLayout(rootFrame, vmParams); } catch (Exception ignored) {}
+        try {
+            mWindowManager.updateViewLayout(rootFrame, vmParams);
+        } catch (Exception e) {
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diagUi("moveWindow updateViewLayout failed: " + SecurityNative.diagException(e));
+            }
+        }
     }
 
     // Shrink / reposition the menu if it is bigger than the current screen (e.g. after rotation)
@@ -1011,7 +1270,11 @@ new Titanic().start(proTitle);
                     }
                 });
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diagUi("keepInsideScreen updateViewLayout failed: " + SecurityNative.diagException(e));
+            }
+        }
     }
 
     // ================================================================
@@ -1260,13 +1523,25 @@ new Titanic().start(proTitle);
         private final Paint basePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint hiPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Matrix matrix = new Matrix();
-        private final int c1, c2;
+        private int c1, c2;
         private LinearGradient hiShader;
 
         ShimmerLine(Context context, int c1, int c2) {
             super(context, 2600);
             this.c1 = c1;
             this.c2 = c2;
+        }
+
+        void setColors(int c1, int c2) {
+            this.c1 = c1;
+            this.c2 = c2;
+            int w = getWidth();
+            if (w > 0) {
+                basePaint.setShader(new LinearGradient(0, 0, w, 0,
+                        new int[]{withAlpha(c1, 0), c1, c2, withAlpha(c2, 0)},
+                        new float[]{0f, 0.3f, 0.7f, 1f}, Shader.TileMode.CLAMP));
+            }
+            invalidate();
         }
 
         @Override
@@ -1305,7 +1580,7 @@ new Titanic().start(proTitle);
         private final RectF rect = new RectF();
         private final ArgbEvaluator argb = new ArgbEvaluator();
         private final float density;
-        private final int onColor, onColor2, offColor;
+        private int onColor, onColor2, offColor;
         private boolean checked;
         private float t = 0f;
         private float scale = 1f;
@@ -1323,6 +1598,15 @@ new Titanic().start(proTitle);
             glowPaint.setStyle(Paint.Style.FILL);
             thumbPaint.setStyle(Paint.Style.FILL);
             trackPaint.setStyle(Paint.Style.FILL);
+        }
+
+        void setColors(int onColor, int onColor2, int offColor) {
+            this.onColor = onColor;
+            this.onColor2 = onColor2;
+            this.offColor = offColor;
+            this.onShader = null;
+            this.shaderScale = -1f;
+            invalidate();
         }
 
         void setListener(Listener l) { listener = l; }
@@ -1421,8 +1705,8 @@ new Titanic().start(proTitle);
         private final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF rect = new RectF();
         private final float barH;
-        private final int c1;
-        private final int c2;
+        private int c1;
+        private int c2;
 
         SeekTrackDrawable(float barH, int trackColor, int c1, int c2) {
             this.barH = barH;
@@ -1431,6 +1715,18 @@ new Titanic().start(proTitle);
             trackPaint.setColor(trackColor);
             glowPaint.setColor(c1);
             glowPaint.setAlpha(46);
+        }
+
+        void setColors(int c1, int c2) {
+            this.c1 = c1;
+            this.c2 = c2;
+            glowPaint.setColor(c1);
+            glowPaint.setAlpha(46);
+            Rect b = getBounds();
+            if (b.width() > 0) {
+                progPaint.setShader(new LinearGradient(b.left, 0, Math.max(b.right, b.left + 1), 0, c1, c2, Shader.TileMode.CLAMP));
+            }
+            invalidateSelf();
         }
 
         @Override
@@ -1517,8 +1813,6 @@ new Titanic().start(proTitle);
                 if (getScrollX() != 0 || getScrollY() != 0) {
                     super.scrollTo(0, 0);
                 }
-            } else {
-                flashBar();
             }
             invalidate();
         }
@@ -1616,7 +1910,7 @@ new Titanic().start(proTitle);
         @Override
         protected void onScrollChanged(int l, int t, int oldl, int oldt) {
             super.onScrollChanged(l, t, oldl, oldt);
-            if (scrollingEnabled) flashBar();
+            if (scrollingEnabled && (l != oldl || t != oldt)) flashBar();
         }
 
         @Override
@@ -1906,7 +2200,13 @@ new Titanic().start(proTitle);
                         }
 
                         if (mWindowManager != null && rootFrame != null && vmParams != null) {
-                            try { mWindowManager.updateViewLayout(rootFrame, vmParams); } catch (Exception ignored) {}
+                            try {
+                                mWindowManager.updateViewLayout(rootFrame, vmParams);
+                            } catch (Exception e) {
+                                if (BuildConfig.SEC_DIAG) {
+                                    SecurityNative.diagUi("resize(MOVE) updateViewLayout failed: " + SecurityNative.diagException(e));
+                                }
+                            }
                         }
                         if (!isLoggedIn && contentScrollView instanceof SlimScrollView) {
                             ((SlimScrollView) contentScrollView).showScrollbarBriefly();
@@ -1917,7 +2217,13 @@ new Titanic().start(proTitle);
                 case MotionEvent.ACTION_CANCEL: {
                         v.setAlpha(1f);
                         if (mWindowManager != null && rootFrame != null && vmParams != null) {
-                            try { mWindowManager.updateViewLayout(rootFrame, vmParams); } catch (Exception ignored) {}
+                            try {
+                                mWindowManager.updateViewLayout(rootFrame, vmParams);
+                            } catch (Exception e) {
+                                if (BuildConfig.SEC_DIAG) {
+                                    SecurityNative.diagUi("resize(END) updateViewLayout failed: " + SecurityNative.diagException(e));
+                                }
+                            }
                         }
                         if (!isLoggedIn && contentScrollView != null) {
                             contentScrollView.post(new Runnable() {
@@ -2160,9 +2466,21 @@ new Titanic().start(proTitle);
         tabHolders.clear();
         spinnerAdapters.clear();
         mModeButtons.clear();
+        mOtherButtonOnOffs.clear();
         mToggles.clear();
-        mSeekBars.clear();    // ★ নতুন
-        mSpinners.clear();    
+        mSeekBars.clear();
+        mSpinners.clear();
+        mCheckBoxes.clear();
+        mRadioGroups.clear();
+        mColorPickers.clear();
+        mInputNums.clear();
+        mInputLNums.clear();
+        mInputTexts.clear();
+        mCategoryViews.clear();
+        mCollapseHolders.clear();
+        mLinkButtons.clear();
+        mMenuColorBtn = null;
+        mMenuTeleportPad = null;
         sidebarLayout.removeAllViews();
         contentLayout.removeAllViews();
 
@@ -2241,7 +2559,7 @@ if (!categoryNames.contains("Settings")) {
     if (settingsLay != null) {
         settingsLay.removeAllViews();
 
-        Switch(settingsLay, -1, "Save features preference", Preferences.loadPref);
+        Switch(settingsLay, -1, "Save features preference", Preferences.isSaveEnabled());
 
         Category(settingsLay, "Menu Color Theme");
 
@@ -2249,7 +2567,7 @@ if (!categoryNames.contains("Settings")) {
         settingsLay.addView(makeMenuColorButton(
                 COLOR_ACCENT, "Menu Color", -29));
         settingsLay.addView(makeMenuColorButton(
-                Color.parseColor("#3DDB87"), "Reset to Default", -28));
+                FeatureStateStore.DEFAULT_MENU_COLOR, "Reset to Default", -28));
 
         Category(settingsLay, "Community");
 
@@ -2262,6 +2580,9 @@ if (!categoryNames.contains("Settings")) {
         setupSidebarTabs();
         rescaleAll();
         applyTabMetrics();
+        if (isLoggedIn) {
+            Preferences.pushRestoredSnapshotToNativeOnce();
+        }
     }
 
     private LinearLayout newCategoryLayout() {
@@ -2440,26 +2761,76 @@ private void updateLoginOverflowScroll(boolean flashIfOverflow) {
     int viewportH = ssv.getHeight() - ssv.getPaddingTop() - ssv.getPaddingBottom();
     if (viewportH <= 0) return;
 
-    int naturalContentH = contentLayout.getPaddingTop() + contentLayout.getPaddingBottom();
+    int availW = contentLayout.getWidth() - contentLayout.getPaddingLeft() - contentLayout.getPaddingRight();
+    if (availW <= 0) {
+        availW = ssv.getWidth() - ssv.getPaddingLeft() - ssv.getPaddingRight()
+                - contentLayout.getPaddingLeft() - contentLayout.getPaddingRight();
+    }
+    if (availW <= 0) return;
+
+    int measuredContentH = contentLayout.getPaddingTop() + contentLayout.getPaddingBottom();
+    int unspecH = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED);
     for (int i = 0; i < contentLayout.getChildCount(); i++) {
         View child = contentLayout.getChildAt(i);
-        if (child.getVisibility() != View.GONE) {
-            naturalContentH += child.getHeight();
-            ViewGroup.LayoutParams clp = child.getLayoutParams();
-            if (clp instanceof ViewGroup.MarginLayoutParams) {
-                ViewGroup.MarginLayoutParams mlp = (ViewGroup.MarginLayoutParams) clp;
-                naturalContentH += mlp.topMargin + mlp.bottomMargin;
-            }
+        if (child.getVisibility() == View.GONE) continue;
+
+        int cw = availW;
+        ViewGroup.LayoutParams clp = child.getLayoutParams();
+        if (clp instanceof ViewGroup.MarginLayoutParams) {
+            ViewGroup.MarginLayoutParams mlp = (ViewGroup.MarginLayoutParams) clp;
+            measuredContentH += mlp.topMargin + mlp.bottomMargin;
+            cw = Math.max(1, cw - mlp.leftMargin - mlp.rightMargin);
         }
+
+        View measureTarget = child;
+        int extraH = 0;
+        int targetW = Math.max(1, cw - child.getPaddingLeft() - child.getPaddingRight());
+        if (child instanceof ViewGroup && ((ViewGroup) child).getChildCount() == 1) {
+            View inner = ((ViewGroup) child).getChildAt(0);
+            if (inner.getVisibility() != View.GONE) {
+                measureTarget = inner;
+                extraH += child.getPaddingTop() + child.getPaddingBottom();
+                ViewGroup.LayoutParams ilp = inner.getLayoutParams();
+                if (ilp instanceof ViewGroup.MarginLayoutParams) {
+                    ViewGroup.MarginLayoutParams imlp = (ViewGroup.MarginLayoutParams) ilp;
+                    extraH += imlp.topMargin + imlp.bottomMargin;
+                    targetW = Math.max(1, targetW - imlp.leftMargin - imlp.rightMargin);
+                }
+            }
+        } else {
+            targetW = Math.max(1, cw);
+        }
+
+        int wSpec = View.MeasureSpec.makeMeasureSpec(targetW, View.MeasureSpec.EXACTLY);
+        measureTarget.measure(wSpec, unspecH);
+        measuredContentH += extraH + measureTarget.getMeasuredHeight();
     }
-    int effectiveContentH = Math.max(naturalContentH, contentLayout.getHeight());
-    boolean overflow = effectiveContentH > viewportH + 1;
+
+    int enableTolPx = dp(6);
+    int disableTolPx = dp(2);
+    int deltaPx = measuredContentH - viewportH;
+    boolean wasOverflow = loginOverflowActive;
+    boolean overflow = wasOverflow ? (deltaPx > -disableTolPx) : (deltaPx > enableTolPx);
 
     loginOverflowActive = overflow;
     ssv.setLoginScrollMode(overflow);
     ssv.setScrollingEnabled(overflow);
     if (overflow && flashIfOverflow) {
         ssv.showScrollbarBriefly();
+    }
+
+    if (BuildConfig.SEC_DIAG) {
+        if (wasOverflow != overflow || loginResizingNow || deltaPx != lastLoggedLoginDelta) {
+            lastLoggedLoginDelta = deltaPx;
+            float density = safeDisplayMetrics(getContext).density;
+            if (density <= 0f) density = 1f;
+            SecurityNative.diagUi(String.format(java.util.Locale.US,
+                    "loginScroll: vpH=%dpx(%.1fdp) contentH=%dpx(%.1fdp) delta=%dpx(%.1fdp) tol=+6/-2dp was=%s now=%s resizing=%s flash=%s",
+                    viewportH, viewportH / density,
+                    measuredContentH, measuredContentH / density,
+                    deltaPx, deltaPx / density,
+                    wasOverflow, overflow, loginResizingNow, (overflow && flashIfOverflow)));
+        }
     }
 }
 
@@ -2471,6 +2842,7 @@ private void detachLoginScrollListeners() {
     lastLoginScreenW = -1;
     lastLoginScreenH = -1;
     lastLoginVisBottom = -1;
+    lastLoggedLoginDelta = Integer.MIN_VALUE;
     if (contentScrollView != null && loginLayoutChangeListener != null) {
         contentScrollView.removeOnLayoutChangeListener(loginLayoutChangeListener);
     }
@@ -2492,7 +2864,144 @@ private void detachLoginScrollListeners() {
     loginGlobalLayoutListener = null;
 }
 
+private static boolean isSessionRevokedReason(String reason) {
+    return "blocked".equals(reason)
+            || "expired".equals(reason)
+            || "device_mismatch".equals(reason)
+            || "user_not_found".equals(reason)
+            || "session_invalid".equals(reason)
+            || "bad_input".equals(reason);
+}
+
+private void startPeriodicSessionCheck() {
+    stopPeriodicSessionCheck();
+    if (!isLoggedIn || stopChecking) return;
+    sessionReverifyRunnable = new Runnable() {
+        @Override
+        public void run() {
+            runPeriodicSessionCheck();
+        }
+    };
+    sessionVerifyHandler.postDelayed(sessionReverifyRunnable, SESSION_REVERIFY_INTERVAL_MS);
+}
+
+private void stopPeriodicSessionCheck() {
+    if (sessionReverifyRunnable != null) {
+        sessionVerifyHandler.removeCallbacks(sessionReverifyRunnable);
+        sessionReverifyRunnable = null;
+    }
+    sessionReverifyInFlight = false;
+}
+
+private void runPeriodicSessionCheck() {
+    if (!isLoggedIn || stopChecking || instance == null) return;
+    if (sessionReverifyInFlight) {
+        startPeriodicSessionCheck();
+        return;
+    }
+
+    final String tokenToCheck = !TextUtils.isEmpty(activeSessionToken)
+            ? activeSessionToken
+            : SecureTokenStore.loadToken(getContext);
+    final String deviceIdToCheck = !TextUtils.isEmpty(activeSessionDeviceId)
+            ? activeSessionDeviceId
+            : SecureTokenStore.loadDeviceId(getContext);
+
+    if (TextUtils.isEmpty(tokenToCheck) || TextUtils.isEmpty(deviceIdToCheck)) {
+        forceLogoutToLogin("session_invalid");
+        return;
+    }
+
+    sessionReverifyInFlight = true;
+    new Thread(new Runnable() {
+        @Override
+        public void run() {
+            final String sentNonce = ModFirebase.generateNonce();
+            final org.json.JSONObject r = ModFirebase.verifySession(
+                    getContext, tokenToCheck, deviceIdToCheck, sentNonce);
+
+            boolean ok = false;
+            String reason = "network";
+            String freshToken = "";
+            String userOut = "";
+            String respNonce = "";
+
+            if (r != null) {
+                ok = r.optBoolean("ok", false);
+                reason = r.optString("reason", "unknown");
+                freshToken = r.optString("token", "");
+                userOut = r.optString("user", "");
+                respNonce = r.optString("nonce", "");
+            }
+
+            if (ok) {
+                if (TextUtils.isEmpty(freshToken)
+                        || TextUtils.isEmpty(userOut)
+                        || !sentNonce.equals(respNonce)
+                        || !SecurityNative.verifySessionToken(freshToken, userOut, deviceIdToCheck, sentNonce)) {
+                    ok = false;
+                    reason = "session_invalid";
+                }
+            }
+
+            final boolean fOk = ok;
+            final String fReason = reason;
+            final String fFreshToken = freshToken;
+            final String fUserOut = userOut;
+
+            if (fOk && !TextUtils.isEmpty(SecureTokenStore.loadToken(getContext))) {
+                SecureTokenStore.saveToken(getContext, fFreshToken);
+            }
+
+            sessionVerifyHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    sessionReverifyInFlight = false;
+                    if (!isLoggedIn || stopChecking || instance == null) return;
+                    if (fOk) {
+                        activeSessionToken = fFreshToken;
+                        activeSessionUser = fUserOut;
+                        activeSessionDeviceId = deviceIdToCheck;
+                        startPeriodicSessionCheck();
+                    } else if (isSessionRevokedReason(fReason)) {
+                        forceLogoutToLogin(fReason);
+                    } else {
+                        // Offline or transient network error: keep active session and recheck next cycle
+                        startPeriodicSessionCheck();
+                    }
+                }
+            });
+        }
+    }).start();
+}
+
+private void forceLogoutToLogin(final String reason) {
+    SecureTokenStore.clearToken(getContext);
+    SecurityNative.clearVerifiedSession();
+    Runnable task = new Runnable() {
+        @Override
+        public void run() {
+            stopPeriodicSessionCheck();
+            activeSessionToken = "";
+            activeSessionUser = "";
+            activeSessionDeviceId = "";
+            isLoggedIn = false;
+            setTeleportPadVisible(false);
+            showLoginScreen(reason);
+        }
+    };
+    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+        task.run();
+    } else {
+        sessionVerifyHandler.post(task);
+    }
+}
+
 private void showLoginScreen() {
+    showLoginScreen(null);
+}
+
+private void showLoginScreen(final String forcedLogoutReason) {
     if (isLoggedIn) return;
 
     detachLoginScrollListeners();
@@ -2516,12 +3025,15 @@ private void showLoginScreen() {
 
     final LoginHelper loginHelper = new LoginHelper(getContext, overlayRequired, new LoginHelper.Callback() {
         @Override
-        public void onLoginSuccess() {
+        public void onLoginSuccess(String token, String user, String deviceId) {
             detachLoginScrollListeners();
             if (activeLoginHelper != null) {
                 activeLoginHelper.cleanup();
                 activeLoginHelper = null;
             }
+            activeSessionToken = token != null ? token : "";
+            activeSessionUser = user != null ? user : "";
+            activeSessionDeviceId = deviceId != null ? deviceId : "";
             setWindowFocusable(false);
             isLoggedIn = true;
 
@@ -2536,11 +3048,25 @@ private void showLoginScreen() {
             }
             contentLayout.removeAllViews();
             buildFeaturesAndCategories(GetFeatureList());
+            startPeriodicSessionCheck();
         }
     });
     activeLoginHelper = loginHelper;
 
     final View loginView = loginHelper.buildView();
+    if (!TextUtils.isEmpty(forcedLogoutReason)) {
+        if ("blocked".equals(forcedLogoutReason)) {
+            loginHelper.showExternalStatus("Account blocked", true);
+        } else if ("expired".equals(forcedLogoutReason)) {
+            loginHelper.showExternalStatus("Key expired", true);
+        } else if ("device_mismatch".equals(forcedLogoutReason)) {
+            loginHelper.showExternalStatus("Registered to another device", false);
+        } else if ("user_not_found".equals(forcedLogoutReason)) {
+            loginHelper.showExternalStatus("Account no longer exists", false);
+        } else {
+            loginHelper.showExternalStatus("Session invalid or expired", false);
+        }
+    }
 
     // ================================================================
     // Drag wrapper — EditText touch সরাসরি EditText-কে দেই,
@@ -2662,6 +3188,7 @@ private void showLoginScreen() {
             new FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
     contentLayout.addView(dragWrapper,
             new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
+    loginHelper.prepareActionModeHost();
 
     loginLayoutChangeListener = new View.OnLayoutChangeListener() {
         @Override
@@ -2767,7 +3294,11 @@ for (final long delay : new long[]{ 50, 200, 500, 1000, 2000, 4000 }) {
                         updateLoginOverflowScroll(false);
                     }
                 });
-            } catch (Exception ignored) { }
+            } catch (Exception e) {
+                if (BuildConfig.SEC_DIAG) {
+                    SecurityNative.diagUi("showLoginScreen layout post failed: " + SecurityNative.diagException(e));
+                }
+            }
         }
     }, 250);
 }
@@ -2784,6 +3315,11 @@ for (final long delay : new long[]{ 50, 200, 500, 1000, 2000, 4000 }) {
         mWindowManager = (WindowManager) getContext.getSystemService(getContext.WINDOW_SERVICE);
         mWindowManager.addView(rootFrame, vmParams);
         overlayRequired = true;
+        if (BuildConfig.SEC_DIAG) {
+            SecurityNative.diagUi("Menu window added (service): type=" + vmParams.type
+                    + " flags=0x" + Integer.toHexString(vmParams.flags)
+                    + " ctx=" + getContext.getClass().getSimpleName());
+        }
     }
 
     @SuppressLint("WrongConstant")
@@ -2794,6 +3330,11 @@ for (final long delay : new long[]{ 50, 200, 500, 1000, 2000, 4000 }) {
         vmParams.y = effectivePosY;
         mWindowManager = ((Activity) getContext).getWindowManager();
         mWindowManager.addView(rootFrame, vmParams);
+        if (BuildConfig.SEC_DIAG) {
+            SecurityNative.diagUi("Menu window added (activity): type=" + vmParams.type
+                    + " flags=0x" + Integer.toHexString(vmParams.flags)
+                    + " ctx=" + getContext.getClass().getSimpleName());
+        }
     }
 
     private boolean isViewCollapsed() { return rootFrame == null || mCollapsed.getVisibility() == View.VISIBLE; }
@@ -2808,11 +3349,19 @@ for (final long delay : new long[]{ 50, 200, 500, 1000, 2000, 4000 }) {
     }
 
 private void setWindowFocusable(boolean focusable) {
-    if (vmParams == null || mWindowManager == null || rootFrame == null) return;
+    if (vmParams == null || mWindowManager == null || rootFrame == null) {
+        if (BuildConfig.SEC_DIAG) {
+            SecurityNative.diagUi("setWindowFocusable(" + focusable + ") skipped: wm="
+                    + (mWindowManager != null) + " vmParams=" + (vmParams != null)
+                    + " root=" + (rootFrame != null));
+        }
+        return;
+    }
     try {
         if (focusable) {
             if (!windowIsFocusable) {
-                savedWindowFlags = vmParams.flags;
+                int oldFlags = vmParams.flags;
+                savedWindowFlags = oldFlags;
 
                 vmParams.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
                 vmParams.flags &= ~WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM;
@@ -2823,9 +3372,17 @@ private void setWindowFocusable(boolean focusable) {
 
                 windowIsFocusable = true;
                 mWindowManager.updateViewLayout(rootFrame, vmParams);
+                if (BuildConfig.SEC_DIAG) {
+                    SecurityNative.diagUi("setWindowFocusable(true): oldFlags=0x"
+                            + Integer.toHexString(oldFlags)
+                            + " newFlags=0x" + Integer.toHexString(vmParams.flags)
+                            + " softInput=0x" + Integer.toHexString(vmParams.softInputMode)
+                            + " token=" + (rootFrame.getWindowToken() != null));
+                }
             }
         } else {
             if (windowIsFocusable) {
+                int oldFlags = vmParams.flags;
                 try {
                     View focused = rootFrame.findFocus();
                     if (focused != null) focused.clearFocus();
@@ -2835,6 +3392,12 @@ private void setWindowFocusable(boolean focusable) {
                 vmParams.softInputMode = 0;
                 windowIsFocusable = false;
                 mWindowManager.updateViewLayout(rootFrame, vmParams);
+                if (BuildConfig.SEC_DIAG) {
+                    SecurityNative.diagUi("setWindowFocusable(false): oldFlags=0x"
+                            + Integer.toHexString(oldFlags)
+                            + " newFlags=0x" + Integer.toHexString(vmParams.flags)
+                            + " token=" + (rootFrame.getWindowToken() != null));
+                }
 
                 try {
                     InputMethodManager imm = (InputMethodManager)
@@ -2845,6 +3408,10 @@ private void setWindowFocusable(boolean focusable) {
         }
     } catch (Exception e) {
         Log.e(TAG, "setWindowFocusable: " + e);
+        if (BuildConfig.SEC_DIAG) {
+            SecurityNative.diagUi("setWindowFocusable(" + focusable + ") failed: "
+                    + SecurityNative.diagException(e));
+        }
     }
 }
     
@@ -2856,6 +3423,12 @@ public void setTeleportPadVisible(boolean visible) {
     if (!visible) tpPadView.invalidate();
 }
         public void onDestroy() {
+    Preferences.flush("menu_onDestroy");
+    stopChecking = true;
+    stopPeriodicSessionCheck();
+    activeSessionToken = "";
+    activeSessionUser = "";
+    activeSessionDeviceId = "";
     detachLoginScrollListeners();
     if (activeLoginHelper != null) {
         activeLoginHelper.cleanup();
@@ -3038,11 +3611,19 @@ public void setTeleportPadVisible(boolean visible) {
         flatten(button);
         addPressAnim(button);
 
-        int savedColor = Preferences.loadPrefInt(featName, featNum);
-        if (savedColor == 0) {
-            try { savedColor = Color.parseColor(defaultHex); }
-            catch (Exception e) { savedColor = 0xFF00FF88; }
-        }
+        int defaultColor = 0xFF00FF88;
+        try { defaultColor = Color.parseColor(defaultHex); }
+        catch (Exception ignored) { }
+        final int defaultColorFinal = defaultColor;
+        int savedColor = Preferences.readInitialColor(featName, featNum, defaultColorFinal);
+
+        final ColorPickerHolder cpHolder = new ColorPickerHolder();
+        cpHolder.featNum      = featNum;
+        cpHolder.featName     = featName;
+        cpHolder.button       = button;
+        cpHolder.defaultColor = defaultColorFinal;
+        cpHolder.currentColor = savedColor;
+        mColorPickers.put(featNum, cpHolder);
 
         applyColorButton(button, featName, savedColor);
 
@@ -3102,10 +3683,11 @@ public void setTeleportPadVisible(boolean visible) {
                             swatch.setOnClickListener(new View.OnClickListener() {
                                     @Override
                                     public void onClick(View v2) {
+                                        cpHolder.currentColor = color;
                                         applyColorButton(button, featName, color);
-Preferences.changeFeatureInt(featName, featNum, color);
+                                        Preferences.changeFeatureColor(featName, featNum, color);
 
-Toast.makeText(getContext, "Color: " + cname, Toast.LENGTH_SHORT).show();
+                                        Toast.makeText(getContext, "Color: " + cname, Toast.LENGTH_SHORT).show();
                                         if (dialogRef[0] != null) dialogRef[0].dismiss();
                                     }
                                 });
@@ -3192,7 +3774,7 @@ Toast.makeText(getContext, "Color: " + cname, Toast.LENGTH_SHORT).show();
     label.setPadding(dp(12), dp(10), dp(6), dp(10));
 
     final ToggleView toggle = new ToggleView(getContext, COLOR_ACCENT, COLOR_ACCENT_3, COLOR_TRACK);
-    boolean initial = Preferences.loadPrefBool(featName, featNum, swiOn);
+    boolean initial = Preferences.readInitialBool(featName, featNum, swiOn);
     toggle.setChecked(initial, false);
     rowBg.setStroke(dp(1), initial ? withAlpha(ToggleON, 0x99) : COLOR_CARD_BORDER);
     if (featNum == 710) {
@@ -3201,11 +3783,12 @@ Toast.makeText(getContext, "Color: " + cname, Toast.LENGTH_SHORT).show();
 
     // ★ Toggle state tracking
     final ToggleHolder holder = new ToggleHolder();
-    holder.featNum  = featNum;
-    holder.featName = featName;
-    holder.toggle   = toggle;
-    holder.rowBg    = rowBg;
-    holder.state    = new boolean[]{ initial };
+    holder.featNum    = featNum;
+    holder.featName   = featName;
+    holder.toggle     = toggle;
+    holder.rowBg      = rowBg;
+    holder.state      = new boolean[]{ initial };
+    holder.defaultVal = swiOn;
     mToggles.put(featNum, holder);
 
     toggle.setListener(new ToggleView.Listener() {
@@ -3216,7 +3799,9 @@ Toast.makeText(getContext, "Color: " + cname, Toast.LENGTH_SHORT).show();
                           bool ? COLOR_CARD_BORDER : withAlpha(ToggleON, 0x99),
                           bool ? withAlpha(ToggleON, 0x99) : COLOR_CARD_BORDER);
 
-            Preferences.changeFeatureBool(featName, featNum, bool);
+            if (!mProgrammaticModeUpdate) {
+                Preferences.changeFeatureBool(featName, featNum, bool);
+            }
 
             if (featNum == 710) {
                 setTeleportPadVisible(bool);
@@ -3237,16 +3822,15 @@ Toast.makeText(getContext, "Color: " + cname, Toast.LENGTH_SHORT).show();
     linLayout.addView(row);
 }
 
-    private void SeekBar(LinearLayout linLayout, final int featNum, final String featName, final int min, int max) {
-    int startVal = Preferences.loadPrefInt(featName, featNum);
-    if (startVal == 0) {
-        Integer def = SEEK_DEFAULTS.get(featNum);
-        startVal = (def != null) ? def.intValue() : min;
-        if (startVal < min) startVal = min;
-        if (startVal > max) startVal = max;
-        // Native-এ corrected default পাঠাই (SavePref OFF হলে persist হবে না)
-        Preferences.changeFeatureInt(featName, featNum, startVal);
-    }
+    private void SeekBar(LinearLayout linLayout, final int featNum, final String featName, final int min, final int max) {
+    Integer def = SEEK_DEFAULTS.get(featNum);
+    int defaultVal = (def != null) ? def.intValue() : min;
+    if (defaultVal < min) defaultVal = min;
+    if (defaultVal > max) defaultVal = max;
+
+    int startVal = Preferences.readInitialInt(featName, featNum, defaultVal);
+    if (startVal < min) startVal = min;
+    if (startVal > max) startVal = max;
 
         LinearLayout card = new LinearLayout(getContext);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -3290,8 +3874,23 @@ chip.setText(String.valueOf(displayStart));
         
         seekBar.setMax(max);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) seekBar.setMin(min);
-        seekBar.setProgressDrawable(new SeekTrackDrawable(dpf(6f), COLOR_TRACK, COLOR_ACCENT, COLOR_SUCCESS));
-        seekBar.setThumb(makeSeekThumb());
+        SeekTrackDrawable trackDrawable = new SeekTrackDrawable(dpf(6f), COLOR_TRACK, COLOR_ACCENT, COLOR_SUCCESS);
+        seekBar.setProgressDrawable(trackDrawable);
+
+        GradientDrawable thumbGlow = new GradientDrawable();
+        thumbGlow.setShape(GradientDrawable.OVAL);
+        thumbGlow.setColor(withAlpha(COLOR_ACCENT, 0x44));
+        thumbGlow.setSize(dp(22), dp(22));
+
+        GradientDrawable thumbCore = new GradientDrawable();
+        thumbCore.setShape(GradientDrawable.OVAL);
+        thumbCore.setColor(0xFFFFFFFF);
+        thumbCore.setStroke(dp(3), COLOR_ACCENT);
+        thumbCore.setSize(dp(14), dp(14));
+
+        LayerDrawable thumbLd = new LayerDrawable(new Drawable[]{thumbGlow, thumbCore});
+        thumbLd.setLayerInset(1, dp(4), dp(4), dp(4), dp(4));
+        seekBar.setThumb(thumbLd);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) seekBar.setSplitTrack(false);
         seekBar.setProgress(startVal);
 
@@ -3301,19 +3900,29 @@ chip.setText(String.valueOf(displayStart));
                 @Override
                 public void onProgressChanged(SeekBar s, int i, boolean z) {
                     int val = i < min ? min : i;
-                    if (val != i) seekBar.setProgress(val);
-                    Preferences.changeFeatureInt(featName, featNum, val);
-
-int disp = (featNum == 103) ? (val + 30) : val;
-chip.setText(String.valueOf(disp));
+                    if (val != i) {
+                        seekBar.setProgress(val);
+                        return;
+                    }
+                    int disp = (featNum == 103) ? (val + 30) : val;
+                    chip.setText(String.valueOf(disp));
+                    if (!mProgrammaticModeUpdate) {
+                        Preferences.changeFeatureInt(featName, featNum, val);
+                    }
                 }
             });
             
-            SeekBarHolder sbHolder = new SeekBarHolder();
-        sbHolder.featNum  = featNum;
-        sbHolder.featName = featName;
-        sbHolder.seekBar  = seekBar;
-        sbHolder.chip     = chip;
+        SeekBarHolder sbHolder = new SeekBarHolder();
+        sbHolder.featNum       = featNum;
+        sbHolder.featName      = featName;
+        sbHolder.seekBar       = seekBar;
+        sbHolder.chip          = chip;
+        sbHolder.trackDrawable = trackDrawable;
+        sbHolder.thumbGlow     = thumbGlow;
+        sbHolder.thumbCore     = thumbCore;
+        sbHolder.min           = min;
+        sbHolder.max           = max;
+        sbHolder.defaultVal    = defaultVal;
         mSeekBars.put(featNum, sbHolder);
 
         card.addView(head);
@@ -3385,7 +3994,7 @@ chip.setText(String.valueOf(disp));
                         stopChecking = true;
                         break;
                 }
-                Preferences.changeFeatureInt(featName, featNum, 0);
+                Preferences.triggerActionButton(featName, featNum);
             }
         });
         linLayout.addView(button);
@@ -3404,6 +4013,9 @@ private Button makeMenuColorButton(final int color, final String label,
     addPressAnim(button);
 
     applyMenuColorButtonStyle(button, label, color);
+    if (featNum == -29) {
+        mMenuColorBtn = button;
+    }
 
     button.setOnClickListener(new View.OnClickListener() {
         @Override
@@ -3411,8 +4023,7 @@ private Button makeMenuColorButton(final int color, final String label,
             if (featNum == -29) {
                 showMenuColorPickerDialog();
             } else if (featNum == -28) {
-                mCurrentHueF = 145f;
-                applyMenuColor(Color.parseColor("#3DDB87"));
+                resetMenuColorToDefaultInPlace();
             }
         }
     });
@@ -3425,7 +4036,7 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
     bg.setColor(color);
     bg.setStroke(dp(2), withAlpha(0xFFFFFF, 0xB0));
     button.setBackground(bg);
-    int fg = isLight(color) ? Color.BLACK : Color.WHITE;
+    int fg = bestTextOnColor(color);
     button.setTextColor(fg);
     button.setText(Html.fromHtml(
         "<b>" + label + "</b>  " + hex(color)));
@@ -3454,6 +4065,7 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
                     getContext.startActivity(intent);
                 }
             });
+        mLinkButtons.add(button);
         linLayout.addView(button);
     }
 
@@ -3467,7 +4079,7 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
         }
     }
 
-        private void ButtonOnOff(LinearLayout linLayout, final int featNum, String featName, boolean switchedOn) {
+    private void ButtonOnOff(LinearLayout linLayout, final int featNum, String featName, final boolean switchedOn) {
         final Button button = new Button(getContext);
         button.setMinHeight(0);
         button.setMinimumHeight(0);
@@ -3481,14 +4093,15 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
         addPressAnim(button);
 
         final String finalfeatName = featName.replace("OnOff_", "");
-        final boolean[] state = new boolean[]{
-                Preferences.loadPrefBool(finalfeatName, featNum, switchedOn)
-        };
+        final boolean isMode = (featNum == MODE_SIMPLE || featNum == MODE_MAX || featNum == MODE_ULTRA);
+        final boolean isResetAll = (featNum == MODE_RESET);
+
+        final boolean initialState = isResetAll
+                ? false
+                : Preferences.readInitialBool(finalfeatName, featNum, switchedOn);
+        final boolean[] state = new boolean[]{ initialState };
         applyOnOffStyle(button, finalfeatName, state[0]);
 
-        // ★ Register mode buttons (800/801/802/803) for mutual exclusion
-        final boolean isMode = (featNum == 800 || featNum == 801
-                                || featNum == 802 || featNum == 803);
         if (isMode) {
             ModeButtonHolder h = new ModeButtonHolder();
             h.featNum = featNum;
@@ -3496,37 +4109,194 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
             h.button  = button;
             h.state   = state;
             mModeButtons.put(featNum, h);
+        } else if (!isResetAll) {
+            OtherButtonOnOffHolder oh = new OtherButtonOnOffHolder();
+            oh.featNum    = featNum;
+            oh.name       = finalfeatName;
+            oh.button     = button;
+            oh.state      = state;
+            oh.defaultVal = switchedOn;
+            mOtherButtonOnOffs.put(featNum, oh);
         }
 
-        button.setOnClickListener(new View.OnClickListener() {
-    @Override
-    public void onClick(View v) {
-        state[0] = !state[0];
-
-        // If a Mode button is being turned ON → turn OFF the other modes
-        if (isMode && state[0]) {
-            for (int fn : MODE_FEATNUMS) {
-                if (fn == featNum) continue;
-                ModeButtonHolder other = mModeButtons.get(fn);
-                if (other != null && other.state[0]) {
-                    other.state[0] = false;
-                    Preferences.changeFeatureBool(other.name, other.featNum, false);
-                    applyOnOffStyle(other.button, other.name, false);
-                    applyModeToMenu(fn, false);        // ← নতুন
+        final Runnable resetDoneRevert = isResetAll ? new Runnable() {
+            @Override
+            public void run() {
+                if (button.getParent() != null) {
+                    applyOnOffStyle(button, finalfeatName, false);
                 }
             }
-        }
+        } : null;
 
-        Preferences.changeFeatureBool(finalfeatName, featNum, state[0]);
-        applyOnOffStyle(button, finalfeatName, state[0]);
+        button.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (isResetAll) {
+                    resetAllFeaturesAction(button, finalfeatName, resetDoneRevert);
+                    return;
+                }
+                if (isMode) {
+                    handleModeButtonToggle(featNum, finalfeatName, button, state);
+                    return;
+                }
+                state[0] = !state[0];
+                Preferences.changeFeatureBool(finalfeatName, featNum, state[0]);
+                applyOnOffStyle(button, finalfeatName, state[0]);
+            }
+        });
+        linLayout.addView(button);
+    }
 
-        // ★ Mode ON/OFF → menu এর Toggle গুলো auto sync
-        if (isMode) {
-            applyModeToMenu(featNum, state[0]);
+    private void runOnMainThread(Runnable r) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            r.run();
+        } else {
+            mainHandler.post(r);
         }
     }
-});
-        linLayout.addView(button);
+
+    private void handleModeButtonToggle(final int featNum, final String featName,
+                                        final Button button, final boolean[] state) {
+        runOnMainThread(new Runnable() {
+            @Override
+            public void run() {
+                if (mProgrammaticModeUpdate) return;
+                mProgrammaticModeUpdate = true;
+                Preferences.beginBatch();
+                try {
+                    boolean newState = !state[0];
+
+                    // Step 1: When turning a Mode ON, turn any other active Mode OFF first
+                    if (newState) {
+                        for (int fn : MODE_FEATNUMS) {
+                            if (fn == featNum) continue;
+                            ModeButtonHolder other = mModeButtons.get(fn);
+                            if (other != null && other.state[0]) {
+                                other.state[0] = false;
+                                applyOnOffStyle(other.button, other.name, false);
+                                Preferences.forceSyncBool(other.name, other.featNum, false, true);
+                                applyModeToMenuInternal(fn, false);
+                            }
+                        }
+                    }
+
+                    // Step 2: Update the clicked Mode button (UI + Store/Disk + Native)
+                    state[0] = newState;
+                    applyOnOffStyle(button, featName, newState);
+                    Preferences.forceSyncBool(featName, featNum, newState, true);
+
+                    // Step 3: Apply this Mode's full preset (leaves non-mode manual choices alone)
+                    applyModeToMenuInternal(featNum, newState);
+                } finally {
+                    Preferences.endBatch(true);
+                    mProgrammaticModeUpdate = false;
+                }
+            }
+        });
+    }
+
+    private void resetAllFeaturesAction(final Button resetButton, final String resetName,
+                                        final Runnable revertRunnable) {
+        runOnMainThread(new Runnable() {
+            @Override
+            public void run() {
+                if (mProgrammaticModeUpdate) return;
+                mProgrammaticModeUpdate = true;
+                Preferences.beginBatch();
+                try {
+                    // 1. Turn all Mode buttons OFF (UI + Store/Disk; native 803 resets all game globals)
+                    for (int fn : MODE_FEATNUMS) {
+                        ModeButtonHolder mh = mModeButtons.get(fn);
+                        if (mh != null) {
+                            if (mh.state[0]) {
+                                mh.state[0] = false;
+                                applyOnOffStyle(mh.button, mh.name, false);
+                            }
+                            Preferences.forceSyncBool(mh.name, mh.featNum, false, false);
+                        } else {
+                            Preferences.forceSyncBool("", fn, false, false);
+                        }
+                    }
+
+                    // 2. Reset any non-mode ButtonOnOff controls
+                    for (OtherButtonOnOffHolder oh : mOtherButtonOnOffs.values()) {
+                        boolean def = oh.defaultVal;
+                        if (oh.state[0] != def) {
+                            oh.state[0] = def;
+                            applyOnOffStyle(oh.button, oh.name, def);
+                        }
+                        Preferences.forceSyncBool(oh.name, oh.featNum, def, true);
+                    }
+
+                    // 3. Reset all Toggles (NEVER touch featNum -1 "Save features preference")
+                    for (ToggleHolder th : mToggles.values()) {
+                        if (th.featNum == -1) continue;
+                        setToggleState(th.featNum, th.defaultVal, true);
+                    }
+
+                    // 4. Reset all SeekBars to default
+                    for (SeekBarHolder sb : mSeekBars.values()) {
+                        setSeekBarValue(sb.featNum, sb.defaultVal, true);
+                    }
+
+                    // 5. Reset all Spinners to index 0 (includes Camera Mode, Shader Target, Color Preset)
+                    for (SpinnerHolder sp : mSpinners.values()) {
+                        setSpinnerValue(sp.featNum, 0, true);
+                    }
+
+                    // 6. Reset all CheckBoxes to default
+                    for (CheckBoxHolder cb : mCheckBoxes.values()) {
+                        setCheckBoxState(cb.featNum, cb.defaultVal, true);
+                    }
+
+                    // 7. Reset all RadioGroups to 0 (unselected)
+                    for (RadioGroupHolder rg : mRadioGroups.values()) {
+                        rg.radioGroup.clearCheck();
+                        rg.selectedName = null;
+                        rg.titleView.setText(rg.featName + ":");
+                        Preferences.forceSyncInt(rg.featName, rg.featNum, 0, true);
+                    }
+
+                    // 8. Reset all ColorPickers to defaultColor
+                    for (ColorPickerHolder cp : mColorPickers.values()) {
+                        setColorPickerValue(cp.featNum, cp.defaultColor, true);
+                    }
+
+                    // 9. Reset all InputNum / InputLNum / InputText controls
+                    for (InputHolder ih : mInputNums.values()) {
+                        ih.currentValueText = "0";
+                        ih.button.setText(Html.fromHtml(ih.featName + ": <font color='" + NumberTxtColor + "'>0</font>"));
+                        Preferences.forceSyncInt(ih.featName, ih.featNum, 0, true);
+                    }
+                    for (InputHolder ih : mInputLNums.values()) {
+                        ih.currentValueText = "0";
+                        ih.button.setText(Html.fromHtml(ih.featName + ": <font color='" + NumberTxtColor + "'>0</font>"));
+                        Preferences.forceSyncLong(ih.featName, ih.featNum, 0L, true);
+                    }
+                    for (InputHolder ih : mInputTexts.values()) {
+                        ih.currentValueText = "";
+                        ih.button.setText(Html.fromHtml(ih.featName + ": <font color='" + NumberTxtColor + "'></font>"));
+                        Preferences.forceSyncString(ih.featName, ih.featNum, "", true);
+                    }
+
+                    // 10. Trigger native Reset All (803) and keep 803 itself unlatched (OFF)
+                    Preferences.triggerResetAllButton(resetName, MODE_RESET);
+                } finally {
+                    Preferences.endBatch(true);
+                    mProgrammaticModeUpdate = false;
+                }
+
+                // Momentary "Done" flash, then return to OFF
+                if (revertRunnable != null) {
+                    resetButton.removeCallbacks(revertRunnable);
+                    resetButton.setBackground(cardBg(withAlpha(ToggleON, 0x1F), withAlpha(ToggleON, 0xCC), 6));
+                    resetButton.setText(Html.fromHtml(resetName + "  <font color='" + hex(ToggleON) + "'><b>Done</b></font>"));
+                    resetButton.postDelayed(revertRunnable, 900);
+                } else {
+                    applyOnOffStyle(resetButton, resetName, false);
+                }
+            }
+        });
     }
     
     // ================================================================
@@ -3577,146 +4347,178 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
         });
         linLayout.addView(button);
     }
-    
-private void setToggleState(int featNum, boolean newState) {
-    ToggleHolder h = mToggles.get(featNum);
-    if (h == null) return;
-    if (h.state[0] == newState) return;
 
-    h.state[0] = newState;
-    h.toggle.setChecked(newState, true);
-    animateStroke(h.rowBg,
-                  newState ? COLOR_CARD_BORDER : withAlpha(ToggleON, 0x99),
-                  newState ? withAlpha(ToggleON, 0x99) : COLOR_CARD_BORDER);
-    Preferences.changeFeatureBool(h.featName, featNum, newState);
-    if (featNum == 710) setTeleportPadVisible(newState);
-}
+    private void setToggleState(int featNum, boolean newState) {
+        setToggleState(featNum, newState, false);
+    }
 
-private void syncToggles(int[] featNums, boolean on) {
-    for (int fn : featNums) setToggleState(fn, on);
-}
-
-private void setSeekBarValue(int featNum, int value) {
-    SeekBarHolder h = mSeekBars.get(featNum);
-    if (h == null) return;
-    if (h.seekBar.getProgress() == value) return;
-    // setProgress() নিজেই onProgressChanged trigger করবে →
-    // chip ও Preferences changeFeatureInt নিজে থেকেই হবে
-    h.seekBar.setProgress(value);
-}
-
-private void setSpinnerValue(int featNum, int index) {
-    SpinnerHolder h = mSpinners.get(featNum);
-    if (h == null) return;
-    if (index < 0 || index >= h.items.length) return;
-
-    h.nameView.setText(h.featName + ": " + h.items[index]);
-
-    // Highlight আপডেট (drop-down খোলা থাকুক বা বন্ধ — দুই অবস্থাতেই)
-    for (int j = 0; j < h.dropdownList.getChildCount(); j++) {
-        View child = h.dropdownList.getChildAt(j);
-        if (child instanceof TextView) {
-            TextView t = (TextView) child;
-            if (j == index) {
-                t.setTextColor(COLOR_ACCENT);
-                t.setBackground(cardBg(withAlpha(COLOR_ACCENT, 0x1A), 0, 4));
-            } else {
-                t.setTextColor(TEXT_COLOR_2);
-                t.setBackground(null);
+    private void setToggleState(int featNum, boolean newState, boolean forceSync) {
+        ToggleHolder h = mToggles.get(featNum);
+        if (h == null) {
+            if (forceSync) {
+                Preferences.forceSyncBool("", featNum, newState, true);
             }
+            return;
+        }
+        if (h.state[0] != newState) {
+            h.state[0] = newState;
+            h.toggle.setChecked(newState, true);
+            animateStroke(h.rowBg,
+                          newState ? COLOR_CARD_BORDER : withAlpha(ToggleON, 0x99),
+                          newState ? withAlpha(ToggleON, 0x99) : COLOR_CARD_BORDER);
+            if (featNum == 710) setTeleportPadVisible(newState);
+        }
+        if (forceSync) {
+            Preferences.forceSyncBool(h.featName, featNum, newState, true);
+        } else {
+            Preferences.changeFeatureBool(h.featName, featNum, newState);
         }
     }
 
-    Preferences.changeFeatureInt(h.featName, featNum, index);
-}
-
-private void applyModeToMenu(int modeFeatNum, boolean enabled) {
-    switch (modeFeatNum) {
-
-        case 800: // Simple Mode
-            if (enabled) {
-                syncToggles(new int[]{104, 110, 150}, true);
-                setSeekBarValue(151, 9999);   // Extra Coins
-                setSeekBarValue(103, 5);      // Jump Height → game 35
-                syncToggles(new int[]{106, 107, 108, 132, 131, 130, 142, 119,
-                                      140, 141, 134, 133, 143, 144}, false);
-                setSeekBarValue(102, 0);
-                setSeekBarValue(145, 0);
-                setSeekBarValue(152, 0);
-                setSeekBarValue(153, 0);
-                setSeekBarValue(160, 0);
-            } else {
-                syncToggles(new int[]{104, 110, 150}, false);
-                setSeekBarValue(151, 0);
-                setSeekBarValue(103, 0);
+    private void setCheckBoxState(int featNum, boolean newState, boolean forceSync) {
+        CheckBoxHolder h = mCheckBoxes.get(featNum);
+        if (h == null) {
+            if (forceSync) {
+                Preferences.forceSyncBool("", featNum, newState, true);
             }
-            break;
-
-        case 801: // Max Mode
-            if (enabled) {
-                syncToggles(new int[]{104, 110, 150, 108, 106, 140}, true);
-                setSeekBarValue(151, 9999);
-                setSeekBarValue(103, 5);
-                setSeekBarValue(102, 999);
-                setSeekBarValue(145, 999);
-                syncToggles(new int[]{107, 132, 131, 130, 142, 119, 141,
-                                      134, 133, 143, 144}, false);
-                setSeekBarValue(152, 0);
-                setSeekBarValue(153, 0);
-                setSeekBarValue(160, 0);
-            } else {
-                syncToggles(new int[]{104, 110, 150, 108, 106, 140}, false);
-                setSeekBarValue(151, 0);
-                setSeekBarValue(103, 0);
-                setSeekBarValue(102, 0);
-                setSeekBarValue(145, 0);
-            }
-            break;
-
-        case 802:
-    if (enabled) {
-        syncToggles(new int[]{104, 110, 150, 108, 106, 140,
-                              130, 131, 132, 142, 119}, true);
-        setSeekBarValue(151, 9999);
-        setSeekBarValue(103, 5);
-        setSeekBarValue(102, 999);
-        setSeekBarValue(145, 999);
-        setSeekBarValue(152, 9999);
-        setSeekBarValue(153, 9999);
-        setSpinnerValue(161, 1);       // ★ SeekBar নয়, Spinner
-        syncToggles(new int[]{107, 141, 134, 133, 143, 144}, false);
-        setSeekBarValue(160, 0);
-            } else {
-                syncToggles(new int[]{104, 110, 150, 108, 106, 140,
-                                      130, 131, 132, 142, 119}, false);
-                setSeekBarValue(151, 0);
-                setSeekBarValue(103, 0);
-                setSeekBarValue(102, 0);
-                setSeekBarValue(145, 0);
-                setSeekBarValue(152, 0);
-                setSeekBarValue(153, 0);
-                setSeekBarValue(161, 0);
-            }
-            break;
-
-        case 803: // Reset All
-            syncToggles(new int[]{
-                    104, 106, 107, 108, 110, 130, 131, 132, 133,
-                    135, 136, 137, 138, 140, 141, 142, 143, 144,
-                    150, 154, 119, 121
-            }, false);
-            setSeekBarValue(102, 0);
-            setSeekBarValue(103, 0);
-            setSeekBarValue(134, 0);
-            setSeekBarValue(145, 0);
-            setSeekBarValue(151, 0);
-            setSeekBarValue(152, 0);
-            setSeekBarValue(153, 0);
-            setSeekBarValue(160, 0);
-            setSeekBarValue(161, 0);
-            break;
+            return;
+        }
+        if (h.checkBox.isChecked() != newState) {
+            h.checkBox.setChecked(newState);
+            animateStroke(h.bg,
+                          newState ? COLOR_CARD_BORDER : withAlpha(CheckBoxColor, 0x99),
+                          newState ? withAlpha(CheckBoxColor, 0x99) : COLOR_CARD_BORDER);
+        }
+        if (forceSync) {
+            Preferences.forceSyncBool(h.featName, featNum, newState, true);
+        } else {
+            Preferences.changeFeatureBool(h.featName, featNum, newState);
+        }
     }
-}
+
+    private void setSeekBarValue(int featNum, int value) {
+        setSeekBarValue(featNum, value, false);
+    }
+
+    private void setSeekBarValue(int featNum, int value, boolean forceSync) {
+        SeekBarHolder h = mSeekBars.get(featNum);
+        if (h == null) {
+            if (forceSync) {
+                Preferences.forceSyncInt("", featNum, value, true);
+            }
+            return;
+        }
+        int clamped = value;
+        if (clamped < h.min) clamped = h.min;
+        if (clamped > h.max) clamped = h.max;
+        if (h.seekBar.getProgress() != clamped) {
+            h.seekBar.setProgress(clamped);
+            int disp = (featNum == 103) ? (clamped + 30) : clamped;
+            h.chip.setText(String.valueOf(disp));
+        }
+        if (forceSync) {
+            Preferences.forceSyncInt(h.featName, featNum, clamped, true);
+        } else {
+            Preferences.changeFeatureInt(h.featName, featNum, clamped);
+        }
+    }
+
+    private void setSpinnerValue(int featNum, int index) {
+        setSpinnerValue(featNum, index, false);
+    }
+
+    private void setSpinnerValue(int featNum, int index, boolean forceSync) {
+        SpinnerHolder h = mSpinners.get(featNum);
+        if (h == null) {
+            if (forceSync) {
+                Preferences.forceSyncInt("", featNum, index, true);
+            }
+            return;
+        }
+        if (index < 0 || index >= h.items.length) return;
+
+        if (h.currentIdx != index) {
+            h.currentIdx = index;
+            h.nameView.setText(h.featName + ": " + h.items[index]);
+            for (int j = 0; j < h.dropdownList.getChildCount(); j++) {
+                View child = h.dropdownList.getChildAt(j);
+                if (child instanceof TextView) {
+                    TextView t = (TextView) child;
+                    if (j == index) {
+                        t.setTextColor(COLOR_ACCENT);
+                        t.setBackground(cardBg(withAlpha(COLOR_ACCENT, 0x1A), 0, 4));
+                    } else {
+                        t.setTextColor(TEXT_COLOR_2);
+                        t.setBackground(null);
+                    }
+                }
+            }
+        }
+        if (forceSync) {
+            Preferences.forceSyncInt(h.featName, featNum, index, true);
+        } else {
+            Preferences.changeFeatureInt(h.featName, featNum, index);
+        }
+    }
+
+    private void setColorPickerValue(int featNum, int color, boolean forceSync) {
+        ColorPickerHolder h = mColorPickers.get(featNum);
+        if (h == null) {
+            if (forceSync) {
+                Preferences.forceSyncColor("", featNum, color, true);
+            }
+            return;
+        }
+        if (h.currentColor != color) {
+            h.currentColor = color;
+            applyColorButton(h.button, h.featName, color);
+        }
+        if (forceSync) {
+            Preferences.forceSyncColor(h.featName, featNum, color, true);
+        } else {
+            Preferences.changeFeatureColor(h.featName, featNum, color);
+        }
+    }
+
+    private void applyModeToMenu(final int modeFeatNum, final boolean enabled) {
+        runOnMainThread(new Runnable() {
+            @Override
+            public void run() {
+                if (mProgrammaticModeUpdate) return;
+                mProgrammaticModeUpdate = true;
+                Preferences.beginBatch();
+                try {
+                    applyModeToMenuInternal(modeFeatNum, enabled);
+                } finally {
+                    Preferences.endBatch(true);
+                    mProgrammaticModeUpdate = false;
+                }
+            }
+        });
+    }
+
+    private void applyModeToMenuInternal(int modeFeatNum, boolean enabled) {
+        PresetItem[] items = MODE_PRESETS.get(modeFeatNum);
+        if (items == null) return;
+        for (int i = 0; i < items.length; i++) {
+            PresetItem item = items[i];
+            int targetVal = enabled ? item.onValue : item.offValue;
+            switch (item.type) {
+                case PRESET_TOGGLE:
+                    setToggleState(item.featNum, targetVal != 0, true);
+                    break;
+                case PRESET_SEEKBAR:
+                    setSeekBarValue(item.featNum, targetVal, true);
+                    break;
+                case PRESET_SPINNER:
+                    setSpinnerValue(item.featNum, targetVal, true);
+                    break;
+                case PRESET_COLOR:
+                    setColorPickerValue(item.featNum, targetVal, true);
+                    break;
+            }
+        }
+    }
          // ================================================================
     // Perfect Inline Dropdown (No PopupWindow, No Bugs)
     // ================================================================
@@ -3739,7 +4541,7 @@ private void applyModeToMenu(int modeFeatNum, boolean enabled) {
     final TextView tvName = new TextView(ctx);
     tvName.setTextColor(TEXT_COLOR_2);
     tvName.setTypeface(fontMedium);
-    tvName.setTextSize(12f * currentScale);
+    tvName.setTextSize(12f);
     tvName.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
 
     final ImageView arrowIv = new ImageView(ctx);
@@ -3751,7 +4553,7 @@ private void applyModeToMenu(int modeFeatNum, boolean enabled) {
     spinnerRow.addView(tvName);
     spinnerRow.addView(arrowIv);
 
-    final int savedIdx = Preferences.loadPrefInt(featName, featNum);
+    final int savedIdx = Preferences.readInitialInt(featName, featNum, 0);
     final int initIdx = (savedIdx >= 0 && savedIdx < lists.size()) ? savedIdx : 0;
     tvName.setText(featName + ": " + lists.get(initIdx));
 
@@ -3772,7 +4574,7 @@ private void applyModeToMenu(int modeFeatNum, boolean enabled) {
         tv.setText(lists.get(i));
         tv.setTextColor(TEXT_COLOR_2);
         tv.setTypeface(fontMedium);
-        tv.setTextSize(12f * currentScale);
+        tv.setTextSize(12f);
         tv.setPadding(dp(12), dp(12), dp(12), dp(12));
         
         if (index == initIdx) {
@@ -3810,7 +4612,9 @@ private void applyModeToMenu(int modeFeatNum, boolean enabled) {
     spHolder.featName     = featName;
     spHolder.nameView     = tvName;
     spHolder.dropdownList = dropdownList;
+    spHolder.chevIcon     = chevIcon;
     spHolder.items        = lists.toArray(new String[0]);
+    spHolder.currentIdx   = initIdx;
     mSpinners.put(featNum, spHolder);
 
     container.addView(spinnerRow);
@@ -3826,7 +4630,7 @@ private void applyModeToMenu(int modeFeatNum, boolean enabled) {
         final Button button = new Button(getContext);
         button.setMinHeight(0);
         button.setMinimumHeight(0);
-        int num = Preferences.loadPrefInt(featName, featNum);
+        int num = Preferences.readInitialInt(featName, featNum, 0);
         button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>" + num + "</font>"));
         button.setAllCaps(false);
         button.setLayoutParams(rowLp(6, 4, 6, 4));
@@ -3837,6 +4641,12 @@ private void applyModeToMenu(int modeFeatNum, boolean enabled) {
         button.setTextColor(TEXT_COLOR_2);
         flatten(button);
         addPressAnim(button);
+        final InputHolder inHolder = new InputHolder();
+        inHolder.featNum          = featNum;
+        inHolder.featName         = featName;
+        inHolder.button           = button;
+        inHolder.currentValueText = String.valueOf(num);
+        mInputNums.put(featNum, inHolder);
         button.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View view) {
@@ -3854,6 +4664,7 @@ private void applyModeToMenu(int modeFeatNum, boolean enabled) {
                                     num = Integer.parseInt(inp.isEmpty() ? "0" : inp);
                                     if (maxValue != 0 && num >= maxValue) num = maxValue;
                                 } catch (NumberFormatException ex) { num = maxValue != 0 ? maxValue : Integer.MAX_VALUE; }
+                                inHolder.currentValueText = String.valueOf(num);
                                 button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>" + num + "</font>"));
                                 Preferences.changeFeatureInt(featName, featNum, num);
                             }
@@ -3867,7 +4678,7 @@ private void applyModeToMenu(int modeFeatNum, boolean enabled) {
         final Button button = new Button(getContext);
         button.setMinHeight(0);
         button.setMinimumHeight(0);
-        long num = Preferences.loadPrefLong(featName, featNum);
+        long num = Preferences.readInitialLong(featName, featNum, 0L);
         button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>" + num + "</font>"));
         button.setAllCaps(false);
         button.setLayoutParams(rowLp(6, 4, 6, 4));
@@ -3878,6 +4689,12 @@ private void applyModeToMenu(int modeFeatNum, boolean enabled) {
         button.setTextColor(TEXT_COLOR_2);
         flatten(button);
         addPressAnim(button);
+        final InputHolder ilHolder = new InputHolder();
+        ilHolder.featNum          = featNum;
+        ilHolder.featName         = featName;
+        ilHolder.button           = button;
+        ilHolder.currentValueText = String.valueOf(num);
+        mInputLNums.put(featNum, ilHolder);
         button.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View view) {
@@ -3895,6 +4712,7 @@ private void applyModeToMenu(int modeFeatNum, boolean enabled) {
                                     num = Long.parseLong(inp.isEmpty() ? "0" : inp);
                                     if (maxValue != 0 && num >= maxValue) num = maxValue;
                                 } catch (NumberFormatException ex) { num = maxValue != 0 ? maxValue : Long.MAX_VALUE; }
+                                ilHolder.currentValueText = String.valueOf(num);
                                 button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>" + num + "</font>"));
                                 Preferences.changeFeatureLong(featName, featNum, num);
                             }
@@ -3908,7 +4726,7 @@ private void applyModeToMenu(int modeFeatNum, boolean enabled) {
         final Button button = new Button(getContext);
         button.setMinHeight(0);
         button.setMinimumHeight(0);
-        String string = Preferences.loadPrefString(featName, featNum);
+        String string = Preferences.readInitialString(featName, featNum, "");
         button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>" + string + "</font>"));
         button.setAllCaps(false);
         button.setLayoutParams(rowLp(6, 4, 6, 4));
@@ -3919,6 +4737,12 @@ private void applyModeToMenu(int modeFeatNum, boolean enabled) {
         button.setTextColor(TEXT_COLOR_2);
         flatten(button);
         addPressAnim(button);
+        final InputHolder itHolder = new InputHolder();
+        itHolder.featNum          = featNum;
+        itHolder.featName         = featName;
+        itHolder.button           = button;
+        itHolder.currentValueText = (string != null) ? string : "";
+        mInputTexts.put(featNum, itHolder);
         button.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View view) {
@@ -3927,6 +4751,7 @@ private void applyModeToMenu(int modeFeatNum, boolean enabled) {
                             @Override
                             public void run() {
                                 String str = editText.getText().toString();
+                                itHolder.currentValueText = str;
                                 button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>" + str + "</font>"));
                                 Preferences.changeFeatureString(featName, featNum, str);
                             }
@@ -3947,10 +4772,9 @@ private void applyModeToMenu(int modeFeatNum, boolean enabled) {
         checkBox.setTextSize(12f);
         checkBox.setPadding(dp(10), dp(9), dp(10), dp(9));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) checkBox.setButtonTintList(ColorStateList.valueOf(CheckBoxColor));
-        boolean initial = Preferences.loadPrefBool(featName, featNum, switchedOn);
+        boolean initial = Preferences.readInitialBool(featName, featNum, switchedOn);
         checkBox.setChecked(initial);
-                // ★ Native-এ initial state
-        
+
         if (initial) cbBg.setStroke(dp(1), withAlpha(CheckBoxColor, 0x99));
         checkBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
                 @Override
@@ -3958,10 +4782,18 @@ private void applyModeToMenu(int modeFeatNum, boolean enabled) {
                     animateStroke(cbBg,
                                   isChecked ? COLOR_CARD_BORDER : withAlpha(CheckBoxColor, 0x99),
                                   isChecked ? withAlpha(CheckBoxColor, 0x99) : COLOR_CARD_BORDER);
-                    Preferences.changeFeatureBool(featName, featNum, isChecked);
-                    
+                    if (!mProgrammaticModeUpdate) {
+                        Preferences.changeFeatureBool(featName, featNum, isChecked);
+                    }
                 }
             });
+        CheckBoxHolder cbHolder = new CheckBoxHolder();
+        cbHolder.featNum    = featNum;
+        cbHolder.featName   = featName;
+        cbHolder.checkBox   = checkBox;
+        cbHolder.bg         = cbBg;
+        cbHolder.defaultVal = switchedOn;
+        mCheckBoxes.put(featNum, cbHolder);
         linLayout.addView(checkBox);
     }
 
@@ -3979,11 +4811,17 @@ private void applyModeToMenu(int modeFeatNum, boolean enabled) {
         radioGroup.setPadding(dp(12), dp(8), dp(12), dp(8));
         radioGroup.setOrientation(LinearLayout.VERTICAL);
         radioGroup.addView(textView);
+        final RadioGroupHolder rgHolder = new RadioGroupHolder();
+        rgHolder.featNum    = featNum;
+        rgHolder.featName   = featName;
+        rgHolder.radioGroup = radioGroup;
+        rgHolder.titleView  = textView;
         for (int i = 0; i < lists.size(); i++) {
             final RadioButton Radioo = new RadioButton(getContext);
             final String finalfeatName = featName, radioName = lists.get(i);
             View.OnClickListener rl = new View.OnClickListener() {
                 public void onClick(View v) {
+                    rgHolder.selectedName = radioName;
                     textView.setText(Html.fromHtml(finalfeatName + ": <font color='" + NumberTxtColor + "'>" + radioName));
                     Preferences.changeFeatureInt(finalfeatName, featNum, radioGroup.indexOfChild(Radioo));
                 }
@@ -3996,11 +4834,13 @@ private void applyModeToMenu(int modeFeatNum, boolean enabled) {
             Radioo.setOnClickListener(rl);
             radioGroup.addView(Radioo);
         }
-        int index = Preferences.loadPrefInt(featName, featNum);
-        if (index > 0) {
+        int index = Preferences.readInitialInt(featName, featNum, 0);
+        if (index > 0 && index <= lists.size() && index < radioGroup.getChildCount()) {
+            rgHolder.selectedName = lists.get(index - 1);
             textView.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>" + lists.get(index - 1)));
             ((RadioButton) radioGroup.getChildAt(index)).setChecked(true);
         }
+        mRadioGroups.put(featNum, rgHolder);
         linLayout.addView(radioGroup);
     }
 
@@ -4110,6 +4950,12 @@ private void applyModeToMenu(int modeFeatNum, boolean enabled) {
             });
         addPressAnim(headRow);
 
+        CollapseHolder ch = new CollapseHolder();
+        ch.headRow   = headRow;
+        ch.titleView = textView;
+        ch.chevIcon  = chevIcon;
+        mCollapseHolders.add(ch);
+
         headRow.addView(textView);
         headRow.addView(chevron);
         collapse.addView(headRow);
@@ -4128,6 +4974,7 @@ private void applyModeToMenu(int modeFeatNum, boolean enabled) {
         textView.setTypeface(fontBold);
         textView.setTextSize(12f);
         textView.setPadding(0, dp(7), 0, dp(7));
+        mCategoryViews.add(textView);
         linLayout.addView(textView);
     }
 
@@ -4210,23 +5057,24 @@ private static int lighten(int color, float factor) {
 }
 
 /**
- * Live preview — wheel থেকে drag করার সময় সাথে সাথে apply,
- * কিন্তু rebuild হয় না (খুব দ্রুত responsive)।
+ * Live preview — palette থেকে drag করার সময় সাথে সাথে in-place apply,
+ * কিন্তু rebuild বা disk write হয় না।
  */
 private void applyMenuColorLive(int baseColor) {
-    COLOR_ACCENT   = baseColor;
-    COLOR_ACCENT_2 = darken(baseColor, 0.65f);
-    COLOR_ACCENT_3 = lighten(baseColor, 0.35f);
-    TEXT_COLOR = baseColor;
-    BTN_COLOR  = baseColor;
-    BORDER_COLOR = baseColor;
-    SeekBarColor = baseColor;
-    SeekBarProgressColor = baseColor;
-    CheckBoxColor = baseColor;
-    RadioColor    = baseColor;
-    NumberTxtColor = String.format("#%06X", (0xFFFFFF & baseColor));
+    int safeColor = ensureReadableAccent(baseColor);
+    COLOR_ACCENT   = safeColor;
+    COLOR_ACCENT_2 = darken(safeColor, 0.65f);
+    COLOR_ACCENT_3 = lighten(safeColor, 0.35f);
+    TEXT_COLOR = safeColor;
+    BTN_COLOR  = safeColor;
+    BORDER_COLOR = safeColor;
+    SeekBarColor = safeColor;
+    SeekBarProgressColor = safeColor;
+    CheckBoxColor = safeColor;
+    RadioColor    = safeColor;
+    NumberTxtColor = String.format("#%06X", (0xFFFFFF & safeColor));
 
-    // Header colors live update
+    // Header & chrome live update
     updateHeaderColors();
 
     // Resize handle grip
@@ -4234,38 +5082,156 @@ private void applyMenuColorLive(int baseColor) {
         resizeHandle.setBackground(makeGripDrawable(withAlpha(COLOR_ACCENT, 0xE0), dpf(1.7f)));
     }
 
-    // Glow frame accent
-    if (glowDrawable != null) {
-        // glow is now fixed green, don't touch
-    }
-
-    // Sidebar tab colors update (rebuild styleTab)
+    // Sidebar tab colors update
     for (TabHolder h : tabHolders) styleTab(h, isTabSelected(h));
+
+    // Update all content controls in-place (zero rebuild, zero scroll jump, zero native call)
+    updateThemedControlsInPlace();
+}
+
+private void updateThemedControlsInPlace() {
+    if (mMenuColorBtn != null) {
+        applyMenuColorButtonStyle(mMenuColorBtn, "Menu Color", COLOR_ACCENT);
+    }
+    for (ToggleHolder th : mToggles.values()) {
+        if (th.toggle != null) {
+            th.toggle.setColors(COLOR_ACCENT, COLOR_ACCENT_3, COLOR_TRACK);
+        }
+    }
+    for (SeekBarHolder sb : mSeekBars.values()) {
+        if (sb.trackDrawable != null) {
+            sb.trackDrawable.setColors(COLOR_ACCENT, COLOR_SUCCESS);
+        }
+        if (sb.thumbGlow != null) {
+            sb.thumbGlow.setColor(withAlpha(COLOR_ACCENT, 0x44));
+        }
+        if (sb.thumbCore != null) {
+            sb.thumbCore.setStroke(dp(3), COLOR_ACCENT);
+        }
+        if (sb.seekBar != null) {
+            sb.seekBar.invalidate();
+        }
+        if (sb.chip != null) {
+            sb.chip.setTextColor(COLOR_ACCENT);
+            sb.chip.setBackground(cardBg(withAlpha(COLOR_ACCENT, 0x18), withAlpha(COLOR_ACCENT, 0x66), 8));
+        }
+    }
+    for (SpinnerHolder sp : mSpinners.values()) {
+        if (sp.chevIcon != null) {
+            sp.chevIcon.setColor(COLOR_ACCENT);
+        }
+        if (sp.dropdownList != null) {
+            sp.dropdownList.setBackground(cardBg(COLOR_BG_TOP, withAlpha(COLOR_ACCENT, 0xAA), 8));
+            for (int j = 0; j < sp.dropdownList.getChildCount(); j++) {
+                View child = sp.dropdownList.getChildAt(j);
+                if (child instanceof TextView) {
+                    TextView tv = (TextView) child;
+                    if (j == sp.currentIdx) {
+                        tv.setTextColor(COLOR_ACCENT);
+                        tv.setBackground(cardBg(withAlpha(COLOR_ACCENT, 0x1A), 0, 4));
+                    } else {
+                        tv.setTextColor(TEXT_COLOR_2);
+                        tv.setBackground(null);
+                    }
+                }
+            }
+        }
+    }
+    for (CheckBoxHolder cb : mCheckBoxes.values()) {
+        if (cb.checkBox != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                cb.checkBox.setButtonTintList(ColorStateList.valueOf(CheckBoxColor));
+            }
+            if (cb.bg != null && cb.checkBox.isChecked()) {
+                cb.bg.setStroke(dp(1), withAlpha(CheckBoxColor, 0x99));
+            }
+        }
+    }
+    for (RadioGroupHolder rg : mRadioGroups.values()) {
+        if (rg.radioGroup != null) {
+            for (int i = 0; i < rg.radioGroup.getChildCount(); i++) {
+                View c = rg.radioGroup.getChildAt(i);
+                if (c instanceof RadioButton && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    ((RadioButton) c).setButtonTintList(ColorStateList.valueOf(RadioColor));
+                }
+            }
+        }
+        if (rg.titleView != null && rg.selectedName != null) {
+            rg.titleView.setText(Html.fromHtml(rg.featName + ": <font color='" + NumberTxtColor + "'>" + rg.selectedName));
+        }
+    }
+    updateInputHoldersTheme(mInputNums);
+    updateInputHoldersTheme(mInputLNums);
+    updateInputHoldersTheme(mInputTexts);
+
+    for (TextView catTv : mCategoryViews) {
+        if (catTv != null) {
+            GradientDrawable catBg = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+                    new int[]{withAlpha(COLOR_ACCENT, 0x00), withAlpha(COLOR_ACCENT, 0x2A), withAlpha(COLOR_ACCENT_2, 0x00)});
+            catTv.setBackground(catBg);
+            catTv.setTextColor(COLOR_ACCENT);
+        }
+    }
+    for (CollapseHolder ch : mCollapseHolders) {
+        if (ch.headRow != null) {
+            GradientDrawable colBg = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+                    new int[]{CollapseColor, withAlpha(COLOR_ACCENT_2, 0x30)});
+            colBg.setCornerRadius(dp(6));
+            colBg.setStroke(dp(1), withAlpha(COLOR_ACCENT, 0x77));
+            ch.headRow.setBackground(colBg);
+        }
+        if (ch.titleView != null) {
+            ch.titleView.setTextColor(COLOR_ACCENT);
+        }
+        if (ch.chevIcon != null) {
+            ch.chevIcon.setColor(COLOR_ACCENT);
+        }
+    }
+    for (Button lb : mLinkButtons) {
+        if (lb != null) {
+            lb.setTextColor(COLOR_ACCENT);
+            lb.setBackground(cardBg(withAlpha(COLOR_ACCENT, 0x14), withAlpha(COLOR_ACCENT, 0x88), 6));
+        }
+    }
+    if (mMenuTeleportPad != null) {
+        mMenuTeleportPad.setAccentColor(COLOR_ACCENT);
+    }
+}
+
+private void updateInputHoldersTheme(HashMap<Integer, InputHolder> map) {
+    for (InputHolder ih : map.values()) {
+        if (ih.button != null) {
+            ih.button.setBackground(cardBg(COLOR_CARD, withAlpha(COLOR_ACCENT, 0x66), 6));
+            ih.button.setText(Html.fromHtml(ih.featName + ": <font color='" + NumberTxtColor + "'>"
+                    + TextUtils.htmlEncode(ih.currentValueText != null ? ih.currentValueText : "") + "</font>"));
+        }
+    }
+}
+
+private void resetMenuColorToDefaultInPlace() {
+    int defAccent = ensureReadableAccent(FeatureStateStore.DEFAULT_MENU_COLOR);
+    mCurrentHueF = getHueFromColor(defAccent);
+    applyMenuColorLive(defAccent);
+    Preferences.setMenuAccentColor(defAccent);
+    Toast.makeText(getContext,
+            Preferences.isSaveEnabled() ? "Menu color reset & saved" : "Menu color reset",
+            Toast.LENGTH_SHORT).show();
 }
 
 /**
- * Commit — wheel থেকে আঙুল ছাড়ার সময়; SharedPreferences এ save করে,
- * theme rebuild করে।
+ * Commit — Apply ট্যাপ করলে theme in-place apply ও (Save ON থাকলে) persist হয়।
+ * কোনো rebuild, tab jump, scroll reset বা native call হয় না।
  */
 private void applyMenuColor(final int baseColor) {
-    applyMenuColorLive(baseColor);
+    int safeAccent = ensureReadableAccent(baseColor);
+    mCurrentHueF = getHueFromColor(safeAccent);
+    applyMenuColorLive(safeAccent);
+    Preferences.recordMenuColorUsed(safeAccent);
+    Preferences.setMenuAccentColor(safeAccent);
 
-    getContext.getSharedPreferences("menu_theme", Context.MODE_PRIVATE)
-        .edit().putInt("accent", baseColor).apply();
-
-    // Rebuild-কে main thread এর পরের tick এ schedule করি
-    // যাতে touch gesture আগে নিরাপদে শেষ হতে পারে
-    menuFrame.post(new Runnable() {
-        @Override
-        public void run() {
-            try {
-                buildFeaturesAndCategories(GetFeatureList());
-                selectTabByName("Settings");
-            } catch (Exception ignored) { }
-        }
-    });
-
-    Toast.makeText(getContext, "Menu color updated", Toast.LENGTH_SHORT).show();
+    Toast.makeText(getContext,
+            Preferences.isSaveEnabled() ? "Menu color saved" : "Menu color applied",
+            Toast.LENGTH_SHORT).show();
 }
 
 private boolean isTabSelected(TabHolder h) {
@@ -4328,31 +5294,19 @@ private void updateHeaderColors() {
         mHideBtn.setTextColor(DANGER_BRIGHT);
     }
 
-    // ---- Shimmer line (needs replacement because colors are final) ----
-    if (mShimmerViewRef != null && mShimmerViewRef.getParent() instanceof ViewGroup) {
-        try {
-            ViewGroup parent = (ViewGroup) mShimmerViewRef.getParent();
-            int idx = parent.indexOfChild(mShimmerViewRef);
-            if (idx >= 0) {
-                parent.removeView(mShimmerViewRef);
-
-                ShimmerLine newShimmer =
-                        new ShimmerLine(getContext, COLOR_ACCENT, COLOR_ACCENT_2);
-                LinearLayout.LayoutParams shimmerLp =
-                        new LinearLayout.LayoutParams(MATCH_PARENT, dp(2));
-                shimmerLp.setMargins(dp(12), 0, dp(12), 0);
-                newShimmer.setLayoutParams(shimmerLp);
-
-                parent.addView(newShimmer, idx);
-                mShimmerViewRef = newShimmer;
-                mShimmerView = newShimmer;
-            }
-        } catch (Exception ignored) { }
+    // ---- Shimmer line (update colors in-place, zero view churn) ----
+    if (mShimmerViewRef instanceof ShimmerLine) {
+        ((ShimmerLine) mShimmerViewRef).setColors(COLOR_ACCENT, COLOR_ACCENT_2);
     }
 
-    // ---- Sidebar divider ----
+    // ---- Dividers ----
     if (sidebarDivider != null) {
         sidebarDivider.setBackgroundColor(withAlpha(COLOR_ACCENT, 0x24));
+    }
+    if (mBottomDivider != null) {
+        GradientDrawable line = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+                new int[]{withAlpha(COLOR_ACCENT, 0x00), withAlpha(COLOR_ACCENT, 0x70), withAlpha(COLOR_ACCENT_2, 0x70), withAlpha(COLOR_ACCENT_2, 0x00)});
+        mBottomDivider.setBackground(line);
     }
         // ---- Scrollbar colors (both sidebar & content) ----
     if (sidebarScroll instanceof SlimScrollView) {
@@ -4362,267 +5316,1012 @@ private void updateHeaderColors() {
         ((SlimScrollView) contentScrollView).setAccentColor(COLOR_ACCENT);
     }
 }
+
 // ================================================================
-// Color Wheel / Pie Chart
-// ----------------------------------------------------------------
-//  • Hue ring (0-360°) with white marker
-//  • Center swatch shows current color
-//  • Touch inside ring → live color change
-//  • Release → commit (save + rebuild UI)
+// Hue Ring View (strict ring hit-test, zero onDraw allocations)
 // ================================================================
 private static class ColorWheelView extends View {
-    interface Listener { void onColorChanged(int hueDegrees, int color); }
+    interface Listener {
+        void onHueChanged(float hueDegrees, boolean fromCancel);
+    }
 
-    private final Paint ringPaint   = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint centerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint markerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint markRingPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final RectF ringRect = new RectF();
+    private static final int[] HUE_RING_COLORS = new int[13];
+    static {
+        float[] tmp = new float[]{ 0f, 1f, 1f };
+        for (int i = 0; i <= 12; i++) {
+            tmp[0] = (i == 12) ? 0f : (i * 30f);
+            HUE_RING_COLORS[i] = Color.HSVToColor(tmp);
+        }
+    }
+
+    private final Paint ringPaint       = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint borderPaint     = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint centerPaint     = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint centerRingPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint markerFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint markerWhitePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint markerDarkPaint  = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final float[] markerHsv = new float[]{ 0f, 1f, 1f };
+
     private final float density;
-    private final float ringWidth;
-    private SweepGradient sweep;
-    private float currentHue = 145f;   // 0..360
-    private Listener liveListener;
-    private Listener commitListener;
+    private SweepGradient sweepShader;
+    private float cx, cy, outerR, ringWidth, ringMidR, innerR, swatchR, hitInnerR, hitOuterR;
+    private float currentHue = 145f;
+    private float preDragHue = 145f;
+    private int previewColor = 0xFF3DDB87;
+    private int lastHapticStep = -1;
     private boolean dragging = false;
+    private Listener listener;
 
-    ColorWheelView(Context ctx, float initialHue) {
+    ColorWheelView(Context ctx, float initialHue, int initialColor) {
         super(ctx);
         this.density = safeDisplayMetrics(ctx).density;
-        this.ringWidth = 30f * density;
-        this.currentHue = ((initialHue % 360f) + 360f) % 360f;
+        this.currentHue = normalizeHue(initialHue);
+        this.previewColor = 0xFF000000 | initialColor;
+        setHapticFeedbackEnabled(true);
 
-        markerPaint.setStyle(Paint.Style.FILL);
-        markRingPaint.setStyle(Paint.Style.STROKE);
-        markRingPaint.setStrokeWidth(2f * density);
-        markRingPaint.setColor(0xFF000000);
+        ringPaint.setStyle(Paint.Style.STROKE);
+        borderPaint.setStyle(Paint.Style.STROKE);
+        borderPaint.setStrokeWidth(1.2f * density);
+        borderPaint.setColor(0x66000000);
+
         centerPaint.setStyle(Paint.Style.FILL);
-        ringPaint.setStyle(Paint.Style.STROKE);
-        ringPaint.setStrokeWidth(ringWidth);
+        centerRingPaint.setStyle(Paint.Style.STROKE);
+        centerRingPaint.setStrokeWidth(1.5f * density);
+        centerRingPaint.setColor(0x55FFFFFF);
+
+        markerFillPaint.setStyle(Paint.Style.FILL);
+        markerWhitePaint.setStyle(Paint.Style.STROKE);
+        markerWhitePaint.setStrokeWidth(2.6f * density);
+        markerWhitePaint.setColor(0xFFFFFFFF);
+
+        markerDarkPaint.setStyle(Paint.Style.STROKE);
+        markerDarkPaint.setStrokeWidth(1.4f * density);
+        markerDarkPaint.setColor(0xCC000000);
     }
 
-    void setListener(Listener l)       { liveListener = l; }
-    void setCommitListener(Listener l) { commitListener = l; }
-
-    private int hueToHsv(int hueDeg) {
-    // Hue + fixed S/L for vibrant, readable colors
-    return Color.HSVToColor(new float[]{hueDeg, 0.72f, 0.86f});
-}
-
-    
-
-        @Override
-    protected void onDraw(Canvas canvas) {
-        int w = getWidth();
-        int h = getHeight();
-        if (w <= 0 || h <= 0) return;
-
-        int[] hues = new int[13];
-for (int i = 0; i <= 12; i++) {
-    hues[i] = Color.HSVToColor(new float[]{i * 30f, 0.72f, 0.86f});
-}
-sweep = new SweepGradient(w / 2f, h / 2f, hues, null);
-sweep.setLocalMatrix(new Matrix());   // ← force fresh shader
-ringPaint.setShader(sweep);            // ← shader আগেই সেট করে দিন
-
-        float cx = w / 2f;
-        float cy = h / 2f;
-        float radius = Math.min(w, h) / 2f - 6f * density;
-
-        // Hue ring
-        ringRect.set(cx - radius, cy - radius, cx + radius, cy + radius);
-        ringPaint.setShader(sweep);
-canvas.drawCircle(cx, cy, radius - ringWidth / 2f, ringPaint);
-ringPaint.setShader(null);
-
-        // Outer thin border
-
-        // Outer thin border
-        ringPaint.setStyle(Paint.Style.STROKE);
-        ringPaint.setStrokeWidth(1f * density);
-        ringPaint.setColor(0x55000000);
-        canvas.drawCircle(cx, cy, radius, ringPaint);
-        canvas.drawCircle(cx, cy, radius - ringWidth, ringPaint);
-
-        // Center swatch
-        float innerR = radius - ringWidth - 6f * density;
-        centerPaint.setColor(hueToHsv((int) currentHue));
-        canvas.drawCircle(cx, cy, innerR, centerPaint);
-
-        // Marker on hue ring
-        double a = Math.toRadians(currentHue);
-        float markerRadius = radius - ringWidth / 2f;
-        float mx = cx + (float) Math.cos(a) * markerRadius;
-        float my = cy + (float) Math.sin(a) * markerRadius;
-        markerPaint.setColor(0xFFFFFFFF);
-        canvas.drawCircle(mx, my, 9f * density, markerPaint);
-        canvas.drawCircle(mx, my, 9f * density, markRingPaint);
-
-        // Small dark dot inside marker (preview of picked color)
-        markerPaint.setColor(hueToHsv((int) currentHue));
-        canvas.drawCircle(mx, my, 5f * density, markerPaint);
+    private static float normalizeHue(float h) {
+        float r = h % 360f;
+        return (r < 0f) ? (r + 360f) : r;
     }
 
-    private void pick(MotionEvent e, boolean commit) {
-        float cx = getWidth() / 2f;
-        float cy = getHeight() / 2f;
-        float dx = e.getX() - cx;
-        float dy = e.getY() - cy;
-        float angle = (float) Math.toDegrees(Math.atan2(dy, dx));
-        if (angle < 0) angle += 360f;
-        currentHue = angle;
-        int color = hueToHsv((int) currentHue);
+    void setListener(Listener l) {
+        this.listener = l;
+    }
+
+    void setState(float hue, int previewColor) {
+        this.currentHue = normalizeHue(hue);
+        this.previewColor = 0xFF000000 | previewColor;
         invalidate();
+    }
 
-        if (commit) {
-            if (commitListener != null) commitListener.onColorChanged((int) currentHue, color);
-        } else {
-            if (liveListener != null) liveListener.onColorChanged((int) currentHue, color);
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        if (w <= 0 || h <= 0) return;
+        cx = w * 0.5f;
+        cy = h * 0.5f;
+        outerR = Math.min(w, h) * 0.5f - 10f * density;
+        if (outerR < 24f * density) outerR = 24f * density;
+        ringWidth = Math.max(22f * density, Math.min(28f * density, outerR * 0.27f));
+        ringPaint.setStrokeWidth(ringWidth);
+        ringMidR = outerR - ringWidth * 0.5f;
+        innerR = outerR - ringWidth;
+        swatchR = Math.max(0f, innerR - 9f * density);
+
+        // Strict hit band around the ring only (ignores center swatch & outside dead zones)
+        hitInnerR = Math.max(swatchR + 2f * density, innerR - 6f * density);
+        hitOuterR = outerR + 8f * density;
+
+        sweepShader = new SweepGradient(cx, cy, HUE_RING_COLORS, null);
+        ringPaint.setShader(sweepShader);
+    }
+
+    @Override
+    protected void onDraw(Canvas canvas) {
+        if (sweepShader == null || outerR <= 0f) return;
+
+        // 1. Hue Ring
+        canvas.drawCircle(cx, cy, ringMidR, ringPaint);
+        canvas.drawCircle(cx, cy, outerR, borderPaint);
+        canvas.drawCircle(cx, cy, innerR, borderPaint);
+
+        // 2. Center live preview swatch (dead zone for ring touch)
+        if (swatchR > 2f * density) {
+            centerPaint.setColor(previewColor);
+            canvas.drawCircle(cx, cy, swatchR, centerPaint);
+            canvas.drawCircle(cx, cy, swatchR, centerRingPaint);
+        }
+
+        // 3. Large high-contrast marker on hue ring
+        double rad = Math.toRadians(currentHue);
+        float mx = cx + (float) Math.cos(rad) * ringMidR;
+        float my = cy + (float) Math.sin(rad) * ringMidR;
+        float mr = Math.max(9.5f * density, ringWidth * 0.43f);
+
+        markerHsv[0] = currentHue;
+        markerHsv[1] = 1f;
+        markerHsv[2] = 1f;
+        markerFillPaint.setColor(Color.HSVToColor(markerHsv));
+        canvas.drawCircle(mx, my, mr, markerFillPaint);
+        canvas.drawCircle(mx, my, mr, markerWhitePaint);
+        canvas.drawCircle(mx, my, mr + 1.6f * density, markerDarkPaint);
+    }
+
+    private float angleFromPoint(float x, float y) {
+        float deg = (float) Math.toDegrees(Math.atan2(y - cy, x - cx));
+        return normalizeHue(deg);
+    }
+
+    private void tickHaptic(boolean force) {
+        int step = Math.round(currentHue / 15f);
+        if (force || step != lastHapticStep) {
+            lastHapticStep = step;
+            try {
+                performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+            } catch (Throwable ignored) { }
         }
     }
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        switch (event.getActionMasked()) {
-            case MotionEvent.ACTION_DOWN:
+        int action = event.getActionMasked();
+        switch (action) {
+            case MotionEvent.ACTION_DOWN: {
+                float dx = event.getX() - cx;
+                float dy = event.getY() - cy;
+                float dist = (float) Math.hypot(dx, dy);
+                // Ignore center swatch, gap, and outside corners completely
+                if (dist < hitInnerR || dist > hitOuterR) {
+                    return false;
+                }
                 dragging = true;
-                getParent().requestDisallowInterceptTouchEvent(true);
-                pick(event, false);
+                preDragHue = currentHue;
+                if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
+                currentHue = angleFromPoint(event.getX(), event.getY());
+                tickHaptic(true);
+                invalidate();
+                if (listener != null) listener.onHueChanged(currentHue, false);
                 return true;
-            case MotionEvent.ACTION_MOVE:
-                if (dragging) pick(event, false);
+            }
+            case MotionEvent.ACTION_MOVE: {
+                if (!dragging) return false;
+                if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
+                currentHue = angleFromPoint(event.getX(), event.getY());
+                tickHaptic(false);
+                invalidate();
+                if (listener != null) listener.onHueChanged(currentHue, false);
                 return true;
-            case MotionEvent.ACTION_UP:
-            case MotionEvent.ACTION_CANCEL:
-                if (dragging) pick(event, true);
+            }
+            case MotionEvent.ACTION_UP: {
+                if (!dragging) return false;
                 dragging = false;
-                getParent().requestDisallowInterceptTouchEvent(false);
+                if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(false);
+                currentHue = angleFromPoint(event.getX(), event.getY());
+                invalidate();
+                if (listener != null) listener.onHueChanged(currentHue, false);
                 return true;
+            }
+            case MotionEvent.ACTION_CANCEL: {
+                if (!dragging) return false;
+                dragging = false;
+                if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(false);
+                currentHue = preDragHue;
+                invalidate();
+                if (listener != null) listener.onHueChanged(preDragHue, true);
+                return true;
+            }
         }
-        return super.onTouchEvent(event);
+        return false;
     }
 }
+
 // ================================================================
-// Popup Color Picker Dialog (with pie-chart wheel)
-//  • Live preview while dragging the wheel
-//  • Apply → saves + full rebuild
-//  • Cancel → reverts to original color
+// 2D Saturation / Brightness Square (zero onDraw allocations)
+// ================================================================
+private static class SatValSquareView extends View {
+    interface Listener {
+        void onSatValChanged(float sat, float val, boolean fromCancel);
+    }
+
+    private final Paint satPaint           = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint valPaint           = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint borderPaint        = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint markerFillPaint    = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint markerWhitePaint   = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint markerDarkPaint    = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final RectF boxRect            = new RectF();
+    private final float[] tmpHsv           = new float[]{ 0f, 1f, 1f };
+
+    private final float density;
+    private final float cornerR;
+    private final float pad;
+    private LinearGradient horizShader;
+    private LinearGradient vertShader;
+    private float hue = 145f;
+    private float shaderHue = -1f;
+    private float sat = 0.72f;
+    private float val = 0.86f;
+    private float preDragSat = 0.72f;
+    private float preDragVal = 0.86f;
+    private boolean dragging = false;
+    private Listener listener;
+
+    SatValSquareView(Context ctx, float hue, float sat, float val) {
+        super(ctx);
+        this.density = safeDisplayMetrics(ctx).density;
+        this.cornerR = 10f * density;
+        this.pad = 10f * density;
+        this.hue = hue;
+        this.sat = clamp01(sat);
+        this.val = clamp01(val);
+        setHapticFeedbackEnabled(true);
+
+        borderPaint.setStyle(Paint.Style.STROKE);
+        borderPaint.setStrokeWidth(1.2f * density);
+        borderPaint.setColor(0x55FFFFFF);
+
+        markerFillPaint.setStyle(Paint.Style.FILL);
+        markerWhitePaint.setStyle(Paint.Style.STROKE);
+        markerWhitePaint.setStrokeWidth(2.5f * density);
+        markerWhitePaint.setColor(0xFFFFFFFF);
+
+        markerDarkPaint.setStyle(Paint.Style.STROKE);
+        markerDarkPaint.setStrokeWidth(1.4f * density);
+        markerDarkPaint.setColor(0xCC000000);
+    }
+
+    private static float clamp01(float v) {
+        return Math.max(0f, Math.min(1f, v));
+    }
+
+    void setListener(Listener l) {
+        this.listener = l;
+    }
+
+    void setHSV(float h, float s, float v) {
+        float nh = ((h % 360f) + 360f) % 360f;
+        boolean hueChanged = Math.abs(nh - this.hue) > 0.01f;
+        this.hue = nh;
+        this.sat = clamp01(s);
+        this.val = clamp01(v);
+        if (hueChanged) {
+            rebuildHorizShader();
+        }
+        invalidate();
+    }
+
+    private void rebuildHorizShader() {
+        if (boxRect.width() <= 0f) return;
+        tmpHsv[0] = hue;
+        tmpHsv[1] = 1f;
+        tmpHsv[2] = 1f;
+        int pureHue = Color.HSVToColor(tmpHsv);
+        horizShader = new LinearGradient(
+                boxRect.left, 0f, boxRect.right, 0f,
+                0xFFFFFFFF, pureHue, Shader.TileMode.CLAMP);
+        satPaint.setShader(horizShader);
+        shaderHue = hue;
+    }
+
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        if (w <= 0 || h <= 0) return;
+        boxRect.set(pad, pad, Math.max(pad + 1f, w - pad), Math.max(pad + 1f, h - pad));
+        vertShader = new LinearGradient(
+                0f, boxRect.top, 0f, boxRect.bottom,
+                0x00000000, 0xFF000000, Shader.TileMode.CLAMP);
+        valPaint.setShader(vertShader);
+        rebuildHorizShader();
+    }
+
+    @Override
+    protected void onDraw(Canvas canvas) {
+        if (horizShader == null || vertShader == null || boxRect.width() <= 0f) return;
+        if (Math.abs(shaderHue - hue) > 0.01f) {
+            rebuildHorizShader();
+        }
+
+        // Exact HSV rendering via cached White->Hue + Transparent->Black gradients
+        canvas.drawRoundRect(boxRect, cornerR, cornerR, satPaint);
+        canvas.drawRoundRect(boxRect, cornerR, cornerR, valPaint);
+        canvas.drawRoundRect(boxRect, cornerR, cornerR, borderPaint);
+
+        // Large double-bordered marker
+        float mx = boxRect.left + sat * boxRect.width();
+        float my = boxRect.top + (1f - val) * boxRect.height();
+        float mr = 9.5f * density;
+
+        tmpHsv[0] = hue;
+        tmpHsv[1] = sat;
+        tmpHsv[2] = val;
+        markerFillPaint.setColor(Color.HSVToColor(tmpHsv));
+        canvas.drawCircle(mx, my, mr, markerFillPaint);
+        canvas.drawCircle(mx, my, mr, markerWhitePaint);
+        canvas.drawCircle(mx, my, mr + 1.5f * density, markerDarkPaint);
+    }
+
+    private void updateFromPoint(float x, float y) {
+        float w = boxRect.width();
+        float h = boxRect.height();
+        if (w <= 0f || h <= 0f) return;
+        sat = clamp01((x - boxRect.left) / w);
+        val = 1f - clamp01((y - boxRect.top) / h);
+        invalidate();
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        int action = event.getActionMasked();
+        switch (action) {
+            case MotionEvent.ACTION_DOWN: {
+                float x = event.getX();
+                float y = event.getY();
+                if (x < 0f || x > getWidth() || y < 0f || y > getHeight()) {
+                    return false;
+                }
+                dragging = true;
+                preDragSat = sat;
+                preDragVal = val;
+                if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
+                try {
+                    performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+                } catch (Throwable ignored) { }
+                updateFromPoint(x, y);
+                if (listener != null) listener.onSatValChanged(sat, val, false);
+                return true;
+            }
+            case MotionEvent.ACTION_MOVE: {
+                if (!dragging) return false;
+                if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
+                updateFromPoint(event.getX(), event.getY());
+                if (listener != null) listener.onSatValChanged(sat, val, false);
+                return true;
+            }
+            case MotionEvent.ACTION_UP: {
+                if (!dragging) return false;
+                dragging = false;
+                if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(false);
+                updateFromPoint(event.getX(), event.getY());
+                if (listener != null) listener.onSatValChanged(sat, val, false);
+                return true;
+            }
+            case MotionEvent.ACTION_CANCEL: {
+                if (!dragging) return false;
+                dragging = false;
+                if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(false);
+                sat = preDragSat;
+                val = preDragVal;
+                invalidate();
+                if (listener != null) listener.onSatValChanged(preDragSat, preDragVal, true);
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
+private static class PickerMaxHeightScrollView extends ScrollView {
+    private int maxHeightPx;
+
+    PickerMaxHeightScrollView(Context ctx, int maxHeightPx) {
+        super(ctx);
+        this.maxHeightPx = maxHeightPx;
+        setVerticalScrollBarEnabled(false);
+        setOverScrollMode(OVER_SCROLL_NEVER);
+    }
+
+    void setMaxHeightPx(int maxHeightPx) {
+        if (this.maxHeightPx != maxHeightPx) {
+            this.maxHeightPx = maxHeightPx;
+            requestLayout();
+        }
+    }
+
+    @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        if (maxHeightPx > 0) {
+            int mode = MeasureSpec.getMode(heightMeasureSpec);
+            int size = MeasureSpec.getSize(heightMeasureSpec);
+            int capped = (mode == MeasureSpec.UNSPECIFIED)
+                    ? maxHeightPx
+                    : Math.min(size, maxHeightPx);
+            heightMeasureSpec = MeasureSpec.makeMeasureSpec(capped, MeasureSpec.AT_MOST);
+        }
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+    }
+}
+
+private static final int[] CURATED_ACCENT_PRESETS = new int[] {
+    0xFF3DDB87, // ModX Green (Default)
+    0xFF22D3EE, // Cyan
+    0xFF38BDF8, // Sky Blue
+    0xFF60A5FA, // Azure
+    0xFF818CF8, // Indigo
+    0xFFA855F7, // Electric Purple
+    0xFFEC4899, // Neon Pink
+    0xFFF43F5E, // Crimson Rose
+    0xFFFB923C, // Amber Orange
+    0xFFFACC15, // Gold
+    0xFFA3E635, // Lime
+    0xFFE2E8F0  // Silver Frost
+};
+
+private static Integer parseHexColorStrict(String raw) {
+    if (raw == null) return null;
+    String s = raw.trim();
+    if (s.startsWith("#")) s = s.substring(1);
+    if (s.length() == 8) {
+        s = s.substring(2);
+    }
+    if (s.length() != 6) return null;
+    for (int i = 0; i < 6; i++) {
+        char ch = s.charAt(i);
+        boolean ok = (ch >= '0' && ch <= '9')
+                || (ch >= 'a' && ch <= 'f')
+                || (ch >= 'A' && ch <= 'F');
+        if (!ok) return null;
+    }
+    try {
+        int rgb = Integer.parseInt(s, 16);
+        return 0xFF000000 | rgb;
+    } catch (Exception e) {
+        return null;
+    }
+}
+
+private static class SwatchRingHolder {
+    final GradientDrawable bg;
+    final int color;
+
+    SwatchRingHolder(GradientDrawable bg, int color) {
+        this.bg = bg;
+        this.color = color;
+    }
+}
+
+private View makeSwatchItem(final int color, final View.OnClickListener onClick,
+                            final ArrayList<SwatchRingHolder> ringsOut) {
+    FrameLayout hitBox = new FrameLayout(getContext);
+    LinearLayout.LayoutParams hitLp = new LinearLayout.LayoutParams(0, dp(42), 1f);
+    hitBox.setLayoutParams(hitLp);
+    hitBox.setClickable(true);
+    hitBox.setFocusable(true);
+    hitBox.setContentDescription("Color " + hex(color));
+
+    View dot = new View(getContext);
+    int dotSize = dp(26);
+    FrameLayout.LayoutParams dotLp = new FrameLayout.LayoutParams(dotSize, dotSize, Gravity.CENTER);
+    dot.setLayoutParams(dotLp);
+
+    GradientDrawable gd = new GradientDrawable();
+    gd.setShape(GradientDrawable.OVAL);
+    gd.setColor(0xFF000000 | color);
+    gd.setStroke(dp(1), withAlpha(0xFFFFFF, 0x55));
+    dot.setBackground(gd);
+
+    if (ringsOut != null) {
+        ringsOut.add(new SwatchRingHolder(gd, 0xFF000000 | color));
+    }
+
+    hitBox.addView(dot);
+    addPressAnim(hitBox);
+    hitBox.setOnClickListener(onClick);
+    return hitBox;
+}
+
+// ================================================================
+// Professional Color Palette Dialog
+//  • Preview swatch + #RRGGBB + Original compare chip + Reset
+//  • Hue ring (strict hit-test) + 2D S/V square (zero onDraw allocs)
+//  • Hex input with validation (overlay + standalone keyboard safe)
+//  • 12 curated presets + last 5 recent colors
+//  • Live preview (no persist); persist ONLY on Apply (Save-gated)
 // ================================================================
 private void showMenuColorPickerDialog() {
+    if (activeColorPickerDialog != null && activeColorPickerDialog.isShowing()) {
+        return;
+    }
     mColorPickerOriginalColor = COLOR_ACCENT;
 
     final AlertDialog[] dialogRef = new AlertDialog[1];
+    final float[] curHsv = new float[3];
+    Color.colorToHSV(0xFF000000 | COLOR_ACCENT, curHsv);
+    final int[] rawPickedHolder = new int[]{ 0xFF000000 | COLOR_ACCENT };
+    final boolean[] updatingHex = new boolean[]{ false };
 
-    // ---- Scrollable root so nothing gets cut ----
-    ScrollView scroll = new ScrollView(getContext);
-    scroll.setVerticalScrollBarEnabled(false);
+    final int swInit = screenW();
+    final int shInit = screenH();
+    final boolean isLandscapeInit = (swInit > shInit && swInit >= dp(440));
 
-    LinearLayout box = new LinearLayout(getContext);
+    final PickerMaxHeightScrollView scroll = new PickerMaxHeightScrollView(getContext, (int) (shInit * 0.88f));
+
+    final LinearLayout box = new LinearLayout(getContext);
     box.setOrientation(LinearLayout.VERTICAL);
     box.setGravity(Gravity.CENTER_HORIZONTAL);
-    box.setPadding(dp(18), dp(18), dp(18), dp(16));
+    box.setPadding(dp(16), dp(14), dp(16), dp(14));
+    // Prevent Hex EditText from auto-opening keyboard on dialog launch
+    box.setFocusable(true);
+    box.setFocusableInTouchMode(true);
+    box.requestFocus();
 
-    GradientDrawable boxBg = new GradientDrawable(
+    final GradientDrawable boxBg = new GradientDrawable(
             GradientDrawable.Orientation.TOP_BOTTOM,
             new int[]{COLOR_BG_TOP, COLOR_BG_BOTTOM});
-        boxBg.setCornerRadius(dp(10));
+    boxBg.setCornerRadius(dp(16));
     boxBg.setStroke(dp(1), withAlpha(COLOR_ACCENT, 0xAA));
     box.setBackground(boxBg);
 
-    // ---- Title ----
-    TextView title = new TextView(getContext);
-    title.setText("Pick Menu Color");
+    // ---- 1. Top Header Bar (Title + Reset button) ----
+    LinearLayout headerRow = new LinearLayout(getContext);
+    headerRow.setOrientation(LinearLayout.HORIZONTAL);
+    headerRow.setGravity(Gravity.CENTER_VERTICAL);
+    headerRow.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
+
+    final TextView title = new TextView(getContext);
+    title.setText("Menu Color Palette");
     title.setTextColor(COLOR_ACCENT);
     title.setTypeface(fontBold);
     title.setTextSize(15f);
-    title.setGravity(Gravity.CENTER);
-    box.addView(title);
+    title.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
 
-   
+    Button resetBtn = new Button(getContext);
+    resetBtn.setText("Reset");
+    resetBtn.setAllCaps(false);
+    resetBtn.setTypeface(fontMedium);
+    resetBtn.setTextSize(11f);
+    resetBtn.setTextColor(TEXT_COLOR_2);
+    resetBtn.setMinHeight(dp(34));
+    resetBtn.setMinimumHeight(dp(34));
+    resetBtn.setMinWidth(0);
+    resetBtn.setMinimumWidth(0);
+    resetBtn.setPadding(dp(10), dp(4), dp(10), dp(4));
+    resetBtn.setBackground(cardBg(COLOR_CARD, COLOR_CARD_BORDER, 8));
+    flatten(resetBtn);
+    addPressAnim(resetBtn);
 
-// ---- Color Wheel ----
-    int availW = screenW() - dp(100);
-    int wheelSize = Math.min(availW, dp(240));
-    if (wheelSize < dp(180)) wheelSize = dp(180);
+    headerRow.addView(title);
+    headerRow.addView(resetBtn);
+    box.addView(headerRow);
 
-    ColorWheelView wheel = new ColorWheelView(getContext, mCurrentHueF);
-    LinearLayout.LayoutParams wlp =
-            new LinearLayout.LayoutParams(wheelSize, wheelSize);
-    wlp.gravity = Gravity.CENTER_HORIZONTAL;
+    // ---- 2. Large Preview Swatch Banner ----
+    LinearLayout previewBanner = new LinearLayout(getContext);
+    previewBanner.setOrientation(LinearLayout.HORIZONTAL);
+    previewBanner.setGravity(Gravity.CENTER_VERTICAL);
+    previewBanner.setPadding(dp(12), dp(10), dp(12), dp(10));
+    LinearLayout.LayoutParams prevLp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
+    prevLp.setMargins(0, dp(10), 0, dp(10));
+    previewBanner.setLayoutParams(prevLp);
+
+    final GradientDrawable previewBg = new GradientDrawable();
+    previewBg.setCornerRadius(dp(10));
+    previewBg.setColor(rawPickedHolder[0]);
+    previewBg.setStroke(dp(1), withAlpha(0xFFFFFF, 0x66));
+    previewBanner.setBackground(previewBg);
+
+    LinearLayout previewTextCol = new LinearLayout(getContext);
+    previewTextCol.setOrientation(LinearLayout.VERTICAL);
+    previewTextCol.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
+
+    final TextView previewHexTv = new TextView(getContext);
+    previewHexTv.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+    previewHexTv.setTextSize(15f);
+    previewHexTv.setText(hex(rawPickedHolder[0]));
+    previewHexTv.setTextColor(bestTextOnColor(rawPickedHolder[0]));
+
+    final TextView previewSubTv = new TextView(getContext);
+    previewSubTv.setTypeface(fontRegular);
+    previewSubTv.setTextSize(10f);
+    previewSubTv.setText("Live Preview");
+    previewSubTv.setTextColor(withAlpha(bestTextOnColor(rawPickedHolder[0]), 0xCC));
+
+    previewTextCol.addView(previewHexTv);
+    previewTextCol.addView(previewSubTv);
+
+    // Original color compare chip (tap to jump back to original without closing)
+    LinearLayout origChip = new LinearLayout(getContext);
+    origChip.setOrientation(LinearLayout.HORIZONTAL);
+    origChip.setGravity(Gravity.CENTER_VERTICAL);
+    origChip.setPadding(dp(8), dp(5), dp(8), dp(5));
+    origChip.setBackground(cardBg(0x66000000, 0x55FFFFFF, 8));
+    origChip.setClickable(true);
+    origChip.setFocusable(true);
+
+    View origDot = new View(getContext);
+    origDot.setLayoutParams(new LinearLayout.LayoutParams(dp(14), dp(14)));
+    GradientDrawable origDotBg = new GradientDrawable();
+    origDotBg.setShape(GradientDrawable.OVAL);
+    origDotBg.setColor(mColorPickerOriginalColor);
+    origDotBg.setStroke(dp(1), Color.WHITE);
+    origDot.setBackground(origDotBg);
+
+    TextView origLbl = new TextView(getContext);
+    origLbl.setText("Orig");
+    origLbl.setTextColor(Color.WHITE);
+    origLbl.setTypeface(fontMedium);
+    origLbl.setTextSize(10f);
+    LinearLayout.LayoutParams origLblLp = new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
+    origLblLp.setMargins(dp(5), 0, 0, 0);
+    origLbl.setLayoutParams(origLblLp);
+
+    origChip.addView(origDot);
+    origChip.addView(origLbl);
+    addPressAnim(origChip);
+
+    previewBanner.addView(previewTextCol);
+    previewBanner.addView(origChip);
+    box.addView(previewBanner);
+
+    // ---- 3. Hue Ring + S/V Square ----
+    int wheelSize = isLandscapeInit
+            ? Math.min(dp(168), Math.max(dp(136), shInit - dp(180)))
+            : Math.min(dp(196), Math.max(dp(150), Math.min(swInit - dp(100), (int) (shInit * 0.30f))));
+
+    final ColorWheelView wheel = new ColorWheelView(getContext, curHsv[0], rawPickedHolder[0]);
+    LinearLayout.LayoutParams wlp = new LinearLayout.LayoutParams(wheelSize, wheelSize);
+    wlp.gravity = Gravity.CENTER;
     wheel.setLayoutParams(wlp);
 
-    // Live preview while dragging
+    final SatValSquareView svSquare = new SatValSquareView(getContext, curHsv[0], curHsv[1], curHsv[2]);
+    int svHeight = isLandscapeInit ? dp(116) : Math.min(dp(116), Math.max(dp(88), (int) (shInit * 0.16f)));
+    LinearLayout.LayoutParams svLp = new LinearLayout.LayoutParams(MATCH_PARENT, svHeight);
+    if (!isLandscapeInit) {
+        svLp.setMargins(0, dp(6), 0, 0);
+    }
+    svSquare.setLayoutParams(svLp);
+
+    // ---- 4. Hex Input + Validation ----
+    LinearLayout hexContainer = new LinearLayout(getContext);
+    hexContainer.setOrientation(LinearLayout.VERTICAL);
+    LinearLayout.LayoutParams hexContLp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
+    hexContLp.setMargins(0, dp(8), 0, 0);
+    hexContainer.setLayoutParams(hexContLp);
+
+    LinearLayout hexRow = new LinearLayout(getContext);
+    hexRow.setOrientation(LinearLayout.HORIZONTAL);
+    hexRow.setGravity(Gravity.CENTER_VERTICAL);
+
+    TextView hexLabel = new TextView(getContext);
+    hexLabel.setText("HEX");
+    hexLabel.setTextColor(COLOR_TEXT_MUTED);
+    hexLabel.setTypeface(fontBold);
+    hexLabel.setTextSize(11f);
+    hexLabel.setPadding(0, 0, dp(10), 0);
+
+    final EditText hexInput = new EditText(getContext);
+    hexInput.setTextColor(Color.WHITE);
+    hexInput.setHintTextColor(COLOR_TEXT_MUTED);
+    hexInput.setHint("#3DDB87");
+    hexInput.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+    hexInput.setTextSize(13f);
+    hexInput.setSingleLine(true);
+    hexInput.setMinHeight(dp(42));
+    hexInput.setPadding(dp(12), dp(8), dp(12), dp(8));
+    hexInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
+    hexInput.setImeOptions(EditorInfo.IME_ACTION_DONE);
+    hexInput.setFilters(new InputFilter[]{new InputFilter.LengthFilter(9)});
+    hexInput.setHighlightColor(withAlpha(COLOR_ACCENT, 0x55));
+    final GradientDrawable hexInputBg = cardBg(COLOR_CARD, withAlpha(COLOR_ACCENT, 0x66), 8);
+    hexInput.setBackground(hexInputBg);
+    hexInput.setText(hex(rawPickedHolder[0]));
+    hexInput.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
+
+    final TextView hexErrorTv = new TextView(getContext);
+    hexErrorTv.setTextColor(lighten(COLOR_DANGER, 0.25f));
+    hexErrorTv.setTypeface(fontRegular);
+    hexErrorTv.setTextSize(10f);
+    hexErrorTv.setPadding(dp(2), dp(3), 0, 0);
+    hexErrorTv.setVisibility(View.GONE);
+
+    hexRow.addView(hexLabel);
+    hexRow.addView(hexInput);
+    hexContainer.addView(hexRow);
+    hexContainer.addView(hexErrorTv);
+
+    if (isLandscapeInit) {
+        LinearLayout pickerArea = new LinearLayout(getContext);
+        pickerArea.setOrientation(LinearLayout.HORIZONTAL);
+        pickerArea.setGravity(Gravity.CENTER_VERTICAL);
+        pickerArea.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
+
+        LinearLayout rightCol = new LinearLayout(getContext);
+        rightCol.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams rcLp = new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f);
+        rcLp.setMargins(dp(12), 0, 0, 0);
+        rightCol.setLayoutParams(rcLp);
+        rightCol.addView(svSquare);
+        rightCol.addView(hexContainer);
+
+        pickerArea.addView(wheel);
+        pickerArea.addView(rightCol);
+        box.addView(pickerArea);
+    } else {
+        box.addView(wheel);
+        box.addView(svSquare);
+        box.addView(hexContainer);
+    }
+
+    // Track swatch rings so active color highlights immediately
+    final ArrayList<SwatchRingHolder> allSwatchRings = new ArrayList<SwatchRingHolder>();
+    final Button okBtn = dialogButton("Apply", true);
+
+    final Runnable[] syncUiRunnable = new Runnable[1];
+    syncUiRunnable[0] = new Runnable() {
+        @Override
+        public void run() {
+            int raw = rawPickedHolder[0];
+            int safe = ensureReadableAccent(raw);
+            int onPreview = bestTextOnColor(raw);
+
+            previewBg.setColor(raw);
+            previewHexTv.setText(hex(raw));
+            previewHexTv.setTextColor(onPreview);
+            if (safe != raw) {
+                previewSubTv.setText("Adjusted for readability: " + hex(safe));
+            } else {
+                previewSubTv.setText("Live Preview");
+            }
+            previewSubTv.setTextColor(withAlpha(onPreview, 0xCC));
+
+            boxBg.setStroke(dp(1), withAlpha(safe, 0xAA));
+            title.setTextColor(safe);
+
+            GradientDrawable applyBg = new GradientDrawable();
+            applyBg.setCornerRadius(dp(8));
+            applyBg.setColor(safe);
+            okBtn.setBackground(applyBg);
+            okBtn.setTextColor(bestTextOnColor(safe));
+
+            if (!hexInput.hasFocus()) {
+                updatingHex[0] = true;
+                hexInput.setText(hex(raw));
+                hexInput.setSelection(hexInput.getText().length());
+                updatingHex[0] = false;
+                hexErrorTv.setVisibility(View.GONE);
+                hexInputBg.setStroke(dp(1), withAlpha(safe, 0x66));
+            }
+
+            for (int i = 0; i < allSwatchRings.size(); i++) {
+                SwatchRingHolder h = allSwatchRings.get(i);
+                boolean match = (h.color == raw || h.color == safe);
+                h.bg.setStroke(dp(match ? 2 : 1), match ? Color.WHITE : withAlpha(0xFFFFFF, 0x55));
+            }
+
+            // Live preview across the menu (never persists)
+            mCurrentHueF = curHsv[0];
+            applyMenuColorLive(safe);
+        }
+    };
+
+    // Wheel & S/V square listeners
     wheel.setListener(new ColorWheelView.Listener() {
         @Override
-        public void onColorChanged(int hueDegrees, int color) {
-            mCurrentHueF = (float) hueDegrees;
-            applyMenuColorLive(color);
-
-
+        public void onHueChanged(float hueDegrees, boolean fromCancel) {
+            curHsv[0] = hueDegrees;
+            rawPickedHolder[0] = 0xFF000000 | Color.HSVToColor(curHsv);
+            svSquare.setHSV(curHsv[0], curHsv[1], curHsv[2]);
+            wheel.setState(curHsv[0], rawPickedHolder[0]);
+            if (hexInput.hasFocus()) hexInput.clearFocus();
+            syncUiRunnable[0].run();
         }
     });
-    // Persist on release
-    wheel.setCommitListener(new ColorWheelView.Listener() {
+
+    svSquare.setListener(new SatValSquareView.Listener() {
         @Override
-        public void onColorChanged(int hueDegrees, int color) {
-            mCurrentHueF = (float) hueDegrees;
-            getContext.getSharedPreferences("menu_theme", Context.MODE_PRIVATE)
-                    .edit().putInt("accent", color).apply();
+        public void onSatValChanged(float sat, float val, boolean fromCancel) {
+            curHsv[1] = sat;
+            curHsv[2] = val;
+            rawPickedHolder[0] = 0xFF000000 | Color.HSVToColor(curHsv);
+            wheel.setState(curHsv[0], rawPickedHolder[0]);
+            if (hexInput.hasFocus()) hexInput.clearFocus();
+            syncUiRunnable[0].run();
         }
     });
-    box.addView(wheel);
 
+    // Hex input click/focus/watcher
+    hexInput.setOnClickListener(new View.OnClickListener() {
+        @Override
+        public void onClick(View v) {
+            hexInput.requestFocus();
+            try {
+                InputMethodManager imm = (InputMethodManager) getContext.getSystemService(Context.INPUT_METHOD_SERVICE);
+                if (imm != null) imm.showSoftInput(hexInput, InputMethodManager.SHOW_IMPLICIT);
+            } catch (Throwable ignored) { }
+        }
+    });
 
+    hexInput.setOnEditorActionListener(new TextView.OnEditorActionListener() {
+        @Override
+        public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                Integer parsed = parseHexColorStrict(hexInput.getText().toString());
+                if (parsed == null) {
+                    hexErrorTv.setText("Enter 6 hex digits (e.g. #3DDB87)");
+                    hexErrorTv.setVisibility(View.VISIBLE);
+                    hexInputBg.setStroke(dp(1), COLOR_DANGER);
+                } else {
+                    hexInput.clearFocus();
+                    box.requestFocus();
+                    syncUiRunnable[0].run();
+                    try {
+                        InputMethodManager imm = (InputMethodManager) getContext.getSystemService(Context.INPUT_METHOD_SERVICE);
+                        if (imm != null) imm.hideSoftInputFromWindow(hexInput.getWindowToken(), 0);
+                    } catch (Throwable ignored) { }
+                }
+                return true;
+            }
+            return false;
+        }
+    });
 
-    // ---- Button row ----
+    hexInput.addTextChangedListener(new TextWatcher() {
+        @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+        @Override public void onTextChanged(CharSequence s, int start, int before, int count) { }
+        @Override
+        public void afterTextChanged(Editable s) {
+            if (updatingHex[0]) return;
+            String txt = s.toString().trim();
+            Integer parsed = parseHexColorStrict(txt);
+            if (parsed != null) {
+                hexErrorTv.setVisibility(View.GONE);
+                hexInputBg.setStroke(dp(1), withAlpha(COLOR_ACCENT, 0x88));
+                rawPickedHolder[0] = parsed;
+                Color.colorToHSV(parsed, curHsv);
+                wheel.setState(curHsv[0], parsed);
+                svSquare.setHSV(curHsv[0], curHsv[1], curHsv[2]);
+                syncUiRunnable[0].run();
+            } else {
+                hexErrorTv.setText("Enter 6 hex digits (e.g. #3DDB87)");
+                hexErrorTv.setVisibility(View.VISIBLE);
+                hexInputBg.setStroke(dp(1), COLOR_DANGER);
+            }
+        }
+    });
+
+    // Helper to jump to a picked preset/recent/reset color (live preview only)
+    final android.view.View.OnClickListener[] selectColorAction = new android.view.View.OnClickListener[1];
+    final java.util.HashMap<View, Integer> viewColorMap = new java.util.HashMap<View, Integer>();
+    selectColorAction[0] = new View.OnClickListener() {
+        @Override
+        public void onClick(View v) {
+            Integer cObj = viewColorMap.get(v);
+            if (cObj == null) return;
+            int c = cObj;
+            if (hexInput.hasFocus()) {
+                hexInput.clearFocus();
+                box.requestFocus();
+            }
+            rawPickedHolder[0] = c;
+            Color.colorToHSV(c, curHsv);
+            wheel.setState(curHsv[0], c);
+            svSquare.setHSV(curHsv[0], curHsv[1], curHsv[2]);
+            syncUiRunnable[0].run();
+        }
+    };
+
+    // Original chip click jumps back to original
+    viewColorMap.put(origChip, mColorPickerOriginalColor);
+    origChip.setOnClickListener(selectColorAction[0]);
+
+    // Reset button resets picker to default green #3DDB87 (still Cancelable!)
+    resetBtn.setOnClickListener(new View.OnClickListener() {
+        @Override
+        public void onClick(View v) {
+            int def = FeatureStateStore.DEFAULT_MENU_COLOR;
+            if (hexInput.hasFocus()) {
+                hexInput.clearFocus();
+                box.requestFocus();
+            }
+            rawPickedHolder[0] = def;
+            Color.colorToHSV(def, curHsv);
+            wheel.setState(curHsv[0], def);
+            svSquare.setHSV(curHsv[0], curHsv[1], curHsv[2]);
+            syncUiRunnable[0].run();
+        }
+    });
+
+    // ---- 5. Curated Presets (12 swatches: 2 rows of 6) ----
+    TextView presetsLbl = new TextView(getContext);
+    presetsLbl.setText("Presets");
+    presetsLbl.setTextColor(COLOR_TEXT_MUTED);
+    presetsLbl.setTypeface(fontBold);
+    presetsLbl.setTextSize(11f);
+    LinearLayout.LayoutParams pLblLp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
+    pLblLp.setMargins(0, dp(10), 0, dp(4));
+    presetsLbl.setLayoutParams(pLblLp);
+    box.addView(presetsLbl);
+
+    for (int rowStart = 0; rowStart < CURATED_ACCENT_PRESETS.length; rowStart += 6) {
+        LinearLayout swatchRow = new LinearLayout(getContext);
+        swatchRow.setOrientation(LinearLayout.HORIZONTAL);
+        swatchRow.setGravity(Gravity.CENTER_VERTICAL);
+        swatchRow.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
+        for (int j = 0; j < 6 && rowStart + j < CURATED_ACCENT_PRESETS.length; j++) {
+            int pc = CURATED_ACCENT_PRESETS[rowStart + j];
+            View sw = makeSwatchItem(pc, selectColorAction[0], allSwatchRings);
+            viewColorMap.put(sw, pc);
+            swatchRow.addView(sw);
+        }
+        box.addView(swatchRow);
+    }
+
+    // ---- 6. Recent Used Colors (last 5) ----
+    int[] recentColors = Preferences.getRecentMenuColors();
+    if (recentColors != null && recentColors.length > 0) {
+        TextView recentLbl = new TextView(getContext);
+        recentLbl.setText("Recent");
+        recentLbl.setTextColor(COLOR_TEXT_MUTED);
+        recentLbl.setTypeface(fontBold);
+        recentLbl.setTextSize(11f);
+        LinearLayout.LayoutParams rLblLp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
+        rLblLp.setMargins(0, dp(6), 0, dp(2));
+        recentLbl.setLayoutParams(rLblLp);
+        box.addView(recentLbl);
+
+        LinearLayout recentRow = new LinearLayout(getContext);
+        recentRow.setOrientation(LinearLayout.HORIZONTAL);
+        recentRow.setGravity(Gravity.CENTER_VERTICAL);
+        recentRow.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
+        for (int i = 0; i < 5; i++) {
+            if (i < recentColors.length) {
+                int rc = recentColors[i];
+                View sw = makeSwatchItem(rc, selectColorAction[0], allSwatchRings);
+                viewColorMap.put(sw, rc);
+                recentRow.addView(sw);
+            } else {
+                View spacer = new View(getContext);
+                spacer.setLayoutParams(new LinearLayout.LayoutParams(0, dp(42), 1f));
+                recentRow.addView(spacer);
+            }
+        }
+        box.addView(recentRow);
+    }
+
+    // ---- 7. Cancel & Apply Buttons ----
     LinearLayout btnRow = new LinearLayout(getContext);
     btnRow.setOrientation(LinearLayout.HORIZONTAL);
     btnRow.setGravity(Gravity.CENTER);
-    LinearLayout.LayoutParams btnRowLp =
-            new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
-    btnRowLp.setMargins(0, dp(16), 0, 0);
+    LinearLayout.LayoutParams btnRowLp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
+    btnRowLp.setMargins(0, dp(12), 0, 0);
     btnRow.setLayoutParams(btnRowLp);
 
     Button cancelBtn = dialogButton("Cancel", false);
-    LinearLayout.LayoutParams cLp =
-            new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f);
-    cLp.setMargins(0, 0, dp(4), 0);
+    cancelBtn.setMinimumHeight(dp(46));
+    LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f);
+    cLp.setMargins(0, 0, dp(6), 0);
     cancelBtn.setLayoutParams(cLp);
     cancelBtn.setOnClickListener(new View.OnClickListener() {
         @Override
         public void onClick(View v) {
-            applyMenuColorLive(mColorPickerOriginalColor);
-            if (dialogRef[0] != null) dialogRef[0].dismiss();
+            if (dialogRef[0] != null) dialogRef[0].cancel();
         }
     });
 
-    Button okBtn = dialogButton("Apply", true);
-    LinearLayout.LayoutParams oLp =
-            new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f);
-    oLp.setMargins(dp(4), 0, 0, 0);
+    okBtn.setMinimumHeight(dp(46));
+    LinearLayout.LayoutParams oLp = new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f);
+    oLp.setMargins(dp(6), 0, 0, 0);
     okBtn.setLayoutParams(oLp);
     okBtn.setOnClickListener(new View.OnClickListener() {
         @Override
         public void onClick(View v) {
-            int finalColor = COLOR_ACCENT;
-            getContext.getSharedPreferences("menu_theme",
-                    Context.MODE_PRIVATE)
-                    .edit().putInt("accent", finalColor).apply();
+            if (hexInput.hasFocus()) {
+                Integer typed = parseHexColorStrict(hexInput.getText().toString());
+                if (typed == null) {
+                    hexErrorTv.setText("Enter 6 hex digits (e.g. #3DDB87)");
+                    hexErrorTv.setVisibility(View.VISIBLE);
+                    hexInputBg.setStroke(dp(1), COLOR_DANGER);
+                    return;
+                }
+                rawPickedHolder[0] = typed;
+            }
+            try {
+                InputMethodManager imm = (InputMethodManager) getContext.getSystemService(Context.INPUT_METHOD_SERVICE);
+                if (imm != null) imm.hideSoftInputFromWindow(hexInput.getWindowToken(), 0);
+            } catch (Throwable ignored) { }
 
             if (dialogRef[0] != null) dialogRef[0].dismiss();
-
-            menuFrame.post(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        buildFeaturesAndCategories(GetFeatureList());
-                        selectTabByName("Settings");
-                    } catch (Exception ignored) { }
-                }
-            });
-
-            Toast.makeText(getContext,
-                    "Menu color saved", Toast.LENGTH_SHORT).show();
+            applyMenuColor(rawPickedHolder[0]);
         }
     });
 
@@ -4630,31 +6329,95 @@ private void showMenuColorPickerDialog() {
     btnRow.addView(okBtn);
     box.addView(btnRow);
 
-    scroll.addView(box);
+    scroll.addView(box, new FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
 
-    // ---- Show dialog ----
-    AlertDialog.Builder builder = new AlertDialog.Builder(getContext);
+    // Sync initial visual state (including initial swatch ring & contrast)
+    syncUiRunnable[0].run();
+
+    // ---- Build & Show Dialog (safe for both Activity & Service overlay) ----
+    Context dialogCtx = (getContext instanceof Activity)
+            ? getContext
+            : new ContextThemeWrapper(getContext,
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP
+                            ? android.R.style.Theme_Material_Dialog_Alert
+                            : android.R.style.Theme_Holo_Dialog);
+    AlertDialog.Builder builder = new AlertDialog.Builder(dialogCtx);
     builder.setView(scroll);
-    AlertDialog dialog = builder.create();
+    final AlertDialog dialog = builder.create();
     dialogRef[0] = dialog;
+    activeColorPickerDialog = dialog;
     dialog.setCancelable(true);
+    dialog.setCanceledOnTouchOutside(true);
+
+    dialog.setOnCancelListener(new DialogInterface.OnCancelListener() {
+        @Override
+        public void onCancel(DialogInterface d) {
+            mCurrentHueF = getHueFromColor(mColorPickerOriginalColor);
+            applyMenuColorLive(mColorPickerOriginalColor);
+        }
+    });
+    dialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
+        @Override
+        public void onDismiss(DialogInterface d) {
+            if (activeColorPickerDialog == dialog) {
+                activeColorPickerDialog = null;
+            }
+            try {
+                InputMethodManager imm = (InputMethodManager) getContext.getSystemService(Context.INPUT_METHOD_SERVICE);
+                if (imm != null) imm.hideSoftInputFromWindow(box.getWindowToken(), 0);
+            } catch (Throwable ignored) { }
+        }
+    });
 
     Window w = dialog.getWindow();
     if (w != null) {
         w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         if (overlayRequired) {
-            w.setType(Build.VERSION.SDK_INT >= 26 ? 2038 : 2002);
+            w.setType(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ? 2038 : 2002);
         }
+        w.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                | WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
+        w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+                | WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN);
     }
 
     dialog.show();
 
-    if (dialog.getWindow() != null) {
-        int maxW = Math.min(dp(360), (int)(screenW() * 0.9f));
-        WindowManager.LayoutParams lp = dialog.getWindow().getAttributes();
-        lp.width = maxW;
+    final Window shownW = dialog.getWindow();
+    if (shownW != null) {
+        shownW.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                | WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
+        shownW.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+                | WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN);
+
+        int capW = isLandscapeInit
+                ? Math.min(dp(500), (int) (swInit * 0.88f))
+                : Math.min(dp(360), (int) (swInit * 0.92f));
+        WindowManager.LayoutParams lp = shownW.getAttributes();
+        lp.width = capW;
         lp.height = WRAP_CONTENT;
-        dialog.getWindow().setAttributes(lp);
+        shownW.setAttributes(lp);
+
+        final int[] lastDims = new int[]{ swInit, shInit };
+        shownW.getDecorView().addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+            @Override
+            public void onLayoutChange(View v, int left, int top, int right, int bottom,
+                                       int oldLeft, int oldTop, int oldRight, int oldBottom) {
+                int sw = screenW();
+                int sh = screenH();
+                if (sw != lastDims[0] || sh != lastDims[1]) {
+                    lastDims[0] = sw;
+                    lastDims[1] = sh;
+                    boolean land = (sw > sh && sw >= dp(440));
+                    scroll.setMaxHeightPx((int) (sh * 0.88f));
+                    WindowManager.LayoutParams nlp = shownW.getAttributes();
+                    nlp.width = land
+                            ? Math.min(dp(500), (int) (sw * 0.88f))
+                            : Math.min(dp(360), (int) (sw * 0.92f));
+                    shownW.setAttributes(nlp);
+                }
+            }
+        });
     }
 }
 
@@ -4904,6 +6667,7 @@ private void TeleportPad(LinearLayout linLayout) {
             new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
     lp.setMargins(dp(6), dp(4), dp(6), dp(6));
     pad.setLayoutParams(lp);
+    mMenuTeleportPad = pad;
     linLayout.addView(pad);
 }
 
@@ -4948,6 +6712,11 @@ framePaint.setColor(0xCC3DDB87);
         labelPaint.setFakeBoldText(true);
 
         setClickable(true);
+    }
+
+    void setAccentColor(int c) {
+        markerPaint.setColor(c);
+        invalidate();
     }
 
     @Override

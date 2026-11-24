@@ -6,6 +6,7 @@ import android.content.SharedPreferences;
 import android.os.Build;
 
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 
 public class Preferences {
@@ -17,23 +18,14 @@ public class Preferences {
     private static Preferences prefsInstance;
     public  static Context context;
 
-    /** Current SavePref setting — write gate. Toggle করলে সাথে সাথে update হয়। */
-    public static boolean loadPref     = false;
+    /** Current SavePref setting — backed by FeatureStateStore. */
+    public static boolean loadPref        = false;
     /** Expand toggle state */
-    public static boolean isExpanded   = false;
-
-    /**
-     * ★ NEW: app start-এ একবার capture করা SavePref value — read gate.
-     *
-     * কেন দরকার?
-     *  - mid-session এ user SavePref OFF করলে: loadPref=false হবে, কিন্তু
-     *    sessionLoadPref আগের true থেকে যাবে → বর্তমান session-এ UI state
-     *    অক্ষত থাকবে (menu rebuild হলেও)।
-     *  - পরের বার app খুললে: sessionLoadPref = false হবে → সব default।
-     */
+    public static boolean isExpanded      = false;
+    /** Compatibility flag — true when session was restored from a saved snapshot. */
     public static boolean sessionLoadPref = false;
 
-    private static final String LENGTH              = "_length";
+    private static final String LENGTH                = "_length";
     private static final String DEFAULT_STRING_VALUE  = "";
     private static final int    DEFAULT_INT_VALUE     = 0;
     private static final double DEFAULT_DOUBLE_VALUE  = 0d;
@@ -45,20 +37,20 @@ public class Preferences {
                                       int value, long Lvalue, boolean isOn, String inputText);
 
     // ================================================================
-    // init() — Menu constructor-এর সবচেয়ে আগে একবার call হবে
+    // init() — called in Menu constructor BEFORE building any UI
     // ================================================================
     public static void init(Context ctx) {
+        if (ctx == null) return;
         context = ctx;
         try {
             sharedPreferences = ctx.getApplicationContext().getSharedPreferences(
                     ctx.getPackageName() + "_preferences",
                     Context.MODE_PRIVATE
             );
-
-            boolean savedLoadPref = sharedPreferences.getBoolean("-1", false);
-            loadPref        = savedLoadPref;   // current write gate
-            sessionLoadPref = savedLoadPref;   // ★ read gate — app lifecycle জুড়ে fixed
-            isExpanded      = sharedPreferences.getBoolean("-3", false);
+            FeatureStateStore.init(ctx);
+            loadPref        = FeatureStateStore.isSaveEnabled();
+            sessionLoadPref = loadPref;
+            isExpanded      = FeatureStateStore.readInitialBool(ctx, "Expand", -3, false);
         } catch (Exception e) {
             loadPref        = false;
             sessionLoadPref = false;
@@ -66,144 +58,220 @@ public class Preferences {
         }
     }
 
+    public static boolean isSaveEnabled() {
+        return FeatureStateStore.isSaveEnabled();
+    }
+
+    public static int getMenuAccentColor() {
+        return FeatureStateStore.getMenuAccentColor();
+    }
+
+    public static void setMenuAccentColor(int color) {
+        FeatureStateStore.setMenuAccentColor(context, color);
+    }
+
+    public static int[] getRecentMenuColors() {
+        return FeatureStateStore.getRecentMenuColors();
+    }
+
+    public static void recordMenuColorUsed(int color) {
+        FeatureStateStore.recordMenuColorUsed(context, color);
+    }
+
+    public static void flush(String reason) {
+        try {
+            FeatureStateStore.flush(context, reason);
+        } catch (Throwable ignored) { }
+    }
+
     // ================================================================
-    // SAVE  (changeFeature*)
-    // ─ loadPref ON  → disk-এ write + native Changes()
-    // ─ loadPref OFF → শুধু native Changes(), disk-এ write নেই
-    // ─ Except: -1 (SavePref), -3 (Expand) সবসময় disk-এ write হয়
+    // Side-effect-free UI initial reads (NEVER invoke native Changes)
     // ================================================================
+    public static boolean readInitialBool(String featureName, int featureNum, boolean defaultVal) {
+        boolean val = FeatureStateStore.readInitialBool(context, featureName, featureNum, defaultVal);
+        if (featureNum == -1) {
+            loadPref = val;
+        } else if (featureNum == -3) {
+            isExpanded = val;
+        }
+        return val;
+    }
+
+    public static int readInitialInt(String featureName, int featureNum, int defaultVal) {
+        return FeatureStateStore.readInitialInt(context, featureName, featureNum, defaultVal);
+    }
+
+    public static long readInitialLong(String featureName, int featureNum, long defaultVal) {
+        return FeatureStateStore.readInitialLong(context, featureName, featureNum, defaultVal);
+    }
+
+    public static String readInitialString(String featureName, int featureNum, String defaultVal) {
+        return FeatureStateStore.readInitialString(context, featureName, featureNum, defaultVal);
+    }
+
+    public static int readInitialColor(String featureName, int featureNum, int defaultColor) {
+        return FeatureStateStore.readInitialColor(context, featureName, featureNum, defaultColor);
+    }
+
+    // ================================================================
+    // Deterministic post-login native restore (once per launch)
+    // ================================================================
+    public static void pushRestoredSnapshotToNativeOnce() {
+        List<FeatureStateStore.NativeEntry> entries = FeatureStateStore.consumePendingNativeRestore();
+        if (entries == null || entries.isEmpty()) return;
+
+        for (int i = 0; i < entries.size(); i++) {
+            FeatureStateStore.NativeEntry e = entries.get(i);
+            switch (e.type) {
+                case FeatureStateStore.NativeEntry.TYPE_BOOL:
+                    Changes(context, e.featNum, e.featName, 0, 0L, e.boolVal, null);
+                    break;
+                case FeatureStateStore.NativeEntry.TYPE_INT:
+                case FeatureStateStore.NativeEntry.TYPE_COLOR:
+                    Changes(context, e.featNum, e.featName, e.intVal, 0L, false, null);
+                    break;
+                case FeatureStateStore.NativeEntry.TYPE_LONG:
+                    Changes(context, e.featNum, e.featName, 0, e.longVal, false, null);
+                    break;
+                case FeatureStateStore.NativeEntry.TYPE_STRING:
+                    Changes(context, e.featNum, e.featName, 0, 0L, false, e.stringVal);
+                    break;
+            }
+        }
+    }
+
+    public static void beginBatch() {
+        FeatureStateStore.beginBatch(context);
+    }
+
+    public static void endBatch(boolean syncCommit) {
+        FeatureStateStore.endBatch(context, syncCommit);
+    }
+
+    // ================================================================
+    // Unified state changes (Memory -> Native Changes -> Disk if Save ON)
+    // ================================================================
+    public static void triggerActionButton(String featureName, int featureNum) {
+        Changes(context, featureNum, featureName, 0, 0L, false, null);
+    }
+
+    public static void triggerResetAllButton(String featureName, int featureNum) {
+        FeatureStateStore.updateBool(context, featureName, featureNum, false, true);
+        Changes(context, featureNum, featureName, 0, 0L, true, null);
+    }
 
     public static void changeFeatureInt(String featureName, int featureNum, int value) {
-        try {
-            if (loadPref) {
-                Preferences.with(context).writeInt(featureNum, value);
-            }
-        } catch (Exception ignored) { }
-        Changes(context, featureNum, featureName, value, 0, false, null);
+        boolean changed = FeatureStateStore.updateInt(context, featureName, featureNum, value);
+        if (changed) {
+            Changes(context, featureNum, featureName, value, 0L, false, null);
+        }
+    }
+
+    public static void forceSyncInt(String featureName, int featureNum, int value, boolean callNative) {
+        FeatureStateStore.updateInt(context, featureName, featureNum, value, true);
+        if (callNative) {
+            Changes(context, featureNum, featureName, value, 0L, false, null);
+        }
+    }
+
+    public static void changeFeatureColor(String featureName, int featureNum, int color) {
+        boolean changed = FeatureStateStore.updateColor(context, featureName, featureNum, color);
+        if (changed) {
+            Changes(context, featureNum, featureName, color, 0L, false, null);
+        }
+    }
+
+    public static void forceSyncColor(String featureName, int featureNum, int color, boolean callNative) {
+        FeatureStateStore.updateColor(context, featureName, featureNum, color, true);
+        if (callNative) {
+            Changes(context, featureNum, featureName, color, 0L, false, null);
+        }
     }
 
     public static void changeFeatureLong(String featureName, int featureNum, long Lvalue) {
-        try {
-            if (loadPref) {
-                Preferences.with(context).writeLong(String.valueOf(featureNum), Lvalue);
-            }
-        } catch (Exception ignored) { }
-        Changes(context, featureNum, featureName, 0, Lvalue, false, null);
+        boolean changed = FeatureStateStore.updateLong(context, featureName, featureNum, Lvalue);
+        if (changed) {
+            Changes(context, featureNum, featureName, 0, Lvalue, false, null);
+        }
+    }
+
+    public static void forceSyncLong(String featureName, int featureNum, long Lvalue, boolean callNative) {
+        FeatureStateStore.updateLong(context, featureName, featureNum, Lvalue, true);
+        if (callNative) {
+            Changes(context, featureNum, featureName, 0, Lvalue, false, null);
+        }
     }
 
     public static void changeFeatureString(String featureName, int featureNum, String inputString) {
-        try {
-            if (loadPref) {
-                Preferences.with(context).writeString(featureNum, inputString);
-            }
-        } catch (Exception ignored) { }
-        Changes(context, featureNum, featureName, 0, 0, false, inputString);
+        boolean changed = FeatureStateStore.updateString(context, featureName, featureNum, inputString);
+        if (changed) {
+            Changes(context, featureNum, featureName, 0, 0L, false, inputString);
+        }
+    }
+
+    public static void forceSyncString(String featureName, int featureNum, String inputString, boolean callNative) {
+        FeatureStateStore.updateString(context, featureName, featureNum, inputString, true);
+        if (callNative) {
+            Changes(context, featureNum, featureName, 0, 0L, false, inputString);
+        }
     }
 
     public static void changeFeatureBool(String featureName, int featureNum, boolean bool) {
-    // ── Special: SavePref toggle নিজে সবসময় persist করে ──
-    if (featureNum == -1) {
-        try {
-            Preferences.with(context).writeBoolean(-1, bool);
-        } catch (Exception ignored) { }
-        loadPref = bool;                     // current write gate update
-
-
-        if (bool) {
-            sessionLoadPref = true;
-        }
-
-        Changes(context, featureNum, featureName, 0, 0, bool, null);
-        return;
-    }
-
-    // ── Special: Expand toggle ──
-    if (featureNum == -3) {
-        try {
-            Preferences.with(context).writeBoolean(-3, bool);
-        } catch (Exception ignored) { }
-        isExpanded = bool;
-        Changes(context, featureNum, featureName, 0, 0, bool, null);
-        return;
-    }
-
-    // ── Normal feature ──
-    try {
-        if (loadPref) {
-            Preferences.with(context).writeBoolean(featureNum, bool);
-        }
-    } catch (Exception ignored) { }
-    Changes(context, featureNum, featureName, 0, 0, bool, null);
-}
-
-    public static int loadPrefInt(String featureName, int featureNum) {
-        int value = 0;
-        try {
-            if (sessionLoadPref && featureNum >= 0) {
-                value = Preferences.with(context).readInt(featureNum);
+        if (featureNum == -1) {
+            FeatureStateStore.setSaveEnabled(context, bool);
+            loadPref = bool;
+            if (bool) {
+                sessionLoadPref = true;
             }
-        } catch (Exception ignored) { }
-        Changes(context, featureNum, featureName, value, 0, false, null);
-        return value;
+            Changes(context, featureNum, featureName, 0, 0L, bool, null);
+            return;
+        }
+        if (featureNum == -3) {
+            boolean changed = FeatureStateStore.updateBool(context, featureName, featureNum, bool);
+            isExpanded = bool;
+            if (changed) {
+                Changes(context, featureNum, featureName, 0, 0L, bool, null);
+            }
+            return;
+        }
+        boolean changed = FeatureStateStore.updateBool(context, featureName, featureNum, bool);
+        if (changed) {
+            Changes(context, featureNum, featureName, 0, 0L, bool, null);
+        }
+    }
+
+    public static void forceSyncBool(String featureName, int featureNum, boolean bool, boolean callNative) {
+        if (featureNum == -1) {
+            return;
+        }
+        FeatureStateStore.updateBool(context, featureName, featureNum, bool, true);
+        if (featureNum == -3) {
+            isExpanded = bool;
+        }
+        if (callNative) {
+            Changes(context, featureNum, featureName, 0, 0L, bool, null);
+        }
+    }
+
+    // Legacy read aliases — kept side-effect-free (no native Changes() call)
+    public static int loadPrefInt(String featureName, int featureNum) {
+        return readInitialInt(featureName, featureNum, 0);
     }
 
     public static long loadPrefLong(String featureName, int featureNum) {
-        long value = 0L;
-        try {
-            if (sessionLoadPref && featureNum >= 0) {
-                value = Preferences.with(context).readLong(String.valueOf(featureNum));
-            }
-        } catch (Exception ignored) { }
-        Changes(context, featureNum, featureName, 0, value, false, null);
-        return value;
+        return readInitialLong(featureName, featureNum, 0L);
     }
 
     public static boolean loadPrefBool(String featureName, int featureNum, boolean bDef) {
-        // ── SavePref toggle নিজে সবসময় disk থেকে read ──
-        if (featureNum == -1) {
-            boolean saved = false;
-            try {
-                saved = Preferences.with(context).readBoolean(-1, false);
-            } catch (Exception ignored) { }
-            loadPref = saved;                    // current write gate sync
-            // ★ sessionLoadPref এখানে update করি না — এটা app lifecycle-এর জন্য fixed
-            Changes(context, featureNum, featureName, 0, 0, saved, null);
-            return saved;
-        }
-        // ── Expand toggle ──
-        if (featureNum == -3) {
-            boolean saved = false;
-            try {
-                saved = Preferences.with(context).readBoolean(-3, false);
-            } catch (Exception ignored) { }
-            isExpanded = saved;
-            Changes(context, featureNum, featureName, 0, 0, saved, null);
-            return saved;
-        }
-        // ── Normal feature ──
-        boolean result = bDef;
-        try {
-            if (sessionLoadPref) {
-                result = Preferences.with(context).readBoolean(featureNum, bDef);
-            }
-        } catch (Exception ignored) { }
-        Changes(context, featureNum, featureName, 0, 0, result, null);
-        return result;
+        return readInitialBool(featureName, featureNum, bDef);
     }
 
     public static String loadPrefString(String featureName, int featureNum) {
-        String result = "";
-        try {
-            if (sessionLoadPref && featureNum > 0) {
-                result = Preferences.with(context).readString(featureNum);
-            }
-        } catch (Exception ignored) { }
-        Changes(context, featureNum, featureName, 0, 0, false, result);
-        return result;
+        return readInitialString(featureName, featureNum, "");
     }
 
     // ================================================================
-    // Constructors
+    // Constructors & Legacy SharedPreferences helpers
     // ================================================================
     private Preferences(Context context) {
         sharedPreferences = context.getApplicationContext().getSharedPreferences(
@@ -219,9 +287,6 @@ public class Preferences {
         );
     }
 
-    // ================================================================
-    // Singleton accessors
-    // ================================================================
     public static Preferences with(Context context) {
         if (prefsInstance == null) {
             prefsInstance = new Preferences(context);
@@ -251,9 +316,6 @@ public class Preferences {
         return prefsInstance;
     }
 
-    // ================================================================
-    // String related methods
-    // ================================================================
     public String readString(String what) {
         return sharedPreferences.getString(what, DEFAULT_STRING_VALUE);
     }
@@ -278,9 +340,6 @@ public class Preferences {
         sharedPreferences.edit().putString(String.valueOf(where), what).apply();
     }
 
-    // ================================================================
-    // Int related methods
-    // ================================================================
     public int readInt(String what) {
         return sharedPreferences.getInt(what, DEFAULT_INT_VALUE);
     }
@@ -305,9 +364,6 @@ public class Preferences {
         sharedPreferences.edit().putInt(String.valueOf(where), what).apply();
     }
 
-    // ================================================================
-    // Double related methods
-    // ================================================================
     public double readDouble(String what) {
         if (!contains(what))
             return DEFAULT_DOUBLE_VALUE;
@@ -324,9 +380,6 @@ public class Preferences {
         writeLong(where, Double.doubleToRawLongBits(what));
     }
 
-    // ================================================================
-    // Float related methods
-    // ================================================================
     public float readFloat(String what) {
         return sharedPreferences.getFloat(what, DEFAULT_FLOAT_VALUE);
     }
@@ -339,9 +392,6 @@ public class Preferences {
         sharedPreferences.edit().putFloat(where, what).apply();
     }
 
-    // ================================================================
-    // Long related methods
-    // ================================================================
     public long readLong(String what) {
         return sharedPreferences.getLong(what, DEFAULT_LONG_VALUE);
     }
@@ -354,9 +404,6 @@ public class Preferences {
         sharedPreferences.edit().putLong(where, what).apply();
     }
 
-    // ================================================================
-    // Boolean related methods
-    // ================================================================
     public boolean readBoolean(String what) {
         return sharedPreferences.getBoolean(what, DEFAULT_BOOLEAN_VALUE);
     }
@@ -385,9 +432,6 @@ public class Preferences {
         sharedPreferences.edit().putBoolean(String.valueOf(where), what).apply();
     }
 
-    // ================================================================
-    // String set methods
-    // ================================================================
     @TargetApi(Build.VERSION_CODES.HONEYCOMB)
     public void putStringSet(final String key, final Set<String> value) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB) {
@@ -436,9 +480,6 @@ public class Preferences {
         return defValue;
     }
 
-    // ================================================================
-    // Utility methods
-    // ================================================================
     public void remove(final String key) {
         if (contains(key + LENGTH)) {
             int stringSetLength = readInt(key + LENGTH);

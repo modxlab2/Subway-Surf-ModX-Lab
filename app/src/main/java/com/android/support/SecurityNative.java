@@ -26,6 +26,46 @@ public final class SecurityNative {
         }
     }
 
+    public static void diagUi(String msg) {
+        if (BuildConfig.SEC_DIAG) {
+            android.util.Log.println(android.util.Log.INFO, "MXL_UI", msg);
+        }
+    }
+
+    public static String diagException(Throwable t) {
+        if (!BuildConfig.SEC_DIAG || t == null) return "";
+        StringBuilder sb = new StringBuilder();
+        sb.append(t.getClass().getSimpleName()).append(": ").append(t.getMessage());
+        StackTraceElement[] st = t.getStackTrace();
+        if (st != null) {
+            int max = Math.min(5, st.length);
+            for (int i = 0; i < max; i++) {
+                sb.append(" | ").append(st[i].getClassName())
+                        .append('.').append(st[i].getMethodName())
+                        .append(':').append(st[i].getLineNumber());
+            }
+        }
+        return sb.toString();
+    }
+
+    public static String diagCallerStack(int skipFrames, int maxFrames) {
+        if (!BuildConfig.SEC_DIAG) return "";
+        StackTraceElement[] st = Thread.currentThread().getStackTrace();
+        if (st == null) return "";
+        StringBuilder sb = new StringBuilder();
+        int count = 0;
+        for (int i = skipFrames; i < st.length && count < maxFrames; i++) {
+            if (count > 0) sb.append(" <- ");
+            String cls = st[i].getClassName();
+            int dot = cls.lastIndexOf('.');
+            if (dot >= 0) cls = cls.substring(dot + 1);
+            sb.append(cls).append('.').append(st[i].getMethodName())
+                    .append(':').append(st[i].getLineNumber());
+            count++;
+        }
+        return sb.toString();
+    }
+
     public static boolean preload(Context ctx) {
         if (ctx == null) return false;
         if (sLoadError != null) {
@@ -56,7 +96,9 @@ public final class SecurityNative {
     // =================================================================
     public static native boolean verifySessionToken(String token,
                                                     String user,
-                                                    String deviceId);
+                                                    String deviceId,
+                                                    String expectedNonce);
+    public static native void clearVerifiedSession();
     public static native String getUpdateUrl();
     public static native String getAppwriteEndpoint();
     public static native String getAppwriteProjectId();

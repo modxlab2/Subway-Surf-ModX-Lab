@@ -2,6 +2,7 @@ package com.android.support;
 
 import android.animation.ArgbEvaluator;
 import android.animation.ValueAnimator;
+import android.annotation.TargetApi;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -20,6 +21,9 @@ import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -62,7 +66,7 @@ public class LoginHelper {
     private static final String DBG = "ModXDebug";
 
     public interface Callback {
-        void onLoginSuccess();
+        void onLoginSuccess(String token, String user, String deviceId);
     }
 
     public interface CheckListener {
@@ -94,8 +98,12 @@ public class LoginHelper {
 
     private static final int WRAP_CONTENT = ViewGroup.LayoutParams.WRAP_CONTENT;
     private static final int MATCH_PARENT = ViewGroup.LayoutParams.MATCH_PARENT;
+    private static final int ICON_USER = 0;
+    private static final int ICON_LOCK = 1;
+    private static final float ICON_STROKE_GRID = 1.65f;
 
     private final Context ctx;
+    private final boolean overlayRequired;
     private final Callback callback;
     private final TextActionModeHost actionModeHost;
 
@@ -106,8 +114,14 @@ public class LoginHelper {
     private CustomCheck rememberCb, showCb;
     private Button loginBtn;
     private TextView statusTxt;
-    private boolean loginInProgress = false;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private volatile boolean destroyed = false;
+    private volatile boolean loginInProgress = false;
+    private volatile boolean savedCheckInProgress = false;
     private boolean keyExpiredDialogShowing = false;
+    private Object networkCallback = null;
+    private Runnable retrySavedSessionRunnable = null;
+    private int offlineRetryCount = 0;
 
     private Typeface tfRegular, tfMedium, tfBold;
 
@@ -117,6 +131,7 @@ public class LoginHelper {
 
     public LoginHelper(Context context, boolean overlayRequired, Callback cb) {
         this.ctx = context;
+        this.overlayRequired = overlayRequired;
         this.callback = cb;
         this.actionModeHost = new TextActionModeHost(context, overlayRequired);
         SecureTokenStore.purgeLegacyPlaintext(context);
@@ -125,9 +140,15 @@ public class LoginHelper {
         this.tfBold    = Typeface.create("sans-serif", Typeface.BOLD);
     }
 
+    public void prepareActionModeHost() {
+        if (actionModeHost != null) {
+            actionModeHost.prepare();
+        }
+    }
+
     public void dismissTextActionMode() {
         if (actionModeHost != null) {
-            actionModeHost.finishActiveMode();
+            actionModeHost.finishActiveMode("login-helper");
         }
     }
 
@@ -137,7 +158,25 @@ public class LoginHelper {
         }
     }
 
+    public void showExternalStatus(final String message, final boolean showExpiredDialog) {
+        if (destroyed) return;
+        mainHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                if (destroyed) return;
+                if (!TextUtils.isEmpty(message)) {
+                    setStatus(message, COLOR_DANGER);
+                }
+                if (showExpiredDialog) {
+                    showKeyExpiredDialog();
+                }
+            }
+        });
+    }
+
     public void cleanup() {
+        destroyed = true;
+        cancelSavedSessionRetry();
         if (actionModeHost != null) {
             actionModeHost.destroy();
         }
@@ -182,7 +221,7 @@ public class LoginHelper {
         card.addView(makeSimpleHeader());
 
         userBox = makeFieldContainer();
-        userChip = makeIconChip(FieldIcon.USER);
+        userChip = makeIconChip(ICON_USER);
         userIconView = (ImageView) userChip.getChildAt(0);
         userBox.addView(userChip);
 
@@ -205,7 +244,7 @@ public class LoginHelper {
         card.addView(userBox);
 
         passBox = makeFieldContainer();
-        passChip = makeIconChip(FieldIcon.LOCK);
+        passChip = makeIconChip(ICON_LOCK);
         passIconView = (ImageView) passChip.getChildAt(0);
         passBox.addView(passChip);
 
@@ -304,6 +343,7 @@ public class LoginHelper {
             @Override
             public void onChanged(boolean checked) {
                 if (!checked) {
+                    cancelSavedSessionRetry();
                     SecureTokenStore.clearToken(ctx);
                 }
             }
@@ -350,8 +390,10 @@ public class LoginHelper {
         statusTxt.setTypeface(tfMedium);
         statusTxt.setGravity(Gravity.CENTER);
         statusTxt.setSingleLine(true);
+        statusTxt.setEllipsize(TextUtils.TruncateAt.END);
+        statusTxt.setIncludeFontPadding(false);
         statusTxt.setAlpha(0f);
-        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(MATCH_PARENT, dp(15));
         sLp.setMargins(0, dp(6), 0, 0);
         statusTxt.setLayoutParams(sLp);
         card.addView(statusTxt);
@@ -382,17 +424,7 @@ public class LoginHelper {
             editUser.setText(tokenUser);
             rememberCb.setChecked(true);
             final String devId = getOrCreateDeviceId();
-            if (SecurityNative.verifySessionToken(savedToken, tokenUser, devId)) {
-                wrapper.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        setStatus("Resuming session...", COLOR_SUCCESS);
-                        checkUpdateAfterLogin(savedToken, tokenUser, devId);
-                    }
-                });
-            } else {
-                SecureTokenStore.clearToken(ctx);
-            }
+            startSavedSessionCheck(savedToken, devId);
         }
 
         wrapper.addView(root, new FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
@@ -439,6 +471,44 @@ public class LoginHelper {
         title.setTextSize(20f);
         title.setTypeface(tfBold);
         title.setGravity(Gravity.CENTER);
+        if (BuildConfig.SEC_DIAG) {
+            final Handler holdHandler = new Handler(Looper.getMainLooper());
+            final int touchSlop = android.view.ViewConfiguration.get(ctx).getScaledTouchSlop();
+            final float[] downPos = new float[2];
+            final boolean[] holdFired = new boolean[1];
+            final Runnable openDiagRunnable = new Runnable() {
+                @Override
+                public void run() {
+                    holdFired[0] = true;
+                    DiagLogViewer.show(ctx, overlayRequired);
+                }
+            };
+            title.setOnTouchListener(new View.OnTouchListener() {
+                @Override
+                public boolean onTouch(View v, MotionEvent event) {
+                    switch (event.getActionMasked()) {
+                        case MotionEvent.ACTION_DOWN:
+                            holdFired[0] = false;
+                            downPos[0] = event.getRawX();
+                            downPos[1] = event.getRawY();
+                            holdHandler.removeCallbacks(openDiagRunnable);
+                            holdHandler.postDelayed(openDiagRunnable, 2000L);
+                            return true;
+                        case MotionEvent.ACTION_MOVE:
+                            if (Math.abs(event.getRawX() - downPos[0]) > touchSlop
+                                    || Math.abs(event.getRawY() - downPos[1]) > touchSlop) {
+                                holdHandler.removeCallbacks(openDiagRunnable);
+                            }
+                            return true;
+                        case MotionEvent.ACTION_UP:
+                        case MotionEvent.ACTION_CANCEL:
+                            holdHandler.removeCallbacks(openDiagRunnable);
+                            return holdFired[0];
+                    }
+                    return false;
+                }
+            });
+        }
         header.addView(title);
 
         TextView subtitle = new TextView(ctx);
@@ -476,16 +546,36 @@ public class LoginHelper {
         chip.setBackgroundColor(Color.TRANSPARENT);
 
         ImageView iv = new ImageView(ctx);
-        iv.setImageDrawable(new FieldIcon(iconType, COLOR_TEXT_MUTED));
+        iv.setImageDrawable(createFieldSvgIcon(iconType, COLOR_TEXT_MUTED));
         iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        FrameLayout.LayoutParams ivLp = new FrameLayout.LayoutParams(dp(18), dp(18), Gravity.CENTER);
+        FrameLayout.LayoutParams ivLp = new FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER);
         iv.setLayoutParams(ivLp);
         chip.addView(iv);
         return chip;
     }
 
+    private static SvgIcon createFieldSvgIcon(int iconType, int color) {
+        if (iconType == ICON_USER) {
+            return new SvgIcon(color, ICON_STROKE_GRID)
+                    .addPath("M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2")
+                    .addCircle(12f, 7f, 4f);
+        }
+        return new SvgIcon(color, ICON_STROKE_GRID)
+                .addRect(3f, 11f, 18f, 11f, 2f, 2f)
+                .addPath("M7 11V7a5 5 0 0 1 10 0v4");
+    }
+
+    private static SvgIcon createPasteSvgIcon(int color) {
+        return new SvgIcon(color, ICON_STROKE_GRID)
+                .addPath("M11 14h10")
+                .addPath("M16 4h2a2 2 0 0 1 2 2v1.344")
+                .addPath("m17 18 4-4-4-4")
+                .addPath("M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 1.793-1.113")
+                .addRect(8f, 2f, 8f, 4f, 1f, 1f);
+    }
+
     private EditText makeInput(final String which, final boolean isPasswordField) {
-        EditText e = new HostAwareEditText(ctx, actionModeHost, isPasswordField);
+        EditText e = new HostAwareEditText(ctx, which, actionModeHost, isPasswordField);
         e.setTag(which);
         e.setHintTextColor(COLOR_HINT);
         e.setTextColor(COLOR_TEXT);
@@ -516,11 +606,16 @@ public class LoginHelper {
     }
 
     private static final class HostAwareEditText extends EditText {
+        private final String fieldTag;
         private final TextActionModeHost host;
         private final boolean isPasswordField;
 
-        HostAwareEditText(Context context, TextActionModeHost host, boolean isPasswordField) {
+        HostAwareEditText(Context context,
+                          String fieldTag,
+                          TextActionModeHost host,
+                          boolean isPasswordField) {
             super(context);
+            this.fieldTag = fieldTag;
             this.host = host;
             this.isPasswordField = isPasswordField;
         }
@@ -535,24 +630,72 @@ public class LoginHelper {
         }
 
         @Override
-        public ActionMode startActionMode(ActionMode.Callback callback) {
-            if (host != null) {
-                return host.startActionMode(this, callback);
+        public boolean performLongClick() {
+            int selS = getSelectionStart();
+            int selE = getSelectionEnd();
+            int len = getText() != null ? getText().length() : 0;
+            boolean res = super.performLongClick();
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diagUi("EditText(" + fieldTag + ").performLongClick: res=" + res
+                        + " sel=[" + selS + "," + selE + "]"
+                        + " newSel=[" + getSelectionStart() + "," + getSelectionEnd() + "]"
+                        + " len=" + len
+                        + " hasFocus=" + hasFocus()
+                        + " winFocus=" + hasWindowFocus());
             }
-            return super.startActionMode(callback);
+            return res;
+        }
+
+        @Override
+        public ActionMode startActionMode(ActionMode.Callback callback) {
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diagUi("EditText(" + fieldTag + ").startActionMode(1-arg) called"
+                        + " hasFocus=" + hasFocus()
+                        + " winFocus=" + hasWindowFocus());
+            }
+            ActionMode mode = (host != null)
+                    ? host.startActionMode(this, callback)
+                    : super.startActionMode(callback);
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diagUi("EditText(" + fieldTag + ").startActionMode(1-arg) -> "
+                        + (mode != null ? "non-null" : "NULL"));
+            }
+            return mode;
         }
 
         @Override
         public ActionMode startActionMode(ActionMode.Callback callback, int type) {
-            if (host != null) {
-                return host.startActionMode(this, callback, type);
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diagUi("EditText(" + fieldTag + ").startActionMode(type=" + type + ") called"
+                        + " hasFocus=" + hasFocus()
+                        + " winFocus=" + hasWindowFocus());
             }
-            return super.startActionMode(callback, type);
+            ActionMode mode = (host != null)
+                    ? host.startActionMode(this, callback, type)
+                    : super.startActionMode(callback, type);
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diagUi("EditText(" + fieldTag + ").startActionMode(type=" + type + ") -> "
+                        + (mode != null ? "non-null" : "NULL"));
+            }
+            return mode;
+        }
+
+        @Override
+        public void onWindowFocusChanged(boolean hasWindowFocus) {
+            super.onWindowFocusChanged(hasWindowFocus);
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diagUi("EditText(" + fieldTag + ").onWindowFocusChanged: winFocus="
+                        + hasWindowFocus + " hasFocus=" + hasFocus());
+            }
         }
 
         @Override
         protected void onAttachedToWindow() {
             super.onAttachedToWindow();
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diagUi("EditText(" + fieldTag + ").onAttachedToWindow: winFocus="
+                        + hasWindowFocus());
+            }
             if (host != null) {
                 host.prepare();
             }
@@ -560,6 +703,9 @@ public class LoginHelper {
 
         @Override
         protected void onDetachedFromWindow() {
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diagUi("EditText(" + fieldTag + ").onDetachedFromWindow");
+            }
             if (host != null) {
                 host.onEditTextDetached(this);
             }
@@ -569,11 +715,15 @@ public class LoginHelper {
         @Override
         protected void onWindowVisibilityChanged(int visibility) {
             super.onWindowVisibilityChanged(visibility);
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diagUi("EditText(" + fieldTag + ").onWindowVisibilityChanged: vis="
+                        + visibility);
+            }
             if (host != null) {
                 if (visibility == View.VISIBLE) {
                     host.prepare();
                 } else {
-                    host.onEditTextDetached(this);
+                    host.finishActiveMode("window-invisible");
                 }
             }
         }
@@ -581,6 +731,10 @@ public class LoginHelper {
         @Override
         protected void onFocusChanged(boolean focused, int direction, Rect previouslyFocusedRect) {
             super.onFocusChanged(focused, direction, previouslyFocusedRect);
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diagUi("EditText(" + fieldTag + ").onFocusChanged: focused="
+                        + focused + " winFocus=" + hasWindowFocus());
+            }
             if (!focused && host != null) {
                 host.onEditTextFocusLost(this);
             }
@@ -593,23 +747,41 @@ public class LoginHelper {
                 host.invalidateContentRectIfOwner(this);
             }
         }
+
+        @Override
+        protected void onTextChanged(CharSequence text, int start, int lengthBefore, int lengthAfter) {
+            super.onTextChanged(text, start, lengthBefore, lengthAfter);
+            if (host != null) {
+                host.dismissFallbackToolbar();
+            }
+        }
     }
 
     private void attachPasswordActionModeGuard(final EditText passField) {
         ActionMode.Callback cb = new ActionMode.Callback() {
             @Override
             public boolean onCreateActionMode(ActionMode mode, android.view.Menu menu) {
+                if (BuildConfig.SEC_DIAG) {
+                    SecurityNative.diagUi("PasswordGuard.onCreate: items="
+                            + (menu != null ? menu.size() : 0));
+                }
                 return true;
             }
 
             @Override
             public boolean onPrepareActionMode(ActionMode mode, android.view.Menu menu) {
-                if (menu != null && isPasswordMasked(passField)) {
+                boolean masked = isPasswordMasked(passField);
+                int before = (menu != null) ? menu.size() : 0;
+                if (menu != null && masked) {
                     menu.removeItem(android.R.id.cut);
                     menu.removeItem(android.R.id.copy);
-                    return true;
                 }
-                return false;
+                int after = (menu != null) ? menu.size() : 0;
+                if (BuildConfig.SEC_DIAG) {
+                    SecurityNative.diagUi("PasswordGuard.onPrepare: masked=" + masked
+                            + " before=" + before + " after=" + after);
+                }
+                return menu != null;
             }
 
             @Override
@@ -662,11 +834,11 @@ public class LoginHelper {
 
     private ImageView makePasteButton(final EditText target) {
         final ImageView btn = new ImageView(ctx);
-        final PasteIcon pasteIcon = new PasteIcon(COLOR_TEXT_MUTED);
+        final SvgIcon pasteIcon = createPasteSvgIcon(COLOR_TEXT_MUTED);
         btn.setImageDrawable(pasteIcon);
         btn.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        // 40x42dp transparent touch area; padding leaves 24x24dp bounds so the glyph (15x19.3dp) renders at ~18-20dp
-        btn.setPadding(dp(8), dp(9), dp(8), dp(9));
+        // 40x42dp touch target; padding leaves exact 20x20dp drawable bounds
+        btn.setPadding(dp(10), dp(11), dp(10), dp(11));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(40), dp(42));
         lp.setMargins(0, 0, dp(4), 0);
         btn.setLayoutParams(lp);
@@ -740,7 +912,9 @@ public class LoginHelper {
             target.requestFocus();
             forceShowKeyboard(target);
         } catch (Exception e) {
-            Log.e(DBG, "pasteFromClipboard error", e);
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diagUi("pasteFromClipboard failed: " + SecurityNative.diagException(e));
+            }
         }
     }
 
@@ -764,12 +938,12 @@ public class LoginHelper {
                 });
                 va.start();
 
-                FieldIcon fi = (FieldIcon) icon.getDrawable();
-                if (fi != null) {
-                    fi.animateColor(hasFocus ? COLOR_ACCENT_HI : COLOR_TEXT_MUTED, 200);
+                if (icon.getDrawable() instanceof SvgIcon) {
+                    ((SvgIcon) icon.getDrawable()).animateColor(
+                            hasFocus ? COLOR_ACCENT_HI : COLOR_TEXT_MUTED, 200);
                 }
-                if (pasteBtn != null && pasteBtn.getDrawable() instanceof PasteIcon) {
-                    ((PasteIcon) pasteBtn.getDrawable()).animateColor(
+                if (pasteBtn != null && pasteBtn.getDrawable() instanceof SvgIcon) {
+                    ((SvgIcon) pasteBtn.getDrawable()).animateColor(
                             hasFocus ? COLOR_ACCENT_HI : COLOR_TEXT_MUTED, 200);
                 }
                 if (hasFocus) {
@@ -796,7 +970,9 @@ public class LoginHelper {
             if (imm == null) return;
             imm.showSoftInput(et, InputMethodManager.SHOW_IMPLICIT);
         } catch (Exception e) {
-            Log.e(DBG, "forceShowKeyboard error", e);
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diagUi("forceShowKeyboard failed: " + SecurityNative.diagException(e));
+            }
         }
     }
 
@@ -867,8 +1043,280 @@ public class LoginHelper {
         return id;
     }
 
+    private static boolean isServerRejectionReason(String reason) {
+        return "session_invalid".equals(reason)
+                || "blocked".equals(reason)
+                || "expired".equals(reason)
+                || "device_mismatch".equals(reason)
+                || "user_not_found".equals(reason)
+                || "bad_input".equals(reason);
+    }
+
+    private void applyLoginFailureStatus(String reason, int retryAfterSec, boolean forSavedSession) {
+        if ("expired".equals(reason)) {
+            setStatus("Key expired", COLOR_DANGER);
+            showKeyExpiredDialog();
+        } else if ("blocked".equals(reason)) {
+            setStatus("Account blocked", COLOR_DANGER);
+            showKeyExpiredDialog();
+        } else if ("device_mismatch".equals(reason)) {
+            setStatus("Registered to another device", COLOR_DANGER);
+        } else if ("user_not_found".equals(reason)) {
+            setStatus("Account no longer exists", COLOR_DANGER);
+        } else if ("rate_limited".equals(reason)) {
+            if (retryAfterSec >= 60) {
+                int mins = (retryAfterSec + 59) / 60;
+                setStatus("Too many attempts. Try again in " + mins + " min", COLOR_DANGER);
+            } else if (retryAfterSec > 0) {
+                setStatus("Too many attempts. Try again in " + retryAfterSec + "s", COLOR_DANGER);
+            } else {
+                setStatus("Too many attempts. Try again later", COLOR_DANGER);
+            }
+        } else if ("no_match".equals(reason)
+                || "invalid_credentials".equals(reason)) {
+            setStatus("Invalid username or password", COLOR_DANGER);
+        } else if ("session_invalid".equals(reason)) {
+            setStatus(forSavedSession ? "Saved login expired or invalid" : "Invalid server signature", COLOR_DANGER);
+        } else if ("no_permission".equals(reason)) {
+            setStatus("Missing INTERNET permission", COLOR_DANGER);
+        } else if ("tls_pin".equals(reason)) {
+            setStatus("SSL pin mismatch", COLOR_DANGER);
+        } else if ("tls_error".equals(reason)) {
+            setStatus("SSL handshake error", COLOR_DANGER);
+        } else if ("native_config".equals(reason)) {
+            setStatus("Native config error", COLOR_DANGER);
+        } else if (forSavedSession) {
+            setStatus("No internet. Connect to the internet to use your saved login.", COLOR_WARN);
+        } else if ("no_internet".equals(reason)) {
+            setStatus("No internet / DNS blocked", COLOR_DANGER);
+        } else if ("connect_error".equals(reason)) {
+            setStatus("Server unreachable", COLOR_DANGER);
+        } else if ("timeout".equals(reason)) {
+            setStatus("Connection timed out", COLOR_DANGER);
+        } else if (reason != null && reason.startsWith("http_")) {
+            setStatus("Server error (" + reason.toUpperCase() + ")", COLOR_DANGER);
+        } else if ("network".equals(reason)) {
+            setStatus("Connection failed", COLOR_DANGER);
+        } else {
+            setStatus("Login failed (" + reason + ")", COLOR_DANGER);
+        }
+    }
+
+    private void startSavedSessionCheck(final String savedToken, final String deviceId) {
+        if (destroyed || loginInProgress || savedCheckInProgress) return;
+        if (TextUtils.isEmpty(savedToken) || TextUtils.isEmpty(deviceId)) return;
+
+        savedCheckInProgress = true;
+        cancelSavedSessionRetry();
+
+        if (loginBtn != null) {
+            loginBtn.setEnabled(false);
+            loginBtn.setAlpha(0.55f);
+            loginBtn.setText("SIGN IN");
+        }
+        setStatus("Checking saved login...", COLOR_ACCENT_HI);
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final String sentNonce = ModFirebase.generateNonce();
+                final JSONObject r = ModFirebase.verifySession(ctx, savedToken, deviceId, sentNonce);
+
+                boolean ok = false;
+                String reason = "network";
+                String freshToken = "", userOut = "", respNonce = "";
+                int retryAfterSec = 0;
+
+                if (r != null) {
+                    ok = r.optBoolean("ok", false);
+                    reason = r.optString("reason", "unknown");
+                    freshToken = r.optString("token", "");
+                    userOut = r.optString("user", "");
+                    respNonce = r.optString("nonce", "");
+                    retryAfterSec = r.optInt("retryAfterSec", 0);
+                }
+
+                if (ok) {
+                    if (TextUtils.isEmpty(freshToken)
+                            || TextUtils.isEmpty(userOut)
+                            || !sentNonce.equals(respNonce)
+                            || !SecurityNative.verifySessionToken(freshToken, userOut, deviceId, sentNonce)) {
+                        ok = false;
+                        reason = "session_invalid";
+                    }
+                }
+
+                if (!ok) {
+                    final String fReason = reason;
+                    final int fRetry = retryAfterSec;
+                    final boolean rejected = isServerRejectionReason(fReason);
+                    if (rejected) {
+                        SecureTokenStore.clearToken(ctx);
+                    }
+                    mainHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            savedCheckInProgress = false;
+                            if (destroyed) return;
+                            if (!loginInProgress && loginBtn != null) {
+                                loginBtn.setEnabled(true);
+                                loginBtn.setAlpha(1f);
+                                loginBtn.setText("SIGN IN");
+                            }
+                            applyLoginFailureStatus(fReason, fRetry, true);
+                            if (!rejected && !"rate_limited".equals(fReason)
+                                    && rememberCb != null && rememberCb.isChecked()
+                                    && !TextUtils.isEmpty(SecureTokenStore.loadToken(ctx))) {
+                                scheduleSavedSessionRetry(deviceId);
+                            }
+                        }
+                    });
+                    return;
+                }
+
+                if (destroyed || loginInProgress) {
+                    savedCheckInProgress = false;
+                    return;
+                }
+
+                final boolean keepSaved = (rememberCb == null || rememberCb.isChecked());
+                if (keepSaved) {
+                    SecureTokenStore.saveToken(ctx, freshToken);
+                } else {
+                    SecureTokenStore.clearToken(ctx);
+                }
+
+                final String fToken = freshToken;
+                final String fUser = userOut;
+                mainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        savedCheckInProgress = false;
+                        if (destroyed || loginInProgress) return;
+                        offlineRetryCount = 0;
+                        if (loginBtn != null) {
+                            loginBtn.setEnabled(true);
+                            loginBtn.setAlpha(1f);
+                            loginBtn.setText("SIGN IN");
+                        }
+                        setStatus("Welcome back!", COLOR_SUCCESS);
+                        checkUpdateAfterLogin(fToken, fUser, deviceId, sentNonce);
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private boolean isNetworkAvailableKnown(boolean[] knownOut) {
+        if (knownOut != null && knownOut.length > 0) knownOut[0] = false;
+        try {
+            ConnectivityManager cm = (ConnectivityManager)
+                    ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return false;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                Network active = cm.getActiveNetwork();
+                if (knownOut != null && knownOut.length > 0) knownOut[0] = true;
+                return active != null;
+            }
+            @SuppressWarnings("deprecation")
+            NetworkInfo ni = cm.getActiveNetworkInfo();
+            if (knownOut != null && knownOut.length > 0) knownOut[0] = true;
+            return ni != null && ni.isConnected();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    @TargetApi(Build.VERSION_CODES.N)
+    private boolean tryRegisterNetworkCallback(final String deviceId) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || networkCallback != null) {
+            return networkCallback != null;
+        }
+        try {
+            ConnectivityManager cm = (ConnectivityManager)
+                    ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return false;
+            ConnectivityManager.NetworkCallback cb = new ConnectivityManager.NetworkCallback() {
+                @Override
+                public void onAvailable(Network network) {
+                    mainHandler.removeCallbacksAndMessages("net_avail");
+                    mainHandler.postAtTime(new Runnable() {
+                        @Override
+                        public void run() {
+                            triggerPendingSavedRetry(deviceId);
+                        }
+                    }, "net_avail", android.os.SystemClock.uptimeMillis() + 700L);
+                }
+            };
+            cm.registerDefaultNetworkCallback(cb);
+            networkCallback = cb;
+            return true;
+        } catch (Throwable ignored) {
+            networkCallback = null;
+            return false;
+        }
+    }
+
+    private void triggerPendingSavedRetry(String deviceId) {
+        if (destroyed || loginInProgress || savedCheckInProgress) return;
+        if (rememberCb == null || !rememberCb.isChecked()) return;
+        if (editPass != null && editPass.getText() != null && editPass.getText().length() > 0) {
+            return;
+        }
+        String latest = SecureTokenStore.loadToken(ctx);
+        if (TextUtils.isEmpty(latest)) return;
+        startSavedSessionCheck(latest, deviceId);
+    }
+
+    private void scheduleSavedSessionRetry(final String deviceId) {
+        if (destroyed || loginInProgress || savedCheckInProgress) return;
+        final boolean hasCallback = tryRegisterNetworkCallback(deviceId);
+
+        if (retrySavedSessionRunnable != null) {
+            mainHandler.removeCallbacks(retrySavedSessionRunnable);
+        }
+        offlineRetryCount++;
+        long delayMs = hasCallback ? 12000L : Math.min(15000L, 4000L + offlineRetryCount * 2000L);
+        retrySavedSessionRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (destroyed || loginInProgress || savedCheckInProgress) return;
+                if (rememberCb == null || !rememberCb.isChecked()) return;
+                String latest = SecureTokenStore.loadToken(ctx);
+                if (TextUtils.isEmpty(latest)) return;
+
+                boolean[] known = new boolean[1];
+                boolean connected = isNetworkAvailableKnown(known);
+                if (!known[0] || connected) {
+                    triggerPendingSavedRetry(deviceId);
+                } else {
+                    scheduleSavedSessionRetry(deviceId);
+                }
+            }
+        };
+        mainHandler.postDelayed(retrySavedSessionRunnable, delayMs);
+    }
+
+    private void cancelSavedSessionRetry() {
+        mainHandler.removeCallbacksAndMessages("net_avail");
+        if (retrySavedSessionRunnable != null) {
+            mainHandler.removeCallbacks(retrySavedSessionRunnable);
+            retrySavedSessionRunnable = null;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && networkCallback != null) {
+            try {
+                ConnectivityManager cm = (ConnectivityManager)
+                        ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+                if (cm != null) {
+                    cm.unregisterNetworkCallback((ConnectivityManager.NetworkCallback) networkCallback);
+                }
+            } catch (Throwable ignored) { }
+            networkCallback = null;
+        }
+    }
+
     private void performLogin() {
-        if (loginInProgress) return;
+        if (loginInProgress || savedCheckInProgress) return;
 
         final String inputUser = editUser.getText().toString().trim().toLowerCase();
         final String inputPass = editPass.getText().toString().trim();
@@ -878,8 +1326,10 @@ public class LoginHelper {
             return;
         }
 
+        cancelSavedSessionRetry();
         loginInProgress = true;
         loginBtn.setEnabled(false);
+        loginBtn.setAlpha(0.75f);
         loginBtn.setText("SIGNING IN...");
         setStatus("Verifying credentials...", COLOR_ACCENT_HI);
 
@@ -893,11 +1343,12 @@ public class LoginHelper {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                final JSONObject r = ModFirebase.login(ctx, inputUser, inputPass, deviceId);
+                final String sentNonce = ModFirebase.generateNonce();
+                final JSONObject r = ModFirebase.login(ctx, inputUser, inputPass, deviceId, sentNonce);
 
                 boolean ok = false;
                 String reason = "network";
-                String token = "", userOut = "", statusOut = "", expiryOut = "";
+                String token = "", userOut = "", respNonce = "";
                 int retryAfterSec = 0;
 
                 if (r != null) {
@@ -905,14 +1356,15 @@ public class LoginHelper {
                     reason = r.optString("reason", "unknown");
                     token = r.optString("token", "");
                     userOut = r.optString("user", "");
-                    statusOut = r.optString("status", "");
-                    expiryOut = r.optString("expiry", "");
+                    respNonce = r.optString("nonce", "");
                     retryAfterSec = r.optInt("retryAfterSec", 0);
                 }
 
                 if (ok) {
-                    if (TextUtils.isEmpty(token) || TextUtils.isEmpty(userOut)
-                            || !SecurityNative.verifySessionToken(token, userOut, deviceId)) {
+                    if (TextUtils.isEmpty(token)
+                            || TextUtils.isEmpty(userOut)
+                            || !sentNonce.equals(respNonce)
+                            || !SecurityNative.verifySessionToken(token, userOut, deviceId, sentNonce)) {
                         ok = false;
                         reason = "session_invalid";
                     }
@@ -921,55 +1373,15 @@ public class LoginHelper {
                 if (!ok) {
                     final String fReason = reason;
                     final int fRetry = retryAfterSec;
-                    loginInProgress = false;
-                    new Handler(Looper.getMainLooper()).post(new Runnable() {
+                    mainHandler.post(new Runnable() {
                         @Override
                         public void run() {
+                            loginInProgress = false;
+                            if (destroyed) return;
                             loginBtn.setEnabled(true);
+                            loginBtn.setAlpha(1f);
                             loginBtn.setText("SIGN IN");
-                            if ("expired".equals(fReason)) {
-                                setStatus("Key expired", COLOR_DANGER);
-                                showKeyExpiredDialog();
-                            } else if ("blocked".equals(fReason)) {
-                                setStatus("Account blocked", COLOR_DANGER);
-                                showKeyExpiredDialog();
-                            } else if ("device_mismatch".equals(fReason)) {
-                                setStatus("Registered to another device", COLOR_DANGER);
-                            } else if ("rate_limited".equals(fReason)) {
-                                if (fRetry >= 60) {
-                                    int mins = (fRetry + 59) / 60;
-                                    setStatus("Too many attempts. Try again in " + mins + " min", COLOR_DANGER);
-                                } else if (fRetry > 0) {
-                                    setStatus("Too many attempts. Try again in " + fRetry + "s", COLOR_DANGER);
-                                } else {
-                                    setStatus("Too many attempts. Try again later", COLOR_DANGER);
-                                }
-                            } else if ("no_match".equals(fReason)
-                                    || "invalid_credentials".equals(fReason)) {
-                                setStatus("Invalid username or password", COLOR_DANGER);
-                            } else if ("session_invalid".equals(fReason)) {
-                                setStatus("Invalid server signature", COLOR_DANGER);
-                            } else if ("no_permission".equals(fReason)) {
-                                setStatus("Missing INTERNET permission", COLOR_DANGER);
-                            } else if ("no_internet".equals(fReason)) {
-                                setStatus("No internet / DNS blocked", COLOR_DANGER);
-                            } else if ("connect_error".equals(fReason)) {
-                                setStatus("Server unreachable", COLOR_DANGER);
-                            } else if ("timeout".equals(fReason)) {
-                                setStatus("Connection timed out", COLOR_DANGER);
-                            } else if ("tls_pin".equals(fReason)) {
-                                setStatus("SSL pin mismatch", COLOR_DANGER);
-                            } else if ("tls_error".equals(fReason)) {
-                                setStatus("SSL handshake error", COLOR_DANGER);
-                            } else if ("native_config".equals(fReason)) {
-                                setStatus("Native config error", COLOR_DANGER);
-                            } else if (fReason != null && fReason.startsWith("http_")) {
-                                setStatus("Server error (" + fReason.toUpperCase() + ")", COLOR_DANGER);
-                            } else if ("network".equals(fReason)) {
-                                setStatus("Connection failed", COLOR_DANGER);
-                            } else {
-                                setStatus("Login failed (" + fReason + ")", COLOR_DANGER);
-                            }
+                            applyLoginFailureStatus(fReason, fRetry, false);
                         }
                     });
                     return;
@@ -983,67 +1395,73 @@ public class LoginHelper {
 
                 final String fToken = token;
                 final String fUser = userOut;
-                loginInProgress = false;
-                new Handler(Looper.getMainLooper()).post(new Runnable() {
+                mainHandler.post(new Runnable() {
                     @Override
                     public void run() {
+                        loginInProgress = false;
+                        if (destroyed) return;
                         loginBtn.setEnabled(true);
+                        loginBtn.setAlpha(1f);
                         loginBtn.setText("SIGN IN");
                         setStatus("Welcome back!", COLOR_SUCCESS);
                         Toast.makeText(ctx, "Login Success", Toast.LENGTH_SHORT).show();
-                        checkUpdateAfterLogin(fToken, fUser, deviceId);
+                        checkUpdateAfterLogin(fToken, fUser, deviceId, sentNonce);
                     }
                 });
             }
         }).start();
     }
 
-    private void checkUpdateAfterLogin(final String token, final String user, final String deviceId) {
+    private void checkUpdateAfterLogin(final String token, final String user,
+                                       final String deviceId, final String nonce) {
         new Thread(new Runnable() {
             @Override
             public void run() {
                 JSONObject updateJson = ModFirebase.fetchUpdate();
-                if (updateJson == null) { proceedToMenu(token, user, deviceId); return; }
+                if (updateJson == null) { proceedToMenu(token, user, deviceId, nonce); return; }
                 try {
                     JSONObject up = updateJson.optJSONObject("up");
-                    if (up == null) { proceedToMenu(token, user, deviceId); return; }
+                    if (up == null) { proceedToMenu(token, user, deviceId, nonce); return; }
                     String latest = up.optString("version", "");
                     String msg = up.optString("message", "");
                     String current = getVersionName();
                     if (!TextUtils.isEmpty(latest) && !current.equals(latest)) {
                         final String fv = latest, fm = msg;
-                        new Handler(Looper.getMainLooper()).post(new Runnable() {
+                        mainHandler.post(new Runnable() {
                             @Override
-                            public void run() { showUpdateDialog(fv, fm, token, user, deviceId); }
+                            public void run() { showUpdateDialog(fv, fm, token, user, deviceId, nonce); }
                         });
                     } else {
-                        proceedToMenu(token, user, deviceId);
+                        proceedToMenu(token, user, deviceId, nonce);
                     }
                 } catch (Exception e) {
-                    proceedToMenu(token, user, deviceId);
+                    proceedToMenu(token, user, deviceId, nonce);
                 }
             }
         }).start();
     }
 
-    private void proceedToMenu(final String token, final String user, final String deviceId) {
-        if (token == null || token.isEmpty() || user == null || user.isEmpty()) {
-            new Handler(Looper.getMainLooper()).post(new Runnable() {
+    private void proceedToMenu(final String token, final String user,
+                               final String deviceId, final String nonce) {
+        if (destroyed) return;
+        if (TextUtils.isEmpty(token) || TextUtils.isEmpty(user) || TextUtils.isEmpty(nonce)) {
+            mainHandler.post(new Runnable() {
                 @Override public void run() { setStatus("Session invalid", COLOR_DANGER); }
             });
             return;
         }
-        if (!SecurityNative.verifySessionToken(token, user, deviceId)) {
-            new Handler(Looper.getMainLooper()).post(new Runnable() {
+        if (!SecurityNative.verifySessionToken(token, user, deviceId, nonce)) {
+            mainHandler.post(new Runnable() {
                 @Override public void run() { setStatus("Session invalid or expired", COLOR_DANGER); }
             });
             return;
         }
-        new Handler(Looper.getMainLooper()).post(new Runnable() {
+        mainHandler.post(new Runnable() {
             @Override
             public void run() {
+                if (destroyed) return;
                 cleanup();
-                if (callback != null) callback.onLoginSuccess();
+                if (callback != null) callback.onLoginSuccess(token, user, deviceId);
             }
         });
     }
@@ -1201,7 +1619,8 @@ public class LoginHelper {
     }
 
     private void showUpdateDialog(String version, String msg,
-                                  final String token, final String user, final String deviceId) {
+                                  final String token, final String user,
+                                  final String deviceId, final String nonce) {
         dismissTextActionMode();
         final android.app.AlertDialog[] ref = new android.app.AlertDialog[1];
         final LinearLayout card = newDialogCard();
@@ -1272,7 +1691,7 @@ public class LoginHelper {
         continueBtn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 if (ref[0] != null) ref[0].dismiss();
-                proceedToMenu(token, user, deviceId);
+                proceedToMenu(token, user, deviceId, nonce);
             }
         });
 
@@ -1411,149 +1830,6 @@ public class LoginHelper {
 
     private static int withAlpha(int color, int alpha) {
         return (color & 0x00FFFFFF) | ((alpha & 0xFF) << 24);
-    }
-
-    private static class FieldIcon extends Drawable {
-        static final int USER = 0;
-        static final int LOCK = 1;
-        private final int type;
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Path path = new Path();
-        private final RectF rect = new RectF();
-        private int currentColor;
-
-        FieldIcon(int type, int color) {
-            this.type = type; this.currentColor = color;
-            paint.setColor(color);
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeCap(Paint.Cap.ROUND);
-            paint.setStrokeJoin(Paint.Join.ROUND);
-        }
-
-        void animateColor(int toColor, int durationMs) {
-            ValueAnimator va = ValueAnimator.ofObject(new ArgbEvaluator(), currentColor, toColor);
-            va.setDuration(durationMs);
-            va.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
-                @Override public void onAnimationUpdate(ValueAnimator a) {
-                    currentColor = (Integer) a.getAnimatedValue();
-                    paint.setColor(currentColor); invalidateSelf();
-                }
-            });
-            va.start();
-        }
-
-        @Override public void draw(Canvas canvas) {
-            android.graphics.Rect b = getBounds();
-            if (b.width() <= 0 || b.height() <= 0) return;
-            float size = Math.min(b.width(), b.height());
-            float s = size / 24f;
-            paint.setStrokeWidth(1.5f * s);
-            canvas.save();
-            canvas.translate(b.left + (b.width() - size) / 2f,
-                             b.top + (b.height() - size) / 2f);
-            canvas.scale(s, s);
-            path.reset();
-            if (type == USER) {
-                canvas.drawCircle(12f, 8f, 3.8f, paint);
-                path.moveTo(4.5f, 20.5f);
-                path.cubicTo(4.5f, 15.5f, 8f, 13.8f, 12f, 13.8f);
-                path.cubicTo(16f, 13.8f, 19.5f, 15.5f, 19.5f, 20.5f);
-                canvas.drawPath(path, paint);
-            } else {
-                rect.set(5f, 10.5f, 19f, 21f);
-                canvas.drawRoundRect(rect, 2.4f, 2.4f, paint);
-                path.moveTo(8.5f, 10.5f);
-                path.lineTo(8.5f, 7.5f);
-                path.cubicTo(8.5f, 5.0f, 10.2f, 3f, 12f, 3f);
-                path.cubicTo(13.8f, 3f, 15.5f, 5.0f, 15.5f, 7.5f);
-                path.lineTo(15.5f, 10.5f);
-                canvas.drawPath(path, paint);
-                canvas.drawCircle(12f, 15.7f, 1.15f, paint);
-            }
-            canvas.restore();
-        }
-
-        @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); }
-        @Override public void setColorFilter(ColorFilter cf) { paint.setColorFilter(cf); }
-        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
-    }
-
-    private static class PasteIcon extends Drawable {
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Path path = new Path();
-        private final RectF rect = new RectF();
-        private int currentColor;
-
-        PasteIcon(int color) {
-            this.currentColor = color;
-            paint.setColor(color);
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeCap(Paint.Cap.ROUND);
-            paint.setStrokeJoin(Paint.Join.ROUND);
-        }
-
-        void setColor(int color) {
-            if (this.currentColor != color) {
-                this.currentColor = color;
-                paint.setColor(color);
-                invalidateSelf();
-            }
-        }
-
-        void animateColor(int toColor, int durationMs) {
-            if (this.currentColor == toColor) return;
-            ValueAnimator va = ValueAnimator.ofObject(new ArgbEvaluator(), currentColor, toColor);
-            va.setDuration(durationMs);
-            va.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
-                @Override public void onAnimationUpdate(ValueAnimator a) {
-                    currentColor = (Integer) a.getAnimatedValue();
-                    paint.setColor(currentColor);
-                    invalidateSelf();
-                }
-            });
-            va.start();
-        }
-
-        @Override
-        public void draw(Canvas canvas) {
-            Rect b = getBounds();
-            if (b.width() <= 0 || b.height() <= 0) return;
-            float size = Math.min(b.width(), b.height());
-            float s = size / 24f;
-            paint.setStrokeWidth(1.35f * s);
-            canvas.save();
-            canvas.translate(b.left + (b.width() - size) / 2f,
-                             b.top + (b.height() - size) / 2f);
-            canvas.scale(s, s);
-
-            // Top clip tab overlapping top edge
-            rect.set(8.5f, 2.2f, 15.5f, 6.2f);
-            canvas.drawRoundRect(rect, 1.5f, 1.5f, paint);
-
-            // Wide rounded clipboard body (open across top clip tab)
-            path.reset();
-            path.moveTo(8.5f, 4.2f);
-            path.lineTo(6.7f, 4.2f);
-            path.quadTo(4.5f, 4.2f, 4.5f, 6.4f);
-            path.lineTo(4.5f, 19.3f);
-            path.quadTo(4.5f, 21.5f, 6.7f, 21.5f);
-            path.lineTo(17.3f, 21.5f);
-            path.quadTo(19.5f, 21.5f, 19.5f, 19.3f);
-            path.lineTo(19.5f, 6.4f);
-            path.quadTo(19.5f, 4.2f, 17.3f, 4.2f);
-            path.lineTo(15.5f, 4.2f);
-            canvas.drawPath(path, paint);
-
-            // Two short text lines inside (different lengths)
-            canvas.drawLine(8.2f, 11.2f, 15.8f, 11.2f, paint);
-            canvas.drawLine(8.2f, 15.2f, 13.0f, 15.2f, paint);
-
-            canvas.restore();
-        }
-
-        @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); }
-        @Override public void setColorFilter(ColorFilter cf) { paint.setColorFilter(cf); }
-        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
     }
 
     private static class HandleDrawable extends Drawable {
