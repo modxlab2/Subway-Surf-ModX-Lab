@@ -10,21 +10,40 @@ const crypto = require('node:crypto');
 //   - FIREBASE_DB_URL              : e.g. https://modx-lab-a5e41-default-rtdb.firebaseio.com
 //   - FIREBASE_SERVICE_ACCOUNT_JSON: Full JSON of Firebase Service Account (Secret)
 //     (or FIREBASE_DB_SECRET as fallback legacy database secret)
+//   - ADMIN_TOKEN_SECRET (optional): Dedicated HMAC secret for admin panel tokens
 // ============================================================================
 
-const SCRYPT_N = 16384;
+const SCRYPT_N = Math.max(
+  16384,
+  Math.min(65536, Number(process.env.SCRYPT_N || 16384) || 16384)
+);
 const SCRYPT_R = 8;
 const SCRYPT_P = 1;
 const SCRYPT_KEYLEN = 64;
 
 const RATE_WINDOW_MS = 15 * 60 * 1000;
 const MAX_FAILED_ADMIN_PER_IP = 5;
-const LOCKOUT_MS = 15 * 60 * 1000;
+const BASE_LOCKOUT_MS = 15 * 60 * 1000;
+const MAX_LOCKOUT_MS = 24 * 60 * 60 * 1000;
+const LOCK_LEVEL_TTL_MS = 24 * 60 * 60 * 1000;
 const TOKEN_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+const ALLOWED_UPDATE_HOSTS = new Set([
+  't.me',
+  'telegram.me',
+  'telegram.dog',
+  'github.com',
+  'objects.githubusercontent.com',
+  'raw.githubusercontent.com',
+  'modxlab.com',
+]);
 
 const memRateCache = new Map();
 let cachedGoogleToken = null;
 let cachedGoogleTokenExpMs = 0;
+let cachedGoogleTokenPromise = null;
+let cachedServiceAccount = null;
+let cachedServiceAccountRaw = null;
 
 function base64UrlEncode(buf) {
   return Buffer.from(buf)
@@ -35,7 +54,8 @@ function base64UrlEncode(buf) {
 }
 
 function base64UrlDecode(str) {
-  let s = String(str || '').replace(/-/g, '+').replace(/_/g, '/');
+  if (!str || typeof str !== 'string') return Buffer.alloc(0);
+  let s = String(str).replace(/-/g, '+').replace(/_/g, '/');
   while (s.length % 4 !== 0) s += '=';
   return Buffer.from(s, 'base64');
 }
@@ -50,12 +70,25 @@ function constTimeStringEqual(a, b) {
   return crypto.timingSafeEqual(ha, hb);
 }
 
+function normalizeText(raw) {
+  if (raw === undefined || raw === null) return '';
+  return String(raw).normalize('NFC');
+}
+
+function hasControlChars(str) {
+  return /[\u0000-\u001f\u007f]/.test(String(str || ''));
+}
+
 function getSigningSecret() {
-  const pw = (process.env.ADMIN_PASSWORD || '').trim();
-  const sa = (process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.FIREBASE_DB_SECRET || '').trim();
   const explicit = (process.env.ADMIN_TOKEN_SECRET || '').trim();
   if (explicit) return sha256Buf(explicit);
-  return crypto.createHash('sha256').update(`admin-panel:${pw}:${sa.slice(0, 128)}`).digest();
+  const pw = (process.env.ADMIN_PASSWORD || '').trim();
+  const sa = (
+    process.env.FIREBASE_SERVICE_ACCOUNT_JSON ||
+    process.env.FIREBASE_DB_SECRET ||
+    ''
+  ).trim();
+  return crypto.createHmac('sha256', pw).update(`admin-panel-v2:${sa}`).digest();
 }
 
 function createSessionToken() {
@@ -101,7 +134,7 @@ function hashPasswordScrypt(password) {
       String(password),
       salt,
       SCRYPT_KEYLEN,
-      { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P, maxmem: 64 * 1024 * 1024 },
+      { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P, maxmem: 128 * 1024 * 1024 },
       (err, derived) => {
         if (err) return reject(err);
         resolve(
@@ -112,47 +145,68 @@ function hashPasswordScrypt(password) {
   });
 }
 
+function getParsedServiceAccount(saRaw) {
+  if (cachedServiceAccount && cachedServiceAccountRaw === saRaw) {
+    return cachedServiceAccount;
+  }
+  const parsed = JSON.parse(saRaw);
+  cachedServiceAccount = parsed;
+  cachedServiceAccountRaw = saRaw;
+  return parsed;
+}
+
 async function getFirebaseAuthParams() {
   const saRaw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if (saRaw && saRaw.trim()) {
     if (cachedGoogleToken && Date.now() < cachedGoogleTokenExpMs - 60000) {
       return { headers: { Authorization: `Bearer ${cachedGoogleToken}` }, queryAuth: '' };
     }
-
-    const sa = JSON.parse(saRaw);
-    const nowSec = Math.floor(Date.now() / 1000);
-    const header = base64UrlEncode(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
-    const claims = base64UrlEncode(
-      JSON.stringify({
-        iss: sa.client_email,
-        scope:
-          'https://www.googleapis.com/auth/firebase.database https://www.googleapis.com/auth/userinfo.email',
-        aud: sa.token_uri || 'https://oauth2.googleapis.com/token',
-        iat: nowSec,
-        exp: nowSec + 3600,
-      })
-    );
-    const signingInput = `${header}.${claims}`;
-    const signer = crypto.createSign('RSA-SHA256');
-    signer.update(signingInput);
-    const assertion = `${signingInput}.${base64UrlEncode(signer.sign(sa.private_key))}`;
-
-    const tokenRes = await fetch(sa.token_uri || 'https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-        assertion,
-      }),
-    });
-
-    if (!tokenRes.ok) {
-      throw new Error(`OAuth token exchange failed: HTTP ${tokenRes.status}`);
+    if (cachedGoogleTokenPromise) {
+      return cachedGoogleTokenPromise;
     }
-    const tokenJson = await tokenRes.json();
-    cachedGoogleToken = tokenJson.access_token;
-    cachedGoogleTokenExpMs = Date.now() + Number(tokenJson.expires_in || 3600) * 1000;
-    return { headers: { Authorization: `Bearer ${cachedGoogleToken}` }, queryAuth: '' };
+
+    cachedGoogleTokenPromise = (async () => {
+      try {
+        const sa = getParsedServiceAccount(saRaw);
+        const nowSec = Math.floor(Date.now() / 1000);
+        const header = base64UrlEncode(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+        const claims = base64UrlEncode(
+          JSON.stringify({
+            iss: sa.client_email,
+            scope:
+              'https://www.googleapis.com/auth/firebase.database https://www.googleapis.com/auth/userinfo.email',
+            aud: sa.token_uri || 'https://oauth2.googleapis.com/token',
+            iat: nowSec,
+            exp: nowSec + 3600,
+          })
+        );
+        const signingInput = `${header}.${claims}`;
+        const signer = crypto.createSign('RSA-SHA256');
+        signer.update(signingInput);
+        const assertion = `${signingInput}.${base64UrlEncode(signer.sign(sa.private_key))}`;
+
+        const tokenRes = await fetch(sa.token_uri || 'https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+            assertion,
+          }),
+        });
+
+        if (!tokenRes.ok) {
+          throw new Error(`OAuth token exchange failed: HTTP ${tokenRes.status}`);
+        }
+        const tokenJson = await tokenRes.json();
+        cachedGoogleToken = tokenJson.access_token;
+        cachedGoogleTokenExpMs = Date.now() + Number(tokenJson.expires_in || 3600) * 1000;
+        return { headers: { Authorization: `Bearer ${cachedGoogleToken}` }, queryAuth: '' };
+      } finally {
+        cachedGoogleTokenPromise = null;
+      }
+    })();
+
+    return cachedGoogleTokenPromise;
   }
 
   const dbSecret = (process.env.FIREBASE_DB_SECRET || '').trim();
@@ -184,6 +238,22 @@ async function rtdbFetch(pathWithQuery, options = {}) {
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
   });
 
+  if (options.returnMeta) {
+    const etag = res.headers.get('etag') || '';
+    if (res.status === 412) {
+      return { preconditionFailed: true, etag, data: null };
+    }
+    if (!res.ok) {
+      throw new Error(`RTDB ${options.method || 'GET'} failed: HTTP ${res.status}`);
+    }
+    const text = await res.text();
+    return {
+      preconditionFailed: false,
+      etag,
+      data: !text || text === 'null' ? null : JSON.parse(text),
+    };
+  }
+
   if (!res.ok) {
     throw new Error(`RTDB ${options.method || 'GET'} failed: HTTP ${res.status}`);
   }
@@ -192,13 +262,36 @@ async function rtdbFetch(pathWithQuery, options = {}) {
   return JSON.parse(text);
 }
 
+function isReasonableIp(ip) {
+  if (!ip || ip.length > 64) return false;
+  return /^[0-9a-fA-F:.]+$/.test(ip);
+}
+
 function getClientIp(req) {
   const headers = req.headers || {};
-  const fwd = headers['x-forwarded-for'] || headers['X-Forwarded-For'] || '';
-  if (fwd) return String(fwd).split(',')[0].trim();
-  return String(
-    headers['cf-connecting-ip'] || headers['x-real-ip'] || headers['X-Real-IP'] || 'unknown'
-  ).trim();
+  const getH = (name) => headers[name] || headers[name.toLowerCase()] || '';
+
+  const awIp = String(getH('x-appwrite-client-ip')).trim();
+  if (isReasonableIp(awIp)) return awIp;
+
+  const cfRay = String(getH('cf-ray')).trim();
+  const cfIp = String(getH('cf-connecting-ip')).trim();
+  if (cfRay && isReasonableIp(cfIp)) return cfIp;
+
+  const realIp = String(getH('x-real-ip') || getH('X-Real-IP')).trim();
+  if (isReasonableIp(realIp)) return realIp;
+
+  const fwd = String(getH('x-forwarded-for') || getH('X-Forwarded-For')).trim();
+  if (fwd) {
+    const parts = fwd
+      .split(',')
+      .map((s) => s.trim())
+      .filter(isReasonableIp);
+    if (parts.length > 0) {
+      return parts[parts.length - 1];
+    }
+  }
+  return 'unknown';
 }
 
 function safeKey(prefix, value) {
@@ -211,59 +304,150 @@ async function checkAdminRateLimit(bucketKey) {
   let rec = memRateCache.get(bucketKey);
   try {
     const dbRec = await rtdbFetch(`/_rate_limits/${bucketKey}.json`);
-    if (dbRec && typeof dbRec === 'object') rec = dbRec;
+    if (dbRec && typeof dbRec === 'object') {
+      memRateCache.set(bucketKey, dbRec);
+      rec = dbRec;
+    }
   } catch (_) {}
 
-  if (!rec) return { blocked: false, retryAfterSec: 0 };
+  if (!rec) return { blocked: false, count: 0, lockLevel: 0, retryAfterSec: 0 };
   if (rec.lockedUntil && now < rec.lockedUntil) {
     return {
       blocked: true,
+      count: rec.count || MAX_FAILED_ADMIN_PER_IP,
+      lockLevel: rec.lockLevel || 1,
       retryAfterSec: Math.max(1, Math.ceil((rec.lockedUntil - now) / 1000)),
     };
   }
+  const lockLevel =
+    rec.lastLockAt && now - rec.lastLockAt <= LOCK_LEVEL_TTL_MS ? Number(rec.lockLevel || 0) : 0;
   if (!rec.windowStart || now - rec.windowStart > RATE_WINDOW_MS) {
-    return { blocked: false, retryAfterSec: 0 };
+    return { blocked: false, count: 0, lockLevel, retryAfterSec: 0 };
   }
   if ((rec.count || 0) >= MAX_FAILED_ADMIN_PER_IP) {
     return {
       blocked: true,
+      count: rec.count,
+      lockLevel: Math.max(1, lockLevel),
       retryAfterSec: Math.max(1, Math.ceil((rec.windowStart + RATE_WINDOW_MS - now) / 1000)),
     };
   }
-  return { blocked: false, retryAfterSec: 0 };
+  return { blocked: false, count: rec.count || 0, lockLevel, retryAfterSec: 0 };
 }
 
 async function recordAdminFailure(bucketKey) {
-  const now = Date.now();
-  let rec = memRateCache.get(bucketKey);
-  try {
-    const dbRec = await rtdbFetch(`/_rate_limits/${bucketKey}.json`);
-    if (dbRec && typeof dbRec === 'object') rec = dbRec;
-  } catch (_) {}
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const now = Date.now();
+    let rec = memRateCache.get(bucketKey);
+    let etag = '';
+    try {
+      const meta = await rtdbFetch(`/_rate_limits/${bucketKey}.json`, {
+        headers: { 'X-Firebase-ETag': 'true' },
+        returnMeta: true,
+      });
+      etag = meta.etag || '';
+      if (meta.data && typeof meta.data === 'object') rec = meta.data;
+      else if (meta.data === null) rec = null;
+    } catch (_) {}
 
-  if (!rec || !rec.windowStart || now - rec.windowStart > RATE_WINDOW_MS) {
-    rec = { count: 1, windowStart: now, lockedUntil: 0 };
-  } else {
-    rec = {
-      count: (rec.count || 0) + 1,
-      windowStart: rec.windowStart,
-      lockedUntil: rec.lockedUntil || 0,
-    };
+    const prevLevel =
+      rec && rec.lastLockAt && now - rec.lastLockAt <= LOCK_LEVEL_TTL_MS
+        ? Number(rec.lockLevel || 0)
+        : 0;
+
+    let nextRec;
+    if (!rec || !rec.windowStart || now - rec.windowStart > RATE_WINDOW_MS) {
+      nextRec = {
+        count: 1,
+        windowStart: now,
+        lockedUntil: 0,
+        lockLevel: prevLevel,
+        lastLockAt: rec && rec.lastLockAt ? rec.lastLockAt : 0,
+      };
+    } else {
+      nextRec = {
+        count: (rec.count || 0) + 1,
+        windowStart: rec.windowStart,
+        lockedUntil: rec.lockedUntil || 0,
+        lockLevel: prevLevel,
+        lastLockAt: rec.lastLockAt || 0,
+      };
+    }
+    if (nextRec.count >= MAX_FAILED_ADMIN_PER_IP) {
+      const newLevel = Math.min(prevLevel + 1, 7);
+      const lockMs = Math.min(MAX_LOCKOUT_MS, BASE_LOCKOUT_MS * Math.pow(2, newLevel - 1));
+      nextRec.lockedUntil = now + lockMs;
+      nextRec.lockLevel = newLevel;
+      nextRec.lastLockAt = now;
+      nextRec.count = 0;
+    }
+    memRateCache.set(bucketKey, nextRec);
+    try {
+      const putOpts = { method: 'PUT', body: nextRec, returnMeta: true };
+      if (etag) putOpts.headers = { 'If-Match': etag };
+      const res = await rtdbFetch(`/_rate_limits/${bucketKey}.json?print=silent`, putOpts);
+      if (res && res.preconditionFailed) continue;
+      return;
+    } catch (_) {
+      return;
+    }
   }
-  if (rec.count >= MAX_FAILED_ADMIN_PER_IP) {
-    rec.lockedUntil = now + LOCKOUT_MS;
-  }
-  memRateCache.set(bucketKey, rec);
-  try {
-    await rtdbFetch(`/_rate_limits/${bucketKey}.json`, { method: 'PUT', body: rec });
-  } catch (_) {}
 }
 
 async function clearAdminRateLimit(bucketKey) {
   memRateCache.delete(bucketKey);
   try {
-    await rtdbFetch(`/_rate_limits/${bucketKey}.json`, { method: 'DELETE' });
+    await rtdbFetch(`/_rate_limits/${bucketKey}.json?print=silent`, { method: 'DELETE' });
   } catch (_) {}
+}
+
+async function writeAuditLog(event, clientIp, details = {}) {
+  try {
+    const ipHash = crypto
+      .createHash('sha256')
+      .update(`audit:${clientIp || 'unknown'}`)
+      .digest('hex')
+      .slice(0, 16);
+    await rtdbFetch('/_audit_logs.json?print=silent', {
+      method: 'POST',
+      body: {
+        ts: Date.now(),
+        event: String(event),
+        ipHash,
+        ...details,
+      },
+    });
+  } catch (_) {
+    // Audit write failure must never leak internals
+  }
+}
+
+function validateUpdateUrl(rawUrl) {
+  const s = String(rawUrl || '').trim();
+  if (!s) return { ok: true, value: '' };
+  if (s.length > 512) return { ok: false, reason: 'Update URL is too long' };
+  let parsed;
+  try {
+    parsed = new URL(s);
+  } catch (_) {
+    return { ok: false, reason: 'Invalid update URL format' };
+  }
+  if (parsed.protocol !== 'https:') {
+    return { ok: false, reason: 'Update URL must use https://' };
+  }
+  if (parsed.username || parsed.password) {
+    return { ok: false, reason: 'Update URL must not contain credentials' };
+  }
+  const host = parsed.hostname.toLowerCase();
+  const hostOk =
+    ALLOWED_UPDATE_HOSTS.has(host) || host.endsWith('.modxlab.com');
+  if (!hostOk) {
+    return {
+      ok: false,
+      reason: 'Update URL host must be Telegram (t.me), GitHub, or modxlab.com',
+    };
+  }
+  return { ok: true, value: parsed.toString() };
 }
 
 function computeExpiryMs(rec) {
@@ -283,6 +467,81 @@ function computeExpiryMs(rec) {
     }
   }
   return 0;
+}
+
+async function resolveUserNodeForUpsert(username) {
+  const encodedUser = encodeURIComponent(`"${username}"`);
+  const matched = await rtdbFetch(
+    `/User.json?orderBy=%22user%22&equalTo=${encodedUser}&limitToFirst=1`
+  ).catch(() => null);
+
+  if (matched && typeof matched === 'object') {
+    for (const [k, rec] of Object.entries(matched)) {
+      if (
+        rec &&
+        typeof rec === 'object' &&
+        normalizeText(rec.user || '').trim().toLowerCase() === username
+      ) {
+        return { nodeKey: k, existing: rec };
+      }
+    }
+  }
+
+  const hasInvalidChars = /[.#$\[\]\/]/.test(username);
+  if (!hasInvalidChars) {
+    const atDirect = await rtdbFetch(`/User/${encodeURIComponent(username)}.json`).catch(
+      () => null
+    );
+    if (!atDirect || typeof atDirect !== 'object') {
+      return { nodeKey: username, existing: null };
+    }
+    if (normalizeText(atDirect.user || '').trim().toLowerCase() === username) {
+      return { nodeKey: username, existing: atDirect };
+    }
+  }
+
+  // Deterministic collision-free key if sanitized name collides or username has RTDB special chars
+  const hashKey = `u_${crypto.createHash('sha256').update(`user:${username}`).digest('hex').slice(0, 20)}`;
+  const atHash = await rtdbFetch(`/User/${encodeURIComponent(hashKey)}.json`).catch(() => null);
+  return {
+    nodeKey: hashKey,
+    existing: atHash && typeof atHash === 'object' ? atHash : null,
+  };
+}
+
+function isOriginAllowed(req) {
+  const headers = req.headers || {};
+  const getH = (name) => String(headers[name] || headers[name.toLowerCase()] || '').trim();
+  const origin = getH('origin');
+  if (!origin) return true;
+  const host = (getH('x-forwarded-host') || getH('host')).toLowerCase();
+  if (!host) return true;
+  try {
+    const originHost = new URL(origin).host.toLowerCase();
+    return originHost === host;
+  } catch (_) {
+    return false;
+  }
+}
+
+const SECURITY_HEADERS = {
+  'cache-control': 'no-store',
+  'pragma': 'no-cache',
+  'x-frame-options': 'DENY',
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+};
+
+function sendHtml(res, html, statusCode, headers) {
+  const merged = { ...SECURITY_HEADERS, ...(headers || {}) };
+  if (typeof res.text === 'function') {
+    return res.text(html, statusCode, merged);
+  }
+  return res.send(html, statusCode, merged);
+}
+
+function sendJson(res, payload, statusCode) {
+  return res.json(payload, statusCode, SECURITY_HEADERS);
 }
 
 const HTML_PAGE = `<!doctype html>
@@ -325,8 +584,10 @@ const HTML_PAGE = `<!doctype html>
     font-size: 14px; outline: none;
   }
   input:focus, select:focus { border-color: var(--accent); }
-  .row { display: flex; gap: 10px; }
+  .row { display: flex; gap: 10px; align-items: stretch; }
   .row > div { flex: 1; }
+  .pw-row { display: flex; gap: 8px; align-items: center; }
+  .pw-row input { flex: 1; }
   button {
     width: 100%; padding: 12px; border: 0; border-radius: 10px;
     font-size: 14px; font-weight: 700; cursor: pointer; margin-top: 12px;
@@ -388,8 +649,11 @@ const HTML_PAGE = `<!doctype html>
       <label for="fUser">Username</label>
       <input id="fUser" type="text" placeholder="e.g. modxlab" autocapitalize="none" autocomplete="off">
 
-      <label for="fPass">Password (leave blank only when updating existing user days/status)</label>
-      <input id="fPass" type="text" placeholder="e.g. MyPass123" autocapitalize="none" autocomplete="off">
+      <label for="fPass">Password (min 6 chars; leave blank only when updating existing user)</label>
+      <div class="pw-row">
+        <input id="fPass" type="password" placeholder="Min 6 characters" autocapitalize="none" autocomplete="new-password">
+        <button id="togglePassBtn" type="button" class="btn-sec btn-sm">Show</button>
+      </div>
 
       <div class="row">
         <div>
@@ -430,6 +694,8 @@ const HTML_PAGE = `<!doctype html>
       </div>
       <label for="uTxt">Update Message</label>
       <input id="uTxt" type="text" placeholder="Optional message shown in update popup">
+      <label for="uUrl">Update Link (Optional https:// URL — Telegram, GitHub, modxlab.com)</label>
+      <input id="uUrl" type="url" placeholder="https://t.me/kayesahmmedpro">
       <button id="saveUpdateBtn" class="btn-sec">Save Update Info</button>
       <div id="updMsg" class="msg"></div>
     </div>
@@ -438,14 +704,11 @@ const HTML_PAGE = `<!doctype html>
 
 <script>
 (function(){
-  const TOKEN_KEY = 'modx_admin_tok';
+  let adminSessionToken = '';
   const $ = (id) => document.getElementById(id);
 
-  function getToken() { return sessionStorage.getItem(TOKEN_KEY) || ''; }
-  function setToken(t) {
-    if (t) sessionStorage.setItem(TOKEN_KEY, t);
-    else sessionStorage.removeItem(TOKEN_KEY);
-  }
+  function getToken() { return adminSessionToken; }
+  function setToken(t) { adminSessionToken = t ? String(t) : ''; }
 
   function showMsg(el, text, isErr) {
     el.textContent = text;
@@ -514,7 +777,7 @@ const HTML_PAGE = `<!doctype html>
 
   function renderUsers(users) {
     const box = $('usersBox');
-    box.innerHTML = '';
+    box.textContent = '';
     if (!users || users.length === 0) {
       const p = document.createElement('div');
       p.className = 'sub';
@@ -553,7 +816,8 @@ const HTML_PAGE = `<!doctype html>
       meta.className = 'meta';
       meta.textContent =
         'Expiry: ' + formatExpiry(u.expiryMs) +
-        ' | Device: ' + (u.device_id ? u.device_id : 'Any device (All users)');
+        ' | Device: ' + (u.device_id ? u.device_id : 'Any device (All users)') +
+        ' | Session v' + (u.tokenVersion || 1);
 
       const actions = document.createElement('div');
       actions.className = 'actions';
@@ -579,6 +843,15 @@ const HTML_PAGE = `<!doctype html>
         loadDashboard();
       };
 
+      const revokeBtn = document.createElement('button');
+      revokeBtn.className = 'btn-sec btn-sm';
+      revokeBtn.textContent = 'Revoke Sessions';
+      revokeBtn.onclick = async () => {
+        if (!confirm('Force logout all active sessions for "' + u.user + '"?')) return;
+        await api('revokeSessions', { nodeKey: u.nodeKey });
+        loadDashboard();
+      };
+
       const delBtn = document.createElement('button');
       delBtn.className = 'btn-danger btn-sm';
       delBtn.textContent = 'Delete';
@@ -590,6 +863,7 @@ const HTML_PAGE = `<!doctype html>
 
       actions.appendChild(editBtn);
       actions.appendChild(toggleBtn);
+      actions.appendChild(revokeBtn);
       actions.appendChild(delBtn);
 
       item.appendChild(head);
@@ -606,8 +880,16 @@ const HTML_PAGE = `<!doctype html>
     if (json.update) {
       $('uVer').value = json.update.version || '';
       $('uTxt').value = json.update.message || '';
+      $('uUrl').value = json.update.url || '';
     }
   }
+
+  $('togglePassBtn').onclick = () => {
+    const inp = $('fPass');
+    const show = inp.type === 'password';
+    inp.type = show ? 'text' : 'password';
+    $('togglePassBtn').textContent = show ? 'Hide' : 'Show';
+  };
 
   $('loginBtn').onclick = doLogin;
   $('adminPw').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
@@ -623,6 +905,10 @@ const HTML_PAGE = `<!doctype html>
     const deviceId = $('fDevice').value.trim();
 
     if (!username) { showMsg($('saveMsg'), 'Username is required', true); return; }
+    if (password && password.length < 6) {
+      showMsg($('saveMsg'), 'Password must be at least 6 characters', true);
+      return;
+    }
 
     $('saveUserBtn').disabled = true;
     const { json } = await api('upsertUser', { username, password, days, status, deviceId });
@@ -641,28 +927,18 @@ const HTML_PAGE = `<!doctype html>
     clearMsg($('updMsg'));
     const version = $('uVer').value.trim();
     const message = $('uTxt').value.trim();
-    const { json } = await api('setUpdate', { version, message });
+    const url = $('uUrl').value.trim();
+    const { json } = await api('setUpdate', { version, message, url });
     if (json && json.ok) {
       showMsg($('updMsg'), 'Update info saved!', false);
     } else {
       showMsg($('updMsg'), (json && json.reason) || 'Failed to update', true);
     }
   };
-
-  if (getToken()) {
-    showUnlocked();
-  }
 })();
 </script>
 </body>
 </html>`;
-
-function sendHtml(res, html, statusCode, headers) {
-  if (typeof res.text === 'function') {
-    return res.text(html, statusCode, headers);
-  }
-  return res.send(html, statusCode, headers);
-}
 
 module.exports = async ({ req, res, error }) => {
   try {
@@ -671,14 +947,19 @@ module.exports = async ({ req, res, error }) => {
     if (method === 'GET') {
       return sendHtml(res, HTML_PAGE, 200, {
         'content-type': 'text/html; charset=utf-8',
-        'cache-control': 'no-store',
-        'x-frame-options': 'DENY',
+        'content-security-policy':
+          "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
       });
+    }
+
+    if (!isOriginAllowed(req)) {
+      return sendJson(res, { ok: false, reason: 'Origin rejected' }, 403);
     }
 
     const configuredAdminPw = (process.env.ADMIN_PASSWORD || '').trim();
     if (configuredAdminPw.length < 6) {
-      return res.json(
+      return sendJson(
+        res,
         { ok: false, reason: 'ADMIN_PASSWORD env var is missing or too short (min 6 chars)' },
         503
       );
@@ -694,13 +975,14 @@ module.exports = async ({ req, res, error }) => {
     }
 
     const action = String(body.action || '');
+    const clientIp = getClientIp(req);
 
     if (action === 'auth') {
-      const clientIp = getClientIp(req);
       const ipBucket = safeKey('adm_ip', clientIp);
       const limit = await checkAdminRateLimit(ipBucket);
       if (limit.blocked) {
-        return res.json(
+        return sendJson(
+          res,
           { ok: false, reason: 'rate_limited', retryAfterSec: limit.retryAfterSec },
           429
         );
@@ -708,18 +990,24 @@ module.exports = async ({ req, res, error }) => {
 
       const supplied = String(body.adminPassword || '').trim();
       if (!supplied || !constTimeStringEqual(supplied, configuredAdminPw)) {
-        await recordAdminFailure(ipBucket);
-        return res.json({ ok: false, reason: 'Invalid admin password' }, 401);
+        await Promise.all([
+          recordAdminFailure(ipBucket),
+          writeAuditLog('admin_auth_fail', clientIp),
+        ]);
+        return sendJson(res, { ok: false, reason: 'Invalid admin password' }, 401);
       }
 
-      await clearAdminRateLimit(ipBucket);
-      return res.json({ ok: true, token: createSessionToken() }, 200);
+      await Promise.all([
+        limit.count > 0 || limit.lockLevel > 0 ? clearAdminRateLimit(ipBucket) : Promise.resolve(),
+        writeAuditLog('admin_auth_success', clientIp),
+      ]);
+      return sendJson(res, { ok: true, token: createSessionToken() }, 200);
     }
 
     const headers = req.headers || {};
     const tok = String(headers['x-admin-token'] || headers['X-Admin-Token'] || '').trim();
     if (!verifySessionToken(tok)) {
-      return res.json({ ok: false, reason: 'Session expired. Please unlock again.' }, 401);
+      return sendJson(res, { ok: false, reason: 'Session expired. Please unlock again.' }, 401);
     }
 
     if (action === 'dashboard') {
@@ -732,107 +1020,195 @@ module.exports = async ({ req, res, error }) => {
       if (usersRaw && typeof usersRaw === 'object') {
         for (const [nodeKey, rec] of Object.entries(usersRaw)) {
           if (!rec || typeof rec !== 'object') continue;
+          const tv = Number(rec.tokenVersion);
           users.push({
             nodeKey,
             user: String(rec.user || nodeKey),
             status: String(rec.status || 'false'),
             duration_days: Number(rec.duration_days || 0),
             device_id: rec.device_id ? String(rec.device_id) : '',
+            tokenVersion: Number.isInteger(tv) && tv >= 1 ? tv : 1,
             expiryMs: computeExpiryMs(rec),
           });
         }
       }
       users.sort((a, b) => a.user.localeCompare(b.user));
 
-      return res.json(
+      return sendJson(
+        res,
         {
           ok: true,
           users,
-          update: updateRaw && typeof updateRaw === 'object' ? updateRaw : { version: '', message: '' },
+          update:
+            updateRaw && typeof updateRaw === 'object'
+              ? {
+                  version: String(updateRaw.version || ''),
+                  message: String(updateRaw.message || ''),
+                  url: String(updateRaw.url || ''),
+                }
+              : { version: '', message: '', url: '' },
         },
         200
       );
     }
 
     if (action === 'upsertUser') {
-      const username = String(body.username || '').trim().toLowerCase();
-      const password = String(body.password || '');
+      const username = normalizeText(body.username || '').trim().toLowerCase();
+      const password = normalizeText(body.password || '');
       const days = Number(body.days || 30);
       const status = String(body.status) === 'false' ? 'false' : 'true';
-      const deviceId = String(body.deviceId || '').trim();
+      const deviceId = normalizeText(body.deviceId || '').trim();
 
-      if (!username || username.length > 64) {
-        return res.json({ ok: false, reason: 'Invalid username' }, 400);
+      if (!username || username.length > 64 || hasControlChars(username)) {
+        return sendJson(res, { ok: false, reason: 'Invalid username' }, 400);
+      }
+      if (deviceId && (deviceId.length > 128 || hasControlChars(deviceId))) {
+        return sendJson(res, { ok: false, reason: 'Invalid device ID' }, 400);
       }
       if (!Number.isFinite(days) || days <= 0 || days >= 36500) {
-        return res.json({ ok: false, reason: 'Validity days must be between 1 and 36500' }, 400);
+        return sendJson(res, { ok: false, reason: 'Validity days must be between 1 and 36500' }, 400);
+      }
+      if (password && (password.length < 6 || password.length > 256 || hasControlChars(password))) {
+        return sendJson(
+          res,
+          { ok: false, reason: 'Password must be 6-256 printable characters' },
+          400
+        );
       }
 
-      const safeNode = username.replace(/[.#$\[\]\/]/g, '_');
-      const existing = await rtdbFetch(`/User/${encodeURIComponent(safeNode)}.json`);
+      const { nodeKey, existing } = await resolveUserNodeForUpsert(username);
 
       if (!password && (!existing || !existing.passHash)) {
-        return res.json({ ok: false, reason: 'Password is required for a new user' }, 400);
+        return sendJson(res, { ok: false, reason: 'Password is required for a new user' }, 400);
       }
 
+      const prevTv =
+        existing && Number.isInteger(Number(existing.tokenVersion)) && Number(existing.tokenVersion) >= 1
+          ? Number(existing.tokenVersion)
+          : 1;
+      const existingDevice = existing && existing.device_id ? String(existing.device_id).trim() : '';
+      const deviceChanged = existing !== null && existingDevice !== deviceId;
+      const shouldRotateTokens =
+        existing === null ? false : Boolean(password || status === 'false' || deviceChanged);
+
+      const now = Date.now();
       const patch = {
         user: username,
         pass: null,
         status,
-        rgtime: Date.now(),
+        rgtime: now,
         duration_days: days,
         device_id: deviceId || null,
+        tokenVersion: existing === null ? 1 : shouldRotateTokens ? prevTv + 1 : prevTv,
       };
+      if (shouldRotateTokens) {
+        patch.revokedAt = now;
+      }
       if (password) {
         patch.passHash = await hashPasswordScrypt(password);
       }
 
-      await rtdbFetch(`/User/${encodeURIComponent(safeNode)}.json`, {
+      await rtdbFetch(`/User/${encodeURIComponent(nodeKey)}.json?print=silent`, {
         method: 'PATCH',
         body: patch,
       });
 
-      // Clear any login rate-limit lock for this username when admin saves/resets it
-      await clearAdminRateLimit(safeKey('u', username));
+      await Promise.all([
+        clearAdminRateLimit(safeKey('u', username)),
+        writeAuditLog('upsert_user', clientIp, {
+          nodeKey,
+          user: username,
+          status,
+          days,
+          passwordChanged: Boolean(password),
+          tokenVersion: patch.tokenVersion,
+        }),
+      ]);
 
-      return res.json({ ok: true }, 200);
+      return sendJson(res, { ok: true }, 200);
     }
 
     if (action === 'setStatus') {
       const nodeKey = String(body.nodeKey || '').trim();
       const status = String(body.status) === 'true' ? 'true' : 'false';
       if (!nodeKey || /[.#$\[\]\/]/.test(nodeKey)) {
-        return res.json({ ok: false, reason: 'Invalid nodeKey' }, 400);
+        return sendJson(res, { ok: false, reason: 'Invalid nodeKey' }, 400);
       }
-      await rtdbFetch(`/User/${encodeURIComponent(nodeKey)}.json`, {
+
+      const existing = await rtdbFetch(`/User/${encodeURIComponent(nodeKey)}.json`);
+      if (!existing || typeof existing !== 'object') {
+        return sendJson(res, { ok: false, reason: 'User not found' }, 404);
+      }
+
+      const prevTv =
+        Number.isInteger(Number(existing.tokenVersion)) && Number(existing.tokenVersion) >= 1
+          ? Number(existing.tokenVersion)
+          : 1;
+      const patch = { status };
+      if (status === 'false') {
+        patch.tokenVersion = prevTv + 1;
+        patch.revokedAt = Date.now();
+      }
+
+      await rtdbFetch(`/User/${encodeURIComponent(nodeKey)}.json?print=silent`, {
         method: 'PATCH',
-        body: { status },
+        body: patch,
       });
-      return res.json({ ok: true }, 200);
+      await writeAuditLog('set_status', clientIp, { nodeKey, status });
+      return sendJson(res, { ok: true }, 200);
+    }
+
+    if (action === 'revokeSessions') {
+      const nodeKey = String(body.nodeKey || '').trim();
+      if (!nodeKey || /[.#$\[\]\/]/.test(nodeKey)) {
+        return sendJson(res, { ok: false, reason: 'Invalid nodeKey' }, 400);
+      }
+
+      const existing = await rtdbFetch(`/User/${encodeURIComponent(nodeKey)}.json`);
+      if (!existing || typeof existing !== 'object') {
+        return sendJson(res, { ok: false, reason: 'User not found' }, 404);
+      }
+      const prevTv =
+        Number.isInteger(Number(existing.tokenVersion)) && Number(existing.tokenVersion) >= 1
+          ? Number(existing.tokenVersion)
+          : 1;
+      const nextTv = prevTv + 1;
+      await rtdbFetch(`/User/${encodeURIComponent(nodeKey)}.json?print=silent`, {
+        method: 'PATCH',
+        body: { tokenVersion: nextTv, revokedAt: Date.now() },
+      });
+      await writeAuditLog('revoke_sessions', clientIp, { nodeKey, tokenVersion: nextTv });
+      return sendJson(res, { ok: true }, 200);
     }
 
     if (action === 'deleteUser') {
       const nodeKey = String(body.nodeKey || '').trim();
       if (!nodeKey || /[.#$\[\]\/]/.test(nodeKey)) {
-        return res.json({ ok: false, reason: 'Invalid nodeKey' }, 400);
+        return sendJson(res, { ok: false, reason: 'Invalid nodeKey' }, 400);
       }
-      await rtdbFetch(`/User/${encodeURIComponent(nodeKey)}.json`, { method: 'DELETE' });
-      return res.json({ ok: true }, 200);
+      await rtdbFetch(`/User/${encodeURIComponent(nodeKey)}.json?print=silent`, { method: 'DELETE' });
+      await writeAuditLog('delete_user', clientIp, { nodeKey });
+      return sendJson(res, { ok: true }, 200);
     }
 
     if (action === 'setUpdate') {
-      const version = String(body.version || '').trim();
-      const message = String(body.message || '').trim();
-      await rtdbFetch('/update/up.json', {
+      const version = normalizeText(body.version || '').trim().slice(0, 64);
+      const message = normalizeText(body.message || '').trim().slice(0, 500);
+      const urlCheck = validateUpdateUrl(body.url);
+      if (!urlCheck.ok) {
+        return sendJson(res, { ok: false, reason: urlCheck.reason }, 400);
+      }
+      await rtdbFetch('/update/up.json?print=silent', {
         method: 'PUT',
-        body: { version, message },
+        body: { version, message, url: urlCheck.value },
       });
-      return res.json({ ok: true }, 200);
+      await writeAuditLog('set_update', clientIp, { version, hasUrl: Boolean(urlCheck.value) });
+      return sendJson(res, { ok: true }, 200);
     }
 
-    return res.json({ ok: false, reason: 'Unknown action' }, 400);
+    return sendJson(res, { ok: false, reason: 'Unknown action' }, 400);
   } catch (err) {
     if (error) error(`adminPanel error: ${err.message}`);
-    return res.json({ ok: false, reason: 'Server error' }, 500);
+    return sendJson(res, { ok: false, reason: 'Server error' }, 500);
   }
 };

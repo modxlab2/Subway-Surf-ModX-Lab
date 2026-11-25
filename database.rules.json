@@ -7,6 +7,14 @@
       ".write": false,
       ".indexOn": ["user"]
     },
+    "_rate_limits": {
+      ".read": false,
+      ".write": false
+    },
+    "_audit_logs": {
+      ".read": false,
+      ".write": false
+    },
     "update": {
       ".read": true,
       ".write": false

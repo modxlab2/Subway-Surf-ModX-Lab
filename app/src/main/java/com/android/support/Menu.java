@@ -107,61 +107,53 @@ public class Menu {
 
     public static final String TAG = "Mod_Menu";
 
-    // ---- "Obsidian & Gilt" palette : graphite-navy surfaces, champagne-gold accent ----
-    // ==== DEFAULT ACCENT = SKY BLUE (changeable via Settings) ====
-// ==== DEFAULT = login menu এর green ====
-int COLOR_ACCENT      = Color.parseColor("#3DDB87");
-int COLOR_ACCENT_2    = Color.parseColor("#2BB673");
-int COLOR_ACCENT_3    = Color.parseColor("#6EE7A9");
-int COLOR_SUCCESS     = Color.parseColor("#4FBA82");
-int COLOR_DANGER      = Color.parseColor("#EF4444");
+    // ---- ModX Lab Website Dark Palette Tokens ----
+    int COLOR_ACCENT      = ModxTheme.ACCENT;
+    int COLOR_ACCENT_2    = ModxTheme.ACCENT_PRESS;
+    int COLOR_ACCENT_3    = ModxTheme.ACCENT_HOVER;
+    int COLOR_SUCCESS     = ModxTheme.SUCCESS;
+    int COLOR_DANGER      = ModxTheme.DANGER;
 
-// ==== FIXED GREEN GLOW (both menus) ====
-final int GLOW_COLOR_1 = Color.parseColor("#3DDB87");
-final int GLOW_COLOR_2 = Color.parseColor("#2BB673");
+    int COLOR_BG_TOP      = ModxTheme.PAGE;
+    int COLOR_BG_BOTTOM   = ModxTheme.PAGE;
+    int COLOR_CARD        = ModxTheme.CARD;
+    int COLOR_CARD_HI     = ModxTheme.CARD_HOVER;
+    int COLOR_CARD_BORDER = ModxTheme.LINE;
+    int COLOR_TRACK       = ModxTheme.RAISED;
+    int COLOR_TEXT_MUTED  = ModxTheme.MUTED;
+    int BTN_GRAD_1        = ModxTheme.ACCENT;
+    int BTN_GRAD_2        = ModxTheme.ACCENT_PRESS;
 
-int COLOR_BG_TOP      = Color.parseColor("#12141C");
-int COLOR_BG_BOTTOM   = Color.parseColor("#08090D");
-int COLOR_CARD        = Color.parseColor("#181B24");
-int COLOR_CARD_HI     = Color.parseColor("#20242F");
-int COLOR_CARD_BORDER = Color.parseColor("#2E313C");
-int COLOR_TRACK       = Color.parseColor("#282B35");
-int COLOR_TEXT_MUTED  = Color.parseColor("#8D8F99");
-int BTN_GRAD_1        = Color.parseColor("#2E3550");
-int BTN_GRAD_2        = Color.parseColor("#4C5C8C");
+    // Legacy refs
+    int TEXT_COLOR            = ModxTheme.ACCENT;
+    int TEXT_COLOR_2          = ModxTheme.FG;
+    int BTN_COLOR             = ModxTheme.ACCENT;
+    int MENU_BG_COLOR         = ModxTheme.PAGE;
+    int MENU_FEATURE_BG_COLOR = ModxTheme.CARD;
+    int BORDER_COLOR          = ModxTheme.LINE;
 
-// Legacy refs
-// Legacy refs
-int TEXT_COLOR            = Color.parseColor("#3DDB87");
-int TEXT_COLOR_2          = Color.parseColor("#ECE8DF");
-int BTN_COLOR             = Color.parseColor("#3DDB87");
-int MENU_BG_COLOR         = Color.parseColor("#0C0E14");
-int MENU_FEATURE_BG_COLOR = Color.parseColor("#181B24");
-int BORDER_COLOR          = Color.parseColor("#3DDB87");
-
-int ToggleON  = Color.parseColor("#4FBA82");
-int ToggleOFF = Color.parseColor("#C25C56");
-int BtnON     = Color.parseColor("#4FBA82");
-int BtnOFF    = Color.parseColor("#C25C56");
-int CategoryBG    = Color.parseColor("#151822");
-int SeekBarColor  = Color.parseColor("#3DDB87");
-int SeekBarProgressColor = Color.parseColor("#3DDB87");
-int CheckBoxColor = Color.parseColor("#3DDB87");
-int RadioColor    = Color.parseColor("#3DDB87");
-int CollapseColor = Color.parseColor("#171A24");
-String NumberTxtColor = "#3DDB87";
+    int ToggleON  = ModxTheme.ACCENT;
+    int ToggleOFF = ModxTheme.MUTED;
+    int BtnON     = ModxTheme.ACCENT;
+    int BtnOFF    = ModxTheme.MUTED;
+    int CategoryBG    = ModxTheme.SURFACE;
+    int SeekBarColor  = ModxTheme.ACCENT;
+    int SeekBarProgressColor = ModxTheme.ACCENT;
+    int CheckBoxColor = ModxTheme.ACCENT;
+    int RadioColor    = ModxTheme.ACCENT;
+    int CollapseColor = ModxTheme.CARD;
+    String NumberTxtColor = "#20C997";
 
     // ---- Default menu / window dimensions ----
     private static final int   POS_X       = 5;
     private static final int   POS_Y       = 100;
     private static final int   MENU_WIDTH  = 272;
     private static final int   MENU_HEIGHT = 352;
-    private static final float MENU_CORNER = 10f;
+    private static final float MENU_CORNER = ModxTheme.RADIUS_DP;
     private static final float ICON_SIZE   = 65f;
     private static final float ICON_ALPHA  = 1f;
 
-    // ---- Glow / frame ----
-    private static final int   GLOW_DP   = 6;     // subtler ambient edge-light, not a neon halo
+    // ---- Crisp card frame ----
     private static final int   BORDER_DP = 1;
     private static final float ICON_CORNER_FRACTION = 0.26f;
 
@@ -194,39 +186,35 @@ String NumberTxtColor = "#3DDB87";
     private ArrayList<String> categoryNames;
     private LinearLayout mainContainer;
     
-    // Header / shimmer — login screen এ লুকানো থাকবে, login হলে দেখানো হবে
-private View mHeaderView = null;
-private View mShimmerView = null;
-// Header views যাতে color change এ update করা যায়
-private TitanicTextView mTitleView    = null;
-private TitanicTextView mProView      = null;
-private ImageView       mSettingsIcon = null;
-private View            mShimmerViewRef = null;
-private float           mCurrentHueF    = 145f;
-private TextView mSubTitleView = null;
-// ---- NEW: additional view references for live theming ----
-private Button          mMinimizeBtn    = null;
-private Button          mHideBtn        = null;
-private TextView        mProBadgeText   = null;
-private int             mColorPickerOriginalColor = 0;
+    // Header views — hidden on login screen, shown after login
+    private View mHeaderView = null;
+    private View mShimmerView = null;
+    private TextView mTitleView = null;
+    private View mTitleDot = null;
+    private TextView mProView = null;
+    private ImageView mSettingsIcon = null;
+    private View mShimmerViewRef = null;
+    private float mCurrentHueF = 162f;
+    private TextView mSubTitleView = null;
+    private Button mMinimizeBtn = null;
+    private Button mHideBtn = null;
+    private View mHideHoldProgress = null;
+    private TextView mProBadgeText = null;
+    private TextView mMenuToastView = null;
+    private Runnable mMenuToastHideRunnable = null;
+    private int mColorPickerOriginalColor = 0;
 
-// ===== Teleport Pad touch overlay =====
-private View tpPadView = null;
-private WindowManager tpPadWindowManager = null;
-private WindowManager.LayoutParams tpPadParams = null;
+    // ===== Teleport Pad touch overlay =====
+    private View tpPadView = null;
+    private WindowManager tpPadWindowManager = null;
+    private WindowManager.LayoutParams tpPadParams = null;
 
-public static Menu instance = null;
-public static native boolean IsSmoothTeleportActive();
+    public static Menu instance = null;
+    public static native boolean IsSmoothTeleportActive();
 
-    // Typography (loaded from assets/fonts if present, otherwise clean system sans)
     private Typeface fontRegular;
     private Typeface fontMedium;
     private Typeface fontBold;
-
-    // Glow animation
-    private GlowFrameDrawable glowDrawable;
-    private ValueAnimator glowAnimator;
-    private final ArgbEvaluator argb = new ArgbEvaluator();
 
     // base (unscaled) text size + padding for every scaled TextView
     private final WeakHashMap<TextView, float[]> textBase = new WeakHashMap<TextView, float[]>();
@@ -318,7 +306,11 @@ public static native boolean IsSmoothTeleportActive();
     private static class ModeButtonHolder {
         int featNum;
         String name;
-        Button button;
+        LinearLayout row;
+        ImageView iconView;
+        TextView titleView;
+        TextView summaryView;
+        TextView badgeView;
         boolean[] state;
     }
     private final HashMap<Integer, ModeButtonHolder> mModeButtons =
@@ -353,7 +345,6 @@ public static native boolean IsSmoothTeleportActive();
         SeekBar seekBar;
         TextView chip;
         SeekTrackDrawable trackDrawable;
-        GradientDrawable thumbGlow;
         GradientDrawable thumbCore;
         int min;
         int max;
@@ -368,7 +359,7 @@ public static native boolean IsSmoothTeleportActive();
         String featName;
         TextView nameView;
         LinearLayout dropdownList;
-        TabIcon chevIcon;
+        SvgIcon chevIcon;
         String[] items;
         int currentIdx;
     }
@@ -399,7 +390,9 @@ public static native boolean IsSmoothTeleportActive();
     private static class ColorPickerHolder {
         int featNum;
         String featName;
-        Button button;
+        LinearLayout row;
+        View dotView;
+        TextView hexView;
         int defaultColor;
         int currentColor;
     }
@@ -419,12 +412,15 @@ public static native boolean IsSmoothTeleportActive();
     private static class CollapseHolder {
         LinearLayout headRow;
         TextView titleView;
-        TabIcon chevIcon;
+        SvgIcon chevIcon;
     }
     private final ArrayList<TextView> mCategoryViews = new ArrayList<TextView>();
+    private final ArrayList<View> mCategoryLines = new ArrayList<View>();
     private final ArrayList<CollapseHolder> mCollapseHolders = new ArrayList<CollapseHolder>();
     private final ArrayList<Button> mLinkButtons = new ArrayList<Button>();
-    private Button mMenuColorBtn = null;
+    private LinearLayout mMenuColorRow = null;
+    private View mMenuColorDot = null;
+    private TextView mMenuColorHex = null;
     private View mBottomDivider = null;
     private TeleportPadView mMenuTeleportPad = null;
     private AlertDialog activeColorPickerDialog = null;
@@ -449,7 +445,8 @@ private LoginHelper activeLoginHelper = null;
 private PopupWindow activeDropdownPopup = null;
 private View sidebarDivider = null;
 private int effectivePosY = POS_Y;
-private static final long SESSION_REVERIFY_INTERVAL_MS = 30L * 60L * 1000L;
+private static final long SESSION_REVERIFY_INTERVAL_MS = 10L * 60L * 1000L;
+private static final long SESSION_REVERIFY_RETRY_MS = 2L * 60L * 1000L;
 private final Handler sessionVerifyHandler = new Handler(android.os.Looper.getMainLooper());
 private String activeSessionToken = "";
 private String activeSessionUser = "";
@@ -485,24 +482,26 @@ Preferences.init(context);
             if (savedAccent != 0) {
                 int safe = ensureReadableAccent(savedAccent);
                 COLOR_ACCENT   = safe;
-                COLOR_ACCENT_2 = darken(safe, 0.65f);
-                COLOR_ACCENT_3 = lighten(safe, 0.35f);
+                COLOR_ACCENT_2 = ModxTheme.accentPress(safe);
+                COLOR_ACCENT_3 = ModxTheme.accentHover(safe);
                 TEXT_COLOR = safe;
                 BTN_COLOR  = safe;
-                BORDER_COLOR = safe;
+                BTN_GRAD_1 = safe;
+                BTN_GRAD_2 = COLOR_ACCENT_2;
                 SeekBarColor = safe;
                 SeekBarProgressColor = safe;
                 CheckBoxColor = safe;
                 RadioColor    = safe;
-                NumberTxtColor = String.format("#%06X", (0xFFFFFF & safe));
+                ToggleON      = safe;
+                BtnON         = safe;
+                NumberTxtColor = ModxTheme.hex6(safe);
             }
             mCurrentHueF = getHueFromColor(COLOR_ACCENT);
         } catch (Exception ignored) { }
 
-        // Drop Poppins / Inter files into assets/fonts to upgrade the typography.
-        fontRegular = loadFont(new String[]{"fonts/poppins_regular.ttf", "fonts/inter_regular.ttf"}, "sans-serif", Typeface.NORMAL);
-        fontMedium  = loadFont(new String[]{"fonts/poppins_medium.ttf", "fonts/inter_medium.ttf"}, "sans-serif-medium", Typeface.NORMAL);
-        fontBold    = loadFont(new String[]{"fonts/poppins_semibold.ttf", "fonts/poppins_bold.ttf", "fonts/inter_bold.ttf"}, "sans-serif", Typeface.BOLD);
+        fontRegular = ModxTheme.FONT_REGULAR;
+        fontMedium  = ModxTheme.FONT_MEDIUM;
+        fontBold    = ModxTheme.FONT_SEMIBOLD;
 
         rootFrame = new FrameLayout(context);
         mRootContainer = new RelativeLayout(context);
@@ -516,27 +515,30 @@ Preferences.init(context);
 
         effectivePosY = POS_Y;
         if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
-    effectivePosY = 10;
-}
+            effectivePosY = 10;
+        }
 
-int initW = Math.min(dp(MENU_WIDTH), Math.max(dp(MIN_MENU_WIDTH_DP), screenW() - dp(10)));
-int initH = Math.min(dp(MENU_HEIGHT), Math.max(dp(MIN_MENU_HEIGHT_DP), screenH() - effectivePosY - dp(8)));
+        int initW = Math.min(dp(MENU_WIDTH), Math.max(dp(MIN_MENU_WIDTH_DP), screenW() - dp(10)));
+        int initH = Math.min(dp(MENU_HEIGHT), Math.max(dp(MIN_MENU_HEIGHT_DP), screenH() - effectivePosY - dp(8)));
 
-int loginMinH = dp(340);
-if (initH < loginMinH && screenH() > loginMinH + effectivePosY) {
-    initH = loginMinH;
-}
-        // ---------------- Frame: animated glow + gradient border ----------------
+        int loginMinH = dp(340);
+        if (initH < loginMinH && screenH() > loginMinH + effectivePosY) {
+            initH = loginMinH;
+        }
+
+        // ---------------- Frame: crisp card border (ModX Lab #131312 + #31302E) ----------------
         menuFrame = new FrameLayout(context);
         menuFrame.setVisibility(View.GONE);
         menuFrame.setLayoutParams(new RelativeLayout.LayoutParams(initW, initH));
         menuFrame.setClipChildren(false);
         menuFrame.setClipToPadding(false);
-        final int inset = dp(GLOW_DP) + dp(BORDER_DP);
+        final int inset = dp(BORDER_DP);
         menuFrame.setPadding(inset, inset, inset, inset);
-        glowDrawable = new GlowFrameDrawable(dpf(MENU_CORNER), dp(GLOW_DP), dp(BORDER_DP), GLOW_COLOR_1,
-                                     new int[]{GLOW_COLOR_1, GLOW_COLOR_2, GLOW_COLOR_1, GLOW_COLOR_2});
-        menuFrame.setBackground(glowDrawable);
+        menuFrame.setBackground(ModxTheme.roundRect(
+                context, ModxTheme.PAGE, ModxTheme.LINE, 1f, MENU_CORNER));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            menuFrame.setElevation(dp(2));
+        }
 
         // Re-apply responsive scale whenever the width changes
         menuFrame.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
@@ -558,9 +560,9 @@ if (initH < loginMinH && screenH() > loginMinH + effectivePosY) {
         // ---------------- Menu surface ----------------
         mExpanded = new LinearLayout(context);
         mExpanded.setOrientation(LinearLayout.VERTICAL);
-        GradientDrawable menuBg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                                                       new int[]{COLOR_BG_TOP, COLOR_BG_BOTTOM});
-        final float innerRadius = dpf(MENU_CORNER) - dp(BORDER_DP);
+        final float innerRadius = Math.max(0f, dpf(MENU_CORNER) - dp(BORDER_DP));
+        GradientDrawable menuBg = new GradientDrawable();
+        menuBg.setColor(ModxTheme.PAGE);
         menuBg.setCornerRadius(innerRadius);
         mExpanded.setBackground(menuBg);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -636,66 +638,83 @@ if (initH < loginMinH && screenH() > loginMinH + effectivePosY) {
         LinearLayout header = new LinearLayout(context);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(12), dp(9), dp(8), dp(7));
+        header.setBackgroundColor(ModxTheme.SURFACE);
+        header.setPadding(dp(12), dp(9), dp(8), dp(8));
         header.setOnTouchListener(onTouchListener());
 
         LinearLayout brand = new LinearLayout(context);
         brand.setOrientation(LinearLayout.VERTICAL);
         brand.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
 
-        final TitanicTextView title = new TitanicTextView(context);
-        title.setTextSize(19);
+        LinearLayout titleRow = new LinearLayout(context);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        final TextView title = new TextView(context);
+        title.setTextSize(17f);
         title.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
-        title.setTextColor(COLOR_ACCENT);
+        title.setTextColor(ModxTheme.FG);
         title.setTypeface(fontBold);
         title.setMaxLines(1);
         title.setEllipsize(TextUtils.TruncateAt.END);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) title.setLetterSpacing(0.03f);
-        title.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
+        title.setIncludeFontPadding(false);
+        title.setLayoutParams(new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT));
+
+        View titleDot = new View(context);
+        GradientDrawable dotBg = new GradientDrawable();
+        dotBg.setShape(GradientDrawable.OVAL);
+        dotBg.setColor(COLOR_ACCENT);
+        titleDot.setBackground(dotBg);
+        LinearLayout.LayoutParams dotLp = new LinearLayout.LayoutParams(dp(6), dp(6));
+        dotLp.setMargins(dp(6), dp(1), 0, 0);
+        titleDot.setLayoutParams(dotLp);
+
+        titleRow.addView(title);
+        titleRow.addView(titleDot);
 
         TextView subTitle = new TextView(context);
         subTitle.setEllipsize(TextUtils.TruncateAt.MARQUEE);
         subTitle.setMarqueeRepeatLimit(-1);
         subTitle.setSingleLine(true);
         subTitle.setSelected(true);
-        subTitle.setTextColor(Color.WHITE);
+        subTitle.setTextColor(ModxTheme.MUTED);
         subTitle.setTypeface(fontRegular);
-        subTitle.setTextSize(9.5f);
+        subTitle.setTextSize(10f);
         subTitle.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
-        subTitle.setPadding(0, dp(1), 0, 0);
+        subTitle.setIncludeFontPadding(false);
+        subTitle.setPadding(0, dp(2), 0, 0);
         subTitle.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
 
-        brand.addView(title);
+        brand.addView(titleRow);
         brand.addView(subTitle);
 
-        final TitanicTextView proTitle = new TitanicTextView(context);
+        final TextView proTitle = new TextView(context);
         proTitle.setText("PRO");
-        proTitle.setTextSize(10);
+        proTitle.setTextSize(9.5f);
         proTitle.setGravity(Gravity.CENTER);
-        proTitle.setTextColor(Color.WHITE);
+        proTitle.setTextColor(COLOR_ACCENT);
         proTitle.setTypeface(fontBold);
-        proTitle.setPadding(dp(8), dp(2), dp(8), dp(2));
-        proTitle.setBackground(cardBg(withAlpha(COLOR_SUCCESS, 0x1A), withAlpha(COLOR_SUCCESS, 0x99), 8));
+        proTitle.setIncludeFontPadding(false);
+        proTitle.setPadding(dp(7), dp(2), dp(7), dp(2));
+        proTitle.setBackground(ModxTheme.pillBadgeBg(
+                context, ModxTheme.accentSoft(COLOR_ACCENT), ModxTheme.accentLine(COLOR_ACCENT)));
         LinearLayout.LayoutParams proLp = new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
         proLp.setMargins(dp(6), 0, dp(6), 0);
         proTitle.setLayoutParams(proLp);
 
         final ImageView settings = new ImageView(context);
-        TabIcon gearIcon = new TabIcon(TabIcon.GEAR);
-        gearIcon.setColor(COLOR_ACCENT);
-        settings.setImageDrawable(gearIcon);
+        settings.setImageDrawable(ModxIcons.settings(COLOR_ACCENT, dp(19)));
         settings.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        settings.setPadding(dp(6), dp(6), dp(6), dp(6));
-        GradientDrawable gearBg = new GradientDrawable();
-        gearBg.setShape(GradientDrawable.OVAL);
-        gearBg.setColor(withAlpha(COLOR_ACCENT, 0x14));
-        gearBg.setStroke(dp(1), withAlpha(COLOR_ACCENT, 0x55));
-        settings.setBackground(gearBg);
-        settings.setLayoutParams(new LinearLayout.LayoutParams(dp(30), dp(30)));
+        settings.setPadding(dp(10), dp(10), dp(10), dp(10));
+        settings.setBackground(ModxTheme.ghostIconBg(context, COLOR_ACCENT));
+        settings.setLayoutParams(new LinearLayout.LayoutParams(dp(40), dp(40)));
+        settings.setContentDescription("Settings");
         settings.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    v.animate().rotationBy(120f).setDuration(320).setInterpolator(new OvershootInterpolator(1.4f)).start();
+                    ModxTheme.hapticTap(v);
+                    v.animate().rotationBy(90f).setDuration(260)
+                            .setInterpolator(new DecelerateInterpolator()).start();
                     selectTabByName("Settings");
                 }
             });
@@ -704,39 +723,46 @@ if (initH < loginMinH && screenH() > loginMinH + effectivePosY) {
         header.addView(proTitle);
         header.addView(settings);
 
-        LinearLayout.LayoutParams shimmerLp = new LinearLayout.LayoutParams(MATCH_PARENT, dp(2));
-        shimmerLp.setMargins(dp(12), 0, dp(12), 0);
-        ShimmerLine shimmer = new ShimmerLine(context, COLOR_ACCENT, COLOR_ACCENT_2);
-        shimmer.setLayoutParams(shimmerLp);
-        // ==== Save header views for color theming ====
-mTitleView = title;
-mSubTitleView = subTitle;
-mProView = proTitle;
-mSettingsIcon = settings;
-mShimmerViewRef = shimmer;
+        View headerLine = makeDivider(false);
+        mTitleView = title;
+        mTitleDot = titleDot;
+        mSubTitleView = subTitle;
+        mProView = proTitle;
+        mSettingsIcon = settings;
+        mShimmerViewRef = headerLine;
 
-
-        // ---------------- Body: sidebar + content (both natively drag-scrollable) ----------------
+        // ---------------- Body: sidebar + content ----------------
         mainContainer = new LinearLayout(context);
         mainContainer.setOrientation(LinearLayout.HORIZONTAL);
         mainContainer.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f));
 
-        sidebarScroll = new SlimScrollView(context);
-        sidebarScroll.setLayoutParams(new LinearLayout.LayoutParams(dp(96), MATCH_PARENT));
-        sidebarScroll.setBackgroundColor(0x33000000);
+        SlimScrollView sbScroll = new SlimScrollView(context);
+        sbScroll.setLayoutParams(new LinearLayout.LayoutParams(dp(96), MATCH_PARENT));
+        sbScroll.setBackgroundColor(ModxTheme.SURFACE);
+        sbScroll.setSolidBgColor(ModxTheme.SURFACE);
+        sbScroll.setAccentColor(COLOR_ACCENT);
+        sbScroll.setVerticalFadingEdgeEnabled(true);
+        sbScroll.setFadingEdgeLength(dp(12));
+        sidebarScroll = sbScroll;
 
         sidebarLayout = new LinearLayout(context);
         sidebarLayout.setOrientation(LinearLayout.VERTICAL);
-        sidebarLayout.setPadding(dp(6), dp(6), dp(8), dp(6));
+        sidebarLayout.setPadding(dp(6), dp(6), dp(6), dp(6));
         sidebarScroll.addView(sidebarLayout);
 
-        contentScrollView = new SlimScrollView(context);
-        contentScrollView.setLayoutParams(new LinearLayout.LayoutParams(0, MATCH_PARENT, 1f));
-        contentScrollView.setFillViewport(true);
+        SlimScrollView ctScroll = new SlimScrollView(context);
+        ctScroll.setLayoutParams(new LinearLayout.LayoutParams(0, MATCH_PARENT, 1f));
+        ctScroll.setFillViewport(true);
+        ctScroll.setBackgroundColor(ModxTheme.PAGE);
+        ctScroll.setSolidBgColor(ModxTheme.PAGE);
+        ctScroll.setAccentColor(COLOR_ACCENT);
+        ctScroll.setVerticalFadingEdgeEnabled(true);
+        ctScroll.setFadingEdgeLength(dp(12));
+        contentScrollView = ctScroll;
 
         contentLayout = new LinearLayout(context);
         contentLayout.setOrientation(LinearLayout.VERTICAL);
-        contentLayout.setPadding(dp(0), dp(4), dp(6), dp(6));
+        contentLayout.setPadding(dp(2), dp(6), dp(6), dp(8));
         contentScrollView.addView(contentLayout);
 
         mainContainer.addView(sidebarScroll);
@@ -748,22 +774,21 @@ mShimmerViewRef = shimmer;
         LinearLayout bottomBar = new LinearLayout(context);
         bottomBar.setOrientation(LinearLayout.HORIZONTAL);
         bottomBar.setGravity(Gravity.CENTER_VERTICAL);
+        bottomBar.setBackgroundColor(ModxTheme.SURFACE);
         bottomBar.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
-        bottomBar.setPadding(dp(8), dp(6), dp(26), dp(7));   // right space for resize handle
+        bottomBar.setPadding(dp(8), dp(7), dp(28), dp(7));
 
-                Button hideBtn = new Button(context);
-        LinearLayout.LayoutParams hideLp = new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f);
+        FrameLayout hideContainer = new FrameLayout(context);
+        LinearLayout.LayoutParams hideLp = new LinearLayout.LayoutParams(0, dp(38), 1f);
         hideLp.setMargins(0, 0, dp(6), 0);
-        hideBtn.setLayoutParams(hideLp);
-        // ★ Bright crisp red — border + bg + text
-        int DANGER_BRIGHT = Color.parseColor("#FF3B30");     // iOS-style vivid red
-        hideBtn.setBackground(cardBg(
-                withAlpha(DANGER_BRIGHT, 0x1F),              // soft tint bg
-                withAlpha(DANGER_BRIGHT, 0x99),              // strong border
-                6));                                          // ★ same radius as MINIMIZE
+        hideContainer.setLayoutParams(hideLp);
+
+        final Button hideBtn = new Button(context);
+        hideBtn.setLayoutParams(new FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
+        hideBtn.setBackground(ModxTheme.dangerOutlineButtonBg(context, false));
         hideBtn.setText("HIDE/KILL (Hold)");
         hideBtn.setAllCaps(false);
-        hideBtn.setTextColor(DANGER_BRIGHT);                  // ★ pure red text (no lighten)
+        hideBtn.setTextColor(ModxTheme.DANGER);
         hideBtn.setTextSize(11f);
         hideBtn.setTypeface(fontMedium);
         hideBtn.setSingleLine(true);
@@ -773,17 +798,54 @@ mShimmerViewRef = shimmer;
         hideBtn.setMinimumHeight(0);
         hideBtn.setMinWidth(0);
         hideBtn.setMinimumWidth(0);
-        hideBtn.setPadding(dp(8), dp(6), dp(8), dp(6));
+        hideBtn.setPadding(dp(8), 0, dp(8), 0);
         flatten(hideBtn);
-        addPressAnim(hideBtn);
+
+        final View hideProgressBar = new View(context);
+        FrameLayout.LayoutParams hpLp = new FrameLayout.LayoutParams(MATCH_PARENT, dp(2), Gravity.BOTTOM);
+        hpLp.setMargins(dp(3), 0, dp(3), dp(1));
+        hideProgressBar.setLayoutParams(hpLp);
+        hideProgressBar.setBackgroundColor(ModxTheme.DANGER);
+        hideProgressBar.setPivotX(0f);
+        hideProgressBar.setScaleX(0f);
+        hideProgressBar.setAlpha(0f);
+        mHideHoldProgress = hideProgressBar;
+
+        hideBtn.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View view, MotionEvent e) {
+                switch (e.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        view.animate().scaleX(0.98f).scaleY(0.98f).setDuration(90).start();
+                        hideProgressBar.animate().cancel();
+                        hideProgressBar.setScaleX(0f);
+                        hideProgressBar.setAlpha(0.95f);
+                        hideProgressBar.animate().scaleX(1f)
+                                .setDuration(ViewConfiguration.getLongPressTimeout())
+                                .setInterpolator(new LinearInterpolator()).start();
+                        break;
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        view.animate().scaleX(1f).scaleY(1f).setDuration(180)
+                                .setInterpolator(new DecelerateInterpolator()).start();
+                        hideProgressBar.animate().cancel();
+                        hideProgressBar.animate().alpha(0f).setDuration(120).start();
+                        break;
+                }
+                return false;
+            }
+        });
+
         hideBtn.setOnClickListener(new View.OnClickListener() {
                 public void onClick(View view) {
+                    ModxTheme.hapticTap(view);
                     collapseMenu(0f);
                     Toast.makeText(view.getContext(), "Icon hidden", Toast.LENGTH_SHORT).show();
                 }
             });
         hideBtn.setOnLongClickListener(new View.OnLongClickListener() {
                 public boolean onLongClick(View view) {
+                    ModxTheme.hapticTap(view);
                     Preferences.flush("menu_hide_kill");
                     Toast.makeText(view.getContext(), "Menu killed", Toast.LENGTH_LONG).show();
                     stopChecking = true;
@@ -796,19 +858,21 @@ mShimmerViewRef = shimmer;
                         activeLoginHelper.cleanup();
                         activeLoginHelper = null;
                     }
-                    stopGlowAnimator();
                     rootFrame.removeView(mRootContainer);
                     mWindowManager.removeView(rootFrame);
                     return false;
                 }
             });
 
+        hideContainer.addView(hideBtn);
+        hideContainer.addView(hideProgressBar);
+
         Button closeBtn = new Button(context);
-        closeBtn.setLayoutParams(new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT));
-        closeBtn.setBackground(cardBg(withAlpha(COLOR_ACCENT, 0x1A), withAlpha(COLOR_ACCENT, 0x77), 6));
+        closeBtn.setLayoutParams(new LinearLayout.LayoutParams(WRAP_CONTENT, dp(38)));
+        closeBtn.setBackground(ModxTheme.secondaryButtonBg(context));
         closeBtn.setText("MINIMIZE");
         closeBtn.setAllCaps(false);
-        closeBtn.setTextColor(COLOR_ACCENT);
+        closeBtn.setTextColor(ModxTheme.FG);
         closeBtn.setTextSize(11f);
         closeBtn.setTypeface(fontMedium);
         closeBtn.setSingleLine(true);
@@ -816,26 +880,29 @@ mShimmerViewRef = shimmer;
         closeBtn.setMinimumHeight(0);
         closeBtn.setMinWidth(0);
         closeBtn.setMinimumWidth(0);
-        closeBtn.setPadding(dp(10), dp(6), dp(10), dp(6));
+        closeBtn.setPadding(dp(10), 0, dp(10), 0);
+        closeBtn.setCompoundDrawablesWithIntrinsicBounds(
+                ModxIcons.minimize(ModxTheme.MUTED, dp(14)), null, null, null);
+        closeBtn.setCompoundDrawablePadding(dp(5));
         flatten(closeBtn);
         addPressAnim(closeBtn);
         closeBtn.setOnClickListener(new View.OnClickListener() {
                 public void onClick(View view) {
+                    ModxTheme.hapticTap(view);
                     collapseMenu(ICON_ALPHA);
                 }
             });
 
-        bottomBar.addView(hideBtn);
+        bottomBar.addView(hideContainer);
         bottomBar.addView(closeBtn);
-                // ==== NEW: save references for live theming ====
-        mHideBtn        = hideBtn;
-        mMinimizeBtn    = closeBtn;
-        mProBadgeText   = proTitle;
-        mHeaderView  = header;
-mShimmerView = shimmer;
-        mExpanded.addView(header);
-mExpanded.addView(shimmer);
 
+        mHideBtn      = hideBtn;
+        mMinimizeBtn  = closeBtn;
+        mProBadgeText = proTitle;
+        mHeaderView   = header;
+        mShimmerView  = headerLine;
+        mExpanded.addView(header);
+        mExpanded.addView(headerLine);
         mExpanded.addView(mainContainer);
         mBottomDivider = makeDivider(false);
         mExpanded.addView(mBottomDivider);
@@ -853,13 +920,36 @@ mExpanded.addView(shimmer);
         categoryViewsMap = new HashMap<String, LinearLayout>();
         categoryNames = new ArrayList<String>();
 
+        // ---------------- In-menu snackbar pill ----------------
+        TextView toastTv = new TextView(context);
+        toastTv.setTextColor(ModxTheme.FG);
+        toastTv.setTextSize(11f);
+        toastTv.setTypeface(fontMedium);
+        toastTv.setGravity(Gravity.CENTER);
+        toastTv.setMaxLines(2);
+        toastTv.setEllipsize(TextUtils.TruncateAt.END);
+        toastTv.setIncludeFontPadding(false);
+        toastTv.setPadding(dp(12), dp(7), dp(12), dp(7));
+        toastTv.setBackground(ModxTheme.pillBadgeBg(context, ModxTheme.CARD, ModxTheme.LINE_STRONG));
+        toastTv.setVisibility(View.GONE);
+        toastTv.setAlpha(0f);
+        FrameLayout.LayoutParams tLp = new FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
+        tLp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+        tLp.setMargins(dp(16), 0, dp(16), dp(52));
+        toastTv.setLayoutParams(tLp);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            toastTv.setElevation(dp(6));
+        }
+        mMenuToastView = toastTv;
+        menuFrame.addView(toastTv);
+
         // ---------------- Resize handle (diagonal grip) ----------------
         resizeHandle = new View(context);
-        resizeHandle.setBackground(makeGripDrawable(withAlpha(COLOR_ACCENT, 0xE0), dpf(1.7f)));
-        int hSize = dp(22);
+        resizeHandle.setBackground(makeGripDrawable(ModxTheme.SUBTLE, dpf(1.6f)));
+        int hSize = dp(20);
         FrameLayout.LayoutParams rhLp = new FrameLayout.LayoutParams(hSize, hSize);
         rhLp.gravity = Gravity.BOTTOM | Gravity.RIGHT;
-        rhLp.setMargins(0, 0, inset + dp(3), inset + dp(3));
+        rhLp.setMargins(0, 0, inset + dp(4), inset + dp(4));
         resizeHandle.setLayoutParams(rhLp);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             resizeHandle.setElevation(dp(30));
@@ -867,72 +957,64 @@ mExpanded.addView(shimmer);
         resizeHandle.setOnTouchListener(resizeTouchListener);
         menuFrame.addView(resizeHandle);
 
-        
         try {
-    boolean canOverlayTp = Build.VERSION.SDK_INT < Build.VERSION_CODES.M
-            || android.provider.Settings.canDrawOverlays(context);
-    if (canOverlayTp) {
-        tpPadView = new TeleportPadTouchView(context);
-        WindowManager tpWm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+            boolean canOverlayTp = Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                    || android.provider.Settings.canDrawOverlays(context);
+            if (canOverlayTp) {
+                tpPadView = new TeleportPadTouchView(context);
+                WindowManager tpWm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
 
-        int tpType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-            ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            : WindowManager.LayoutParams.TYPE_PHONE;
+                int tpType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                    ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                    : WindowManager.LayoutParams.TYPE_PHONE;
 
-        tpPadParams = new WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            tpType,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-            | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-            | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-            | WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS,
-            PixelFormat.TRANSPARENT);
-        tpPadParams.gravity = Gravity.TOP | Gravity.START;
+                tpPadParams = new WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    tpType,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                    | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                    | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                    | WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS,
+                    PixelFormat.TRANSPARENT);
+                tpPadParams.gravity = Gravity.TOP | Gravity.START;
 
-        // Default position: bottom-right
-        int sw = screenW();
-        int sh = screenH();
-        float dens = safeDisplayMetrics(getContext).density;
-        int padW = (int)(220 * dens);
-        int padH = (int)(130 * dens);
-        tpPadParams.x = sw - padW - dp(20);
-        tpPadParams.y = sh - padH - dp(140);
+                int sw = screenW();
+                int sh = screenH();
+                float dens = safeDisplayMetrics(getContext).density;
+                int padW = (int)(220 * dens);
+                int padH = (int)(130 * dens);
+                tpPadParams.x = sw - padW - dp(20);
+                tpPadParams.y = sh - padH - dp(140);
 
-        tpWm.addView(tpPadView, tpPadParams);
-        tpPadWindowManager = tpWm;
-        tpPadView.setVisibility(View.GONE);
-    }
-} catch (Exception e) {
-    Log.e(TAG, "TPPad add failed: " + e);
-}
+                tpWm.addView(tpPadView, tpPadParams);
+                tpPadWindowManager = tpWm;
+                tpPadView.setVisibility(View.GONE);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "TPPad add failed: " + e);
+        }
 
         Init(context, title, subTitle);
 
-// ★ Native Init "Waiting for game lib..." সেট করতে পারে → সাথে সাথে override
-title.setText("ModX Lab");
-subTitle.setText("Subway Surf V3.70.2");
+        title.setText("ModX Lab");
+        subTitle.setText("Subway Surf V3.70.2");
 
-// ★ Periodically re-check — Init async হলে তখনও override হবে
-final TextView fSub = subTitle;
-final TextView fTitle = title;
-final Handler subGuard = new Handler();
-subGuard.postDelayed(new Runnable() {
-    @Override
-    public void run() {
-        try {
-            CharSequence s = fSub.getText();
-            if (s != null && s.toString().contains("Waiting")) {
-                fSub.setText("Subway Surf V3.70.2");
+        final TextView fSub = subTitle;
+        final Handler subGuard = new Handler();
+        subGuard.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    CharSequence s = fSub.getText();
+                    if (s != null && s.toString().contains("Waiting")) {
+                        fSub.setText("Subway Surf V3.70.2");
+                    }
+                } catch (Exception ignored) { }
+                subGuard.postDelayed(this, 1000);
             }
-        } catch (Exception ignored) { }
-        subGuard.postDelayed(this, 1000);
-    }
-}, 1000);
-
-new Titanic().start(title);
-new Titanic().start(proTitle);
+        }, 1000);
     }
 
     // ================================================================
@@ -970,66 +1052,56 @@ new Titanic().start(proTitle);
     }
 
     private static int bestTextOnColor(int bgColor) {
-        int darkInk = Color.parseColor("#0B0D12");
-        return (contrastRatio(bgColor, darkInk) >= contrastRatio(bgColor, Color.WHITE))
-                ? darkInk
-                : Color.WHITE;
+        return ModxTheme.onAccent(bgColor);
+    }
+
+    private void showMenuToast(final String message) {
+        if (TextUtils.isEmpty(message) || mMenuToastView == null) return;
+        runOnMainThread(new Runnable() {
+            @Override
+            public void run() {
+                if (mMenuToastView == null) return;
+                if (mMenuToastHideRunnable != null) {
+                    mainHandler.removeCallbacks(mMenuToastHideRunnable);
+                }
+                mMenuToastView.animate().cancel();
+                mMenuToastView.setText(message);
+                mMenuToastView.setBackground(ModxTheme.pillBadgeBg(
+                        getContext, ModxTheme.CARD, ModxTheme.accentLine(COLOR_ACCENT)));
+                mMenuToastView.setVisibility(View.VISIBLE);
+                mMenuToastView.setAlpha(0f);
+                mMenuToastView.setTranslationY(dp(6));
+                mMenuToastView.animate().alpha(1f).translationY(0f).setDuration(150).start();
+                mMenuToastHideRunnable = new Runnable() {
+                    @Override
+                    public void run() {
+                        if (mMenuToastView == null) return;
+                        mMenuToastView.animate().alpha(0f).setDuration(180)
+                                .withEndAction(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        if (mMenuToastView != null) {
+                                            mMenuToastView.setVisibility(View.GONE);
+                                        }
+                                    }
+                                }).start();
+                    }
+                };
+                mainHandler.postDelayed(mMenuToastHideRunnable, 1800L);
+            }
+        });
     }
 
     private int ensureReadableAccent(int rawColor) {
-        int opaque = 0xFF000000 | rawColor;
-        double minContrast = 3.5;
-        if (contrastRatio(opaque, COLOR_CARD) >= minContrast) {
-            return opaque;
-        }
-        float[] hsv = new float[3];
-        Color.colorToHSV(opaque, hsv);
-
-        // Step 1: raise brightness (V) up to 1.0 preserving hue & saturation
-        float[] test = new float[]{ hsv[0], hsv[1], 1.0f };
-        int fullV = 0xFF000000 | Color.HSVToColor(test);
-        if (contrastRatio(fullV, COLOR_CARD) >= minContrast) {
-            float lo = hsv[2];
-            float hi = 1.0f;
-            for (int i = 0; i < 18; i++) {
-                float mid = (lo + hi) * 0.5f;
-                test[2] = mid;
-                int c = 0xFF000000 | Color.HSVToColor(test);
-                if (contrastRatio(c, COLOR_CARD) >= minContrast) {
-                    hi = mid;
-                } else {
-                    lo = mid;
-                }
-            }
-            test[2] = hi;
-            return 0xFF000000 | Color.HSVToColor(test);
-        }
-
-        // Step 2: for very deep pure blues/violets where V=1 is still < 3.5:1,
-        // slightly reduce saturation toward white until contrast >= 3.5
-        test[2] = 1.0f;
-        float lo = 0f;
-        float hi = hsv[1];
-        for (int i = 0; i < 18; i++) {
-            float mid = (lo + hi) * 0.5f;
-            test[1] = mid;
-            int c = 0xFF000000 | Color.HSVToColor(test);
-            if (contrastRatio(c, COLOR_CARD) >= minContrast) {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
-        }
-        test[1] = lo;
-        return 0xFF000000 | Color.HSVToColor(test);
+        return ModxTheme.ensureReadableAccent(rawColor);
     }
 
     private static boolean isLight(int color) {
-        return bestTextOnColor(color) != Color.WHITE;
+        return ModxTheme.isLight(color);
     }
 
     private static String hex(int color) {
-        return String.format("#%06X", (0xFFFFFF & color));
+        return ModxTheme.hex6(color);
     }
 
     private LinearLayout.LayoutParams rowLp(int l, int t, int r, int b) {
@@ -1042,7 +1114,9 @@ new Titanic().start(proTitle);
         GradientDrawable g = new GradientDrawable();
         g.setColor(fill);
         g.setCornerRadius(dp(radiusDp));
-        g.setStroke(dp(1), stroke);
+        if (stroke != 0) {
+            g.setStroke(dp(1), stroke);
+        }
         return g;
     }
 
@@ -1058,18 +1132,17 @@ new Titanic().start(proTitle);
         }
     }
 
-    // Soft "press in / bounce out" feedback. Returns false so click listeners still fire.
     private void addPressAnim(View v) {
         v.setOnTouchListener(new View.OnTouchListener() {
                 @Override
                 public boolean onTouch(View view, MotionEvent e) {
                     switch (e.getActionMasked()) {
                         case MotionEvent.ACTION_DOWN:
-                            view.animate().scaleX(0.975f).scaleY(0.975f).alpha(0.92f).setDuration(100).setInterpolator(new DecelerateInterpolator()).start();
+                            view.animate().scaleX(0.985f).scaleY(0.985f).alpha(0.92f).setDuration(90).setInterpolator(new DecelerateInterpolator()).start();
                             break;
                         case MotionEvent.ACTION_UP:
                         case MotionEvent.ACTION_CANCEL:
-                            view.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(260).setInterpolator(new OvershootInterpolator(1.3f)).start();
+                            view.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(200).setInterpolator(new DecelerateInterpolator()).start();
                             break;
                     }
                     return false;
@@ -1078,8 +1151,9 @@ new Titanic().start(proTitle);
     }
 
     private void animateStroke(final GradientDrawable g, int from, int to) {
+        if (g == null) return;
         ValueAnimator va = ValueAnimator.ofObject(new ArgbEvaluator(), from, to);
-        va.setDuration(240);
+        va.setDuration(200);
         va.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
                 @Override
                 public void onAnimationUpdate(ValueAnimator a) {
@@ -1093,13 +1167,10 @@ new Titanic().start(proTitle);
         View v = new View(getContext);
         if (vertical) {
             v.setLayoutParams(new LinearLayout.LayoutParams(dp(1), MATCH_PARENT));
-            v.setBackgroundColor(withAlpha(COLOR_ACCENT, 0x24));
         } else {
             v.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, dp(1)));
-            GradientDrawable line = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-                                                         new int[]{withAlpha(COLOR_ACCENT, 0x00), withAlpha(COLOR_ACCENT, 0x70), withAlpha(COLOR_ACCENT_2, 0x70), withAlpha(COLOR_ACCENT_2, 0x00)});
-            v.setBackground(line);
         }
+        v.setBackgroundColor(ModxTheme.LINE);
         return v;
     }
 
@@ -1128,38 +1199,37 @@ new Titanic().start(proTitle);
     // Expand / collapse with animation
     // ================================================================
     private void expandMenu() {
-    menuFrame.animate().cancel();
-    mCollapsed.setVisibility(View.GONE);
-    menuFrame.setVisibility(View.VISIBLE);
-    menuFrame.setPivotX(0f);
-    menuFrame.setPivotY(0f);
-    menuFrame.setAlpha(0f);
-    menuFrame.setScaleX(0.86f);
-    menuFrame.setScaleY(0.86f);
-    menuFrame.animate()
-        .alpha(1f).scaleX(1f).scaleY(1f)
-        .setDuration(280)
-        .setInterpolator(new DecelerateInterpolator(1.8f))
-        .start();
-    startGlowAnimator();
-    menuFrame.post(new Runnable() {
-        @Override
-        public void run() {
-            keepInsideScreen();
-            applyResponsiveScale(menuFrame.getWidth());
-            if (!isLoggedIn && !windowIsFocusable) {
-                setWindowFocusable(true);
+        menuFrame.animate().cancel();
+        mCollapsed.setVisibility(View.GONE);
+        menuFrame.setVisibility(View.VISIBLE);
+        menuFrame.setPivotX(0f);
+        menuFrame.setPivotY(0f);
+        menuFrame.setAlpha(0f);
+        menuFrame.setScaleX(0.92f);
+        menuFrame.setScaleY(0.92f);
+        menuFrame.animate()
+            .alpha(1f).scaleX(1f).scaleY(1f)
+            .setDuration(220)
+            .setInterpolator(new DecelerateInterpolator(1.6f))
+            .start();
+        menuFrame.post(new Runnable() {
+            @Override
+            public void run() {
+                keepInsideScreen();
+                applyResponsiveScale(menuFrame.getWidth());
+                if (!isLoggedIn && !windowIsFocusable) {
+                    setWindowFocusable(true);
+                }
+                if (!isLoggedIn && activeLoginHelper != null) {
+                    activeLoginHelper.prepareActionModeHost();
+                    activeLoginHelper.onHostVisibilityChanged(true);
+                }
+                if (!isLoggedIn) {
+                    updateLoginOverflowScroll(false);
+                }
             }
-            if (!isLoggedIn && activeLoginHelper != null) {
-                activeLoginHelper.prepareActionModeHost();
-                activeLoginHelper.onHostVisibilityChanged(true);
-            }
-            if (!isLoggedIn) {
-                updateLoginOverflowScroll(false);
-            }
-        }
-    });
-}
+        });
+    }
 
     private void collapseMenu(float iconAlpha) {
         Preferences.flush("menu_collapse");
@@ -1167,17 +1237,16 @@ new Titanic().start(proTitle);
             activeLoginHelper.onHostVisibilityChanged(false);
         }
         setWindowFocusable(false);
-        stopGlowAnimator();
         mCollapsed.setVisibility(View.VISIBLE);
         mCollapsed.setAlpha(iconAlpha);
-        mCollapsed.setScaleX(0.6f);
-        mCollapsed.setScaleY(0.6f);
-        mCollapsed.animate().scaleX(1f).scaleY(1f).setDuration(320).setInterpolator(new OvershootInterpolator(1.4f)).start();
+        mCollapsed.setScaleX(0.75f);
+        mCollapsed.setScaleY(0.75f);
+        mCollapsed.animate().scaleX(1f).scaleY(1f).setDuration(240).setInterpolator(new DecelerateInterpolator(1.4f)).start();
 
         menuFrame.animate().cancel();
         menuFrame.animate()
-            .alpha(0f).scaleX(0.9f).scaleY(0.9f)
-            .setDuration(170)
+            .alpha(0f).scaleX(0.94f).scaleY(0.94f)
+            .setDuration(150)
             .setInterpolator(new AccelerateInterpolator())
             .withEndAction(new Runnable() {
                 @Override
@@ -1189,34 +1258,6 @@ new Titanic().start(proTitle);
                 }
             })
             .start();
-    }
-
-    // Border light rotates slowly and the glow "breathes" between cyan and violet
-    private void startGlowAnimator() {
-        if (glowDrawable == null) return;
-        if (glowAnimator != null && glowAnimator.isRunning()) return;
-        glowAnimator = ValueAnimator.ofFloat(0f, 1f);
-        glowAnimator.setDuration(9000);
-        glowAnimator.setInterpolator(new LinearInterpolator());
-        glowAnimator.setRepeatCount(ValueAnimator.INFINITE);
-        glowAnimator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
-                @Override
-                public void onAnimationUpdate(ValueAnimator a) {
-                    float p = (Float) a.getAnimatedValue();
-                    double s = Math.sin(p * Math.PI * 2.0 * 4.0);
-                    float intensity = (float) (0.78 + 0.22 * s);
-                    int color = (Integer) argb.evaluate((float) ((s + 1.0) / 2.0), GLOW_COLOR_1, GLOW_COLOR_2);
-                    glowDrawable.update(p, intensity, color);
-                }
-            });
-        glowAnimator.start();
-    }
-
-    private void stopGlowAnimator() {
-        if (glowAnimator != null) {
-            glowAnimator.cancel();
-            glowAnimator = null;
-        }
     }
 
     // Move the overlay window but keep it inside the screen
@@ -1310,273 +1351,14 @@ new Titanic().start(proTitle);
     }
 
     // ================================================================
-    // Animated glow + gradient border frame (drawn behind the menu surface)
-    // ================================================================
-    private static class GlowFrameDrawable extends Drawable {
-        private static final int STEPS = 10;
-
-        private final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint borderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final RectF base = new RectF();
-        private final RectF tmp = new RectF();
-        private final Matrix matrix = new Matrix();
-        private final float radius, glowSize, borderWidth;
-        private final int[] sweepColors;
-        private SweepGradient sweep;
-        private float phase = 0f;
-        private float intensity = 1f;
-        private int glowColor;
-
-        GlowFrameDrawable(float radius, float glowSize, float borderWidth, int glowColor, int[] sweepColors) {
-            this.radius = radius;
-            this.glowSize = glowSize;
-            this.borderWidth = borderWidth;
-            this.glowColor = glowColor;
-            this.sweepColors = sweepColors;
-            glowPaint.setStyle(Paint.Style.STROKE);
-            borderPaint.setStyle(Paint.Style.STROKE);
-            borderPaint.setStrokeWidth(borderWidth);
-        }
-
-        void update(float phase, float intensity, int glowColor) {
-            this.phase = phase;
-            this.intensity = intensity;
-            this.glowColor = glowColor;
-            invalidateSelf();
-        }
-
-        @Override
-        protected void onBoundsChange(Rect b) {
-            super.onBoundsChange(b);
-            if (b.width() > 0 && b.height() > 0) {
-                sweep = new SweepGradient(b.exactCenterX(), b.exactCenterY(), sweepColors, null);
-                borderPaint.setShader(sweep);
-            }
-        }
-
-        @Override
-        public void draw(Canvas canvas) {
-            Rect b = getBounds();
-            if (b.width() <= 0 || b.height() <= 0 || sweep == null) return;
-
-            base.set(b.left + glowSize, b.top + glowSize, b.right - glowSize, b.bottom - glowSize);
-            float step = glowSize / STEPS;
-            glowPaint.setStrokeWidth(step + 1f);
-
-            for (int i = STEPS; i >= 1; i--) {
-                float d = (i - 0.5f) / STEPS;
-                float a = 0.22f * (1f - d) * (1f - d) * intensity;
-                glowPaint.setColor(glowColor);
-                glowPaint.setAlpha(Math.max(0, Math.min(255, (int) (255f * a))));
-                float inflate = (i - 0.5f) * step;
-                tmp.set(base.left - inflate, base.top - inflate, base.right + inflate, base.bottom + inflate);
-                canvas.drawRoundRect(tmp, radius + inflate, radius + inflate, glowPaint);
-            }
-
-            matrix.setRotate(phase * 360f, b.exactCenterX(), b.exactCenterY());
-            sweep.setLocalMatrix(matrix);
-            float half = borderWidth / 2f;
-            tmp.set(base.left + half, base.top + half, base.right - half, base.bottom - half);
-            canvas.drawRoundRect(tmp, radius - half, radius - half, borderPaint);
-        }
-
-        @Override public void setAlpha(int alpha) { }
-        @Override public void setColorFilter(ColorFilter cf) { }
-        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
-    }
-
-    // ================================================================
-    // Looping animated views (auto start / stop with visibility)
-    // ================================================================
-    private static abstract class LoopView extends View {
-        protected float progress;
-        private final long duration;
-        private ValueAnimator animator;
-        private boolean attached;
-
-        LoopView(Context context, long duration) {
-            super(context);
-            this.duration = duration;
-        }
-
-        private void sync() {
-            boolean run = attached && isShown() && getWindowVisibility() == View.VISIBLE;
-            if (run) {
-                if (animator == null) {
-                    animator = ValueAnimator.ofFloat(0f, 1f);
-                    animator.setDuration(duration);
-                    animator.setInterpolator(new LinearInterpolator());
-                    animator.setRepeatCount(ValueAnimator.INFINITE);
-                    animator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
-                            @Override
-                            public void onAnimationUpdate(ValueAnimator a) {
-                                progress = (Float) a.getAnimatedValue();
-                                invalidate();
-                            }
-                        });
-                }
-                if (!animator.isStarted()) animator.start();
-            } else if (animator != null && animator.isStarted()) {
-                animator.cancel();
-            }
-        }
-
-        @Override
-        protected void onAttachedToWindow() {
-            super.onAttachedToWindow();
-            attached = true;
-            sync();
-        }
-
-        @Override
-        protected void onDetachedFromWindow() {
-            attached = false;
-            sync();
-            super.onDetachedFromWindow();
-        }
-
-        @Override
-        protected void onVisibilityChanged(View changedView, int visibility) {
-            super.onVisibilityChanged(changedView, visibility);
-            sync();
-        }
-
-        @Override
-        protected void onWindowVisibilityChanged(int visibility) {
-            super.onWindowVisibilityChanged(visibility);
-            sync();
-        }
-    }
-
-    // Rotating neon ring + pulsing glow around the collapsed icon
-    private static class GlowRingView extends LoopView {
-        private final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint basePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint ringPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final RectF ringRect = new RectF();
-        private final RectF tmp = new RectF();
-        private final Matrix matrix = new Matrix();
-        private final float density;
-        private final int c1, c2;
-        private SweepGradient sweep;
-
-        GlowRingView(Context context, int c1, int c2) {
-            super(context, 3200);
-            this.density = safeDisplayMetrics(context).density;
-            this.c1 = c1;
-            this.c2 = c2;
-            glowPaint.setStyle(Paint.Style.STROKE);
-            basePaint.setStyle(Paint.Style.STROKE);
-            basePaint.setStrokeWidth(1.1f * density);
-            basePaint.setColor(withAlpha(c1, 0x38));
-            ringPaint.setStyle(Paint.Style.STROKE);
-            ringPaint.setStrokeWidth(1.8f * density);
-            ringPaint.setStrokeCap(Paint.Cap.ROUND);
-        }
-
-        @Override
-        protected void onSizeChanged(int w, int h, int oldw, int oldh) {
-            super.onSizeChanged(w, h, oldw, oldh);
-            if (w > 0 && h > 0) {
-                sweep = new SweepGradient(w / 2f, h / 2f,
-                                          new int[]{withAlpha(c1, 0), c1, c2, withAlpha(c2, 0)},
-                                          new float[]{0f, 0.45f, 0.8f, 1f});
-                ringPaint.setShader(sweep);
-            }
-        }
-
-        @Override
-        protected void onDraw(Canvas canvas) {
-            float w = getWidth();
-            float h = getHeight();
-            if (w <= 0 || h <= 0 || sweep == null) return;
-
-            float pad = 11f * density;
-            float gap = 3f * density;
-            float radius = (w - 2f * pad) * ICON_CORNER_FRACTION + gap;
-            ringRect.set(pad - gap, pad - gap, w - pad + gap, h - pad + gap);
-
-            float glowSize = pad - gap - density;
-            int steps = 7;
-            float step = glowSize / steps;
-            float pulse = 0.65f + 0.35f * (float) Math.sin(progress * 2.0 * Math.PI);
-            glowPaint.setStrokeWidth(step + 1f);
-            for (int i = steps; i >= 1; i--) {
-                float d = (i - 0.5f) / steps;
-                float a = 0.28f * (1f - d) * (1f - d) * pulse;
-                glowPaint.setColor(c1);
-                glowPaint.setAlpha(Math.max(0, Math.min(255, (int) (255f * a))));
-                float inflate = (i - 0.5f) * step;
-                tmp.set(ringRect.left - inflate, ringRect.top - inflate, ringRect.right + inflate, ringRect.bottom + inflate);
-                canvas.drawRoundRect(tmp, radius + inflate, radius + inflate, glowPaint);
-            }
-
-            canvas.drawRoundRect(ringRect, radius, radius, basePaint);
-            matrix.setRotate(progress * 360f, w / 2f, h / 2f);
-            sweep.setLocalMatrix(matrix);
-            canvas.drawRoundRect(ringRect, radius, radius, ringPaint);
-        }
-    }
-
-    // Thin gradient line with a light sweeping across (header accent)
-    private static class ShimmerLine extends LoopView {
-        private final Paint basePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint hiPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Matrix matrix = new Matrix();
-        private int c1, c2;
-        private LinearGradient hiShader;
-
-        ShimmerLine(Context context, int c1, int c2) {
-            super(context, 2600);
-            this.c1 = c1;
-            this.c2 = c2;
-        }
-
-        void setColors(int c1, int c2) {
-            this.c1 = c1;
-            this.c2 = c2;
-            int w = getWidth();
-            if (w > 0) {
-                basePaint.setShader(new LinearGradient(0, 0, w, 0,
-                        new int[]{withAlpha(c1, 0), c1, c2, withAlpha(c2, 0)},
-                        new float[]{0f, 0.3f, 0.7f, 1f}, Shader.TileMode.CLAMP));
-            }
-            invalidate();
-        }
-
-        @Override
-        protected void onSizeChanged(int w, int h, int oldw, int oldh) {
-            super.onSizeChanged(w, h, oldw, oldh);
-            if (w <= 0) return;
-            basePaint.setShader(new LinearGradient(0, 0, w, 0,
-                                                   new int[]{withAlpha(c1, 0), c1, c2, withAlpha(c2, 0)},
-                                                   new float[]{0f, 0.3f, 0.7f, 1f}, Shader.TileMode.CLAMP));
-            hiShader = new LinearGradient(0, 0, w * 0.28f, 0,
-                                          new int[]{0x00FFFFFF, 0xDDFFFFFF, 0x00FFFFFF}, null, Shader.TileMode.CLAMP);
-            hiPaint.setShader(hiShader);
-        }
-
-        @Override
-        protected void onDraw(Canvas canvas) {
-            int w = getWidth();
-            int h = getHeight();
-            if (w <= 0 || hiShader == null) return;
-            canvas.drawRect(0, 0, w, h, basePaint);
-            matrix.setTranslate(-w * 0.28f + progress * (w * 1.28f), 0f);
-            hiShader.setLocalMatrix(matrix);
-            canvas.drawRect(0, 0, w, h, hiPaint);
-        }
-    }
-
-    // ================================================================
-    // Premium toggle switch (animated thumb + glow)
+    // Clean toggle switch (ModX Theme — subtle 1.5dp ring, no neon bloom)
     // ================================================================
     private static class ToggleView extends View {
         interface Listener { void onChanged(boolean checked); }
 
         private final Paint trackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint borderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint thumbPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF rect = new RectF();
         private final ArgbEvaluator argb = new ArgbEvaluator();
         private final float density;
@@ -1584,8 +1366,6 @@ new Titanic().start(proTitle);
         private boolean checked;
         private float t = 0f;
         private float scale = 1f;
-        private float shaderScale = -1f;
-        private LinearGradient onShader;
         private ValueAnimator anim;
         private Listener listener;
 
@@ -1595,17 +1375,16 @@ new Titanic().start(proTitle);
             this.onColor = onColor;
             this.onColor2 = onColor2;
             this.offColor = offColor;
-            glowPaint.setStyle(Paint.Style.FILL);
             thumbPaint.setStyle(Paint.Style.FILL);
             trackPaint.setStyle(Paint.Style.FILL);
+            borderPaint.setStyle(Paint.Style.STROKE);
+            borderPaint.setStrokeWidth(1f * density);
         }
 
         void setColors(int onColor, int onColor2, int offColor) {
             this.onColor = onColor;
             this.onColor2 = onColor2;
             this.offColor = offColor;
-            this.onShader = null;
-            this.shaderScale = -1f;
             invalidate();
         }
 
@@ -1631,8 +1410,8 @@ new Titanic().start(proTitle);
                 return;
             }
             anim = ValueAnimator.ofFloat(t, target);
-            anim.setDuration(260);
-            anim.setInterpolator(new OvershootInterpolator(1.6f));
+            anim.setDuration(200);
+            anim.setInterpolator(new DecelerateInterpolator(1.4f));
             anim.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
                     @Override
                     public void onAnimationUpdate(ValueAnimator a) {
@@ -1650,59 +1429,46 @@ new Titanic().start(proTitle);
 
         @Override
         protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-            setMeasuredDimension(Math.round(51f * scale * density), Math.round(28f * scale * density));
+            setMeasuredDimension(Math.round(50f * scale * density), Math.round(28f * scale * density));
         }
 
         @Override
         protected void onDraw(Canvas canvas) {
             float s = scale * density;
             float trackW = 38f * s;
-            float trackH = 20f * s;
+            float trackH = 21f * s;
             float left = 3f * s;
             float top = (getHeight() - trackH) / 2f;
             float r = trackH / 2f;
             float tc = Math.max(0f, Math.min(1f, t));
 
-            trackPaint.setShader(null);
-            trackPaint.setColor(offColor);
+            trackPaint.setColor((Integer) argb.evaluate(tc, offColor, onColor));
             rect.set(left, top, left + trackW, top + trackH);
             canvas.drawRoundRect(rect, r, r, trackPaint);
 
-            if (tc > 0.01f) {
-                if (onShader == null || shaderScale != s) {
-                    onShader = new LinearGradient(left, 0, left + trackW, 0, onColor, onColor2, Shader.TileMode.CLAMP);
-                    shaderScale = s;
-                }
-                trackPaint.setShader(onShader);
-                trackPaint.setAlpha((int) (255f * tc));
-                canvas.drawRoundRect(rect, r, r, trackPaint);
-                trackPaint.setShader(null);
+            if (tc < 0.99f) {
+                borderPaint.setStrokeWidth(1f * s);
+                borderPaint.setColor(ModxTheme.withAlpha(ModxTheme.LINE_STRONG, Math.round(255f * (1f - tc))));
+                canvas.drawRoundRect(rect, r, r, borderPaint);
             }
 
-            float thumbR = r - 2.6f * s;
-            float pos = Math.max(-0.1f, Math.min(1.1f, t));
+            float thumbR = r - 2.8f * s;
+            float pos = Math.max(0f, Math.min(1f, tc));
             float cx = left + r + (trackW - 2f * r) * pos;
             float cy = top + r;
 
-            if (tc > 0.01f) {
-                for (int k = 3; k >= 1; k--) {
-                    glowPaint.setColor(onColor);
-                    glowPaint.setAlpha((int) (255f * 0.15f * tc * (4 - k) / 3f));
-                    canvas.drawCircle(cx, cy, thumbR + k * 1.7f * s, glowPaint);
-                }
-            }
-            thumbPaint.setColor((Integer) argb.evaluate(tc, 0xFFB7B5AC, 0xFFF6F2E8));
+            int activeThumb = ModxTheme.onAccent(onColor);
+            thumbPaint.setColor((Integer) argb.evaluate(tc, ModxTheme.MUTED, activeThumb));
             canvas.drawCircle(cx, cy, thumbR, thumbPaint);
         }
     }
 
     // ================================================================
-    // Seek bar track: rounded gradient bar with a soft glow
+    // Seek bar track: crisp 4dp rounded bar
     // ================================================================
     private static class SeekTrackDrawable extends Drawable {
         private final Paint trackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint progPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF rect = new RectF();
         private final float barH;
         private int c1;
@@ -1713,26 +1479,14 @@ new Titanic().start(proTitle);
             this.c1 = c1;
             this.c2 = c2;
             trackPaint.setColor(trackColor);
-            glowPaint.setColor(c1);
-            glowPaint.setAlpha(46);
+            progPaint.setColor(c1);
         }
 
         void setColors(int c1, int c2) {
             this.c1 = c1;
             this.c2 = c2;
-            glowPaint.setColor(c1);
-            glowPaint.setAlpha(46);
-            Rect b = getBounds();
-            if (b.width() > 0) {
-                progPaint.setShader(new LinearGradient(b.left, 0, Math.max(b.right, b.left + 1), 0, c1, c2, Shader.TileMode.CLAMP));
-            }
+            progPaint.setColor(c1);
             invalidateSelf();
-        }
-
-        @Override
-        protected void onBoundsChange(Rect b) {
-            super.onBoundsChange(b);
-            progPaint.setShader(new LinearGradient(b.left, 0, Math.max(b.right, b.left + 1), 0, c1, c2, Shader.TileMode.CLAMP));
         }
 
         @Override
@@ -1758,9 +1512,6 @@ new Titanic().start(proTitle);
             float frac = getLevel() / 10000f;
             float right = b.left + b.width() * frac;
             if (right - b.left > 0.5f) {
-                float gh = barH * 0.4f;
-                rect.set(b.left, top - gh, Math.max(right, b.left + barH), bottom + gh);
-                canvas.drawRoundRect(rect, r + gh, r + gh, glowPaint);
                 rect.set(b.left, top, Math.max(right, b.left + barH), bottom);
                 canvas.drawRoundRect(rect, r, r, progPaint);
             }
@@ -1772,20 +1523,30 @@ new Titanic().start(proTitle);
     }
 
     // ================================================================
-    // Slim, themed scroll view (custom drawn scrollbar, native drag + fling)
+    // Slim, themed scroll view (~60% scrollbar alpha + solid fading edge)
     // ================================================================
     private static class SlimScrollView extends ScrollView {
-        private static final int ACTIVE_ALPHA = 255;
+        private static final int ACTIVE_ALPHA = 153;
         private static final int IDLE_ALPHA = 0;
 
         private final Paint thumbPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint trackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-            private int accentColor = 0xFF3DDB87;   // dynamic accent
+        private int accentColor = ModxTheme.ACCENT;
+        private int solidBgColor = ModxTheme.PAGE;
 
-    void setAccentColor(int c) {
-        this.accentColor = c;
-        invalidate();
-    }
+        void setAccentColor(int c) {
+            this.accentColor = c;
+            invalidate();
+        }
+
+        void setSolidBgColor(int c) {
+            this.solidBgColor = c;
+        }
+
+        @Override
+        public int getSolidColor() {
+            return solidBgColor;
+        }
         private final RectF rect = new RectF();
         private final float density;
         private final int touchSlop;
@@ -1795,6 +1556,11 @@ new Titanic().start(proTitle);
         private float downX, downY;
         private boolean horizontalLock = false;
         private boolean verticalLock = false;
+        private Runnable onUserVerticalScrollListener = null;
+
+        void setOnUserVerticalScrollListener(Runnable r) {
+            this.onUserVerticalScrollListener = r;
+        }
 
         void setLoginScrollMode(boolean loginMode) {
             this.loginScrollMode = loginMode;
@@ -1887,7 +1653,15 @@ new Titanic().start(proTitle);
         @Override
         public boolean onTouchEvent(MotionEvent ev) {
             if (!scrollingEnabled) return false;
-            return super.onTouchEvent(ev);
+            int prevScrollY = getScrollY();
+            boolean res = super.onTouchEvent(ev);
+            if (loginScrollMode
+                    && ev.getActionMasked() == MotionEvent.ACTION_MOVE
+                    && getScrollY() != prevScrollY
+                    && onUserVerticalScrollListener != null) {
+                onUserVerticalScrollListener.run();
+            }
+            return res;
         }
 
         @Override
@@ -1947,8 +1721,8 @@ new Titanic().start(proTitle);
             final float thumbTop = trackTop + (trackH - thumbH) * progress;
             final float r = w / 2f;
 
-                        trackPaint.setColor(accentColor);
-            trackPaint.setAlpha(barAlpha * 26 / 255);
+            trackPaint.setColor(ModxTheme.MUTED);
+            trackPaint.setAlpha(barAlpha * 24 / 255);
             rect.set(left, trackTop, right, trackTop + trackH);
             canvas.drawRoundRect(rect, r, r, trackPaint);
 
@@ -1959,201 +1733,11 @@ new Titanic().start(proTitle);
         }
     }
 
-    private static class TabIcon extends Drawable {
-                static final int HOME = 0, USER = 1, RUN = 2, BOLT = 3, EYE = 4,
-        GEAR = 5, PULSE = 6, TARGET = 7, GRID = 8, CHEVRON = 9,
-        LOCATION = 10, CAMERA = 11, ROBOT = 12;
-
-        private final int type;
-        private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Path path = new Path();
-        private final RectF rect = new RectF();
-
-        TabIcon(int type) {
-            this.type = type;
-            stroke.setStyle(Paint.Style.STROKE);
-            stroke.setStrokeCap(Paint.Cap.ROUND);
-            stroke.setStrokeJoin(Paint.Join.ROUND);
-            stroke.setStrokeWidth(2f);
-            fill.setStyle(Paint.Style.FILL);
-            setColor(Color.WHITE);
-        }
-
-        void setColor(int color) {
-            stroke.setColor(color);
-            fill.setColor(color);
-            invalidateSelf();
-        }
-
-        @Override
-        public void draw(Canvas canvas) {
-            Rect b = getBounds();
-            if (b.width() <= 0 || b.height() <= 0) return;
-            float size = Math.min(b.width(), b.height());
-            float s = size / 24f;
-
-            canvas.save();
-            canvas.translate(b.left + (b.width() - size) / 2f, b.top + (b.height() - size) / 2f);
-            canvas.scale(s, s);
-            path.reset();
-
-            switch (type) {
-                case HOME:
-                    path.moveTo(3f, 11f); path.lineTo(12f, 3f); path.lineTo(21f, 11f);
-                    canvas.drawPath(path, stroke);
-                    path.reset();
-                    path.moveTo(5.5f, 9.5f); path.lineTo(5.5f, 20f); path.lineTo(18.5f, 20f); path.lineTo(18.5f, 9.5f);
-                    canvas.drawPath(path, stroke);
-                    path.reset();
-                    path.moveTo(10f, 20f); path.lineTo(10f, 14f); path.lineTo(14f, 14f); path.lineTo(14f, 20f);
-                    canvas.drawPath(path, stroke);
-                    break;
-
-                case USER:
-                    canvas.drawCircle(12f, 7.5f, 3.8f, stroke);
-                    path.moveTo(4.5f, 21f);
-                    path.cubicTo(4.5f, 15.5f, 8f, 13.5f, 12f, 13.5f);
-                    path.cubicTo(16f, 13.5f, 19.5f, 15.5f, 19.5f, 21f);
-                    canvas.drawPath(path, stroke);
-                    break;
-
-                case RUN:
-                    path.moveTo(5f, 5f); path.lineTo(12f, 12f); path.lineTo(5f, 19f);
-                    canvas.drawPath(path, stroke);
-                    path.reset();
-                    path.moveTo(12f, 5f); path.lineTo(19f, 12f); path.lineTo(12f, 19f);
-                    canvas.drawPath(path, stroke);
-                    break;
-
-                case BOLT:
-                    path.moveTo(13f, 2f); path.lineTo(4.5f, 13.5f); path.lineTo(11f, 13.5f);
-                    path.lineTo(10f, 22f); path.lineTo(19.5f, 9.5f); path.lineTo(13f, 9.5f);
-                    path.close();
-                    canvas.drawPath(path, stroke);
-                    break;
-
-                case EYE:
-                    path.moveTo(1.5f, 12f);
-                    path.quadTo(12f, 0.5f, 22.5f, 12f);
-                    path.quadTo(12f, 23.5f, 1.5f, 12f);
-                    path.close();
-                    canvas.drawPath(path, stroke);
-                    canvas.drawCircle(12f, 12f, 3.2f, stroke);
-                    break;
-
-                case GEAR: {
-                        final int teeth = 8;
-                        final float rIn = 7.2f, rOut = 10f;
-                        final double[] offs = {-17, -9, 9, 17};
-                        final float[] radii = {rIn, rOut, rOut, rIn};
-                        for (int i = 0; i < teeth; i++) {
-                            double c = Math.toRadians(i * 360.0 / teeth);
-                            for (int k = 0; k < 4; k++) {
-                                double a = c + Math.toRadians(offs[k]);
-                                float x = 12f + (float) (radii[k] * Math.cos(a));
-                                float y = 12f + (float) (radii[k] * Math.sin(a));
-                                if (i == 0 && k == 0) path.moveTo(x, y);
-                                else path.lineTo(x, y);
-                            }
-                        }
-                        path.close();
-                        canvas.drawPath(path, stroke);
-                        canvas.drawCircle(12f, 12f, 3f, stroke);
-                        break;
-                    }
-
-                case PULSE:
-                    path.moveTo(1.5f, 12f); path.lineTo(7f, 12f); path.lineTo(10f, 4.5f);
-                    path.lineTo(14f, 19.5f); path.lineTo(17f, 12f); path.lineTo(22.5f, 12f);
-                    canvas.drawPath(path, stroke);
-                    break;
-
-                case TARGET:
-                    canvas.drawCircle(12f, 12f, 7f, stroke);
-                    canvas.drawCircle(12f, 12f, 1.8f, fill);
-                    canvas.drawLine(12f, 2f, 12f, 5f, stroke);
-                    canvas.drawLine(12f, 19f, 12f, 22f, stroke);
-                    canvas.drawLine(2f, 12f, 5f, 12f, stroke);
-                    canvas.drawLine(19f, 12f, 22f, 12f, stroke);
-                    break;
-                    
-                                case LOCATION:
-                    // Map pin — perfect for Teleport
-                    path.moveTo(12f, 21.5f);
-                    path.cubicTo(12f, 21.5f, 4.5f, 13.5f, 4.5f, 9.5f);
-                    path.cubicTo(4.5f, 5.2f, 8.0f, 2.5f, 12f, 2.5f);
-                    path.cubicTo(16.0f, 2.5f, 19.5f, 5.2f, 19.5f, 9.5f);
-                    path.cubicTo(19.5f, 13.5f, 12f, 21.5f, 12f, 21.5f);
-                    path.close();
-                    canvas.drawPath(path, stroke);
-                    canvas.drawCircle(12f, 9.5f, 3f, stroke);
-                    break;
-
-                case CAMERA:
-                    // Camera body + lens
-                    rect.set(3f, 7.5f, 21f, 19f);
-                    canvas.drawRoundRect(rect, 2.5f, 2.5f, stroke);
-                    canvas.drawCircle(12f, 13.2f, 3.6f, stroke);
-                    path.moveTo(8f, 7.5f);
-                    path.lineTo(9.2f, 4.5f);
-                    path.lineTo(14.8f, 4.5f);
-                    path.lineTo(16f, 7.5f);
-                    canvas.drawPath(path, stroke);
-                    break;
-
-                case ROBOT:
-                    // Robot head
-                    rect.set(5f, 8.5f, 19f, 19f);
-                    canvas.drawRoundRect(rect, 2.2f, 2.2f, stroke);
-                    canvas.drawCircle(9f, 13.5f, 1.4f, fill);
-                    canvas.drawCircle(15f, 13.5f, 1.4f, fill);
-                    canvas.drawLine(12f, 8.5f, 12f, 5f, stroke);
-                    canvas.drawCircle(12f, 4f, 1.1f, fill);
-                    canvas.drawLine(3f, 13.5f, 5f, 13.5f, stroke);
-                    canvas.drawLine(19f, 13.5f, 21f, 13.5f, stroke);
-                    break;
-
-                case CHEVRON:
-                    path.moveTo(5.5f, 9f); path.lineTo(12f, 15.5f); path.lineTo(18.5f, 9f);
-                    canvas.drawPath(path, stroke);
-                    break;
-
-                default:
-                    rect.set(4f, 4f, 10.5f, 10.5f);   canvas.drawRoundRect(rect, 1.5f, 1.5f, stroke);
-                    rect.set(13.5f, 4f, 20f, 10.5f);  canvas.drawRoundRect(rect, 1.5f, 1.5f, stroke);
-                    rect.set(4f, 13.5f, 10.5f, 20f);  canvas.drawRoundRect(rect, 1.5f, 1.5f, stroke);
-                    rect.set(13.5f, 13.5f, 20f, 20f); canvas.drawRoundRect(rect, 1.5f, 1.5f, stroke);
-                    break;
-            }
-            canvas.restore();
-        }
-
-        @Override public void setAlpha(int alpha) { stroke.setAlpha(alpha); fill.setAlpha(alpha); invalidateSelf(); }
-        @Override public void setColorFilter(ColorFilter cf) { stroke.setColorFilter(cf); fill.setColorFilter(cf); invalidateSelf(); }
-        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
-    }
-
-        private static int iconTypeFor(String name) {
-    String n = name == null ? "" : name.toLowerCase();
-    if (n.contains("setting"))                            return TabIcon.GEAR;
-    if (n.contains("player"))                             return TabIcon.USER;
-    if (n.contains("power"))                              return TabIcon.BOLT;
-    if (n.contains("score"))                              return TabIcon.TARGET;
-    if (n.contains("safety") || n.contains("guard"))      return TabIcon.EYE;
-    if (n.contains("shop") || n.contains("cart"))         return TabIcon.GRID;
-    if (n.contains("camera"))                             return TabIcon.CAMERA;
-    if (n.contains("world") || n.contains("home"))        return TabIcon.HOME;
-    if (n.contains("chams") || n.contains("visual"))      return TabIcon.PULSE;
-    if (n.contains("main"))                               return TabIcon.HOME;
-    return TabIcon.GRID;
-}
-
     private static class TabHolder {
         String name;
         LinearLayout root;
         ImageView icon;
-        TabIcon iconDrawable;
+        Drawable iconDrawable;
         TextView label;
     }
 
@@ -2175,8 +1759,11 @@ new Titanic().start(proTitle);
                         startY = event.getRawY();
                         if (!isLoggedIn) {
                             loginResizingNow = true;
+                            if (activeLoginHelper != null) {
+                                activeLoginHelper.setMenuWindowDragging(true);
+                            }
                         }
-                        v.setAlpha(0.6f);
+                        v.setBackground(makeGripDrawable(COLOR_ACCENT, dpf(1.7f)));
                         return true;
                     }
                 case MotionEvent.ACTION_MOVE: {
@@ -2215,7 +1802,7 @@ new Titanic().start(proTitle);
                     }
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL: {
-                        v.setAlpha(1f);
+                        v.setBackground(makeGripDrawable(ModxTheme.SUBTLE, dpf(1.6f)));
                         if (mWindowManager != null && rootFrame != null && vmParams != null) {
                             try {
                                 mWindowManager.updateViewLayout(rootFrame, vmParams);
@@ -2231,6 +1818,9 @@ new Titanic().start(proTitle);
                                 public void run() {
                                     updateLoginOverflowScroll(true);
                                     loginResizingNow = false;
+                                    if (activeLoginHelper != null) {
+                                        activeLoginHelper.setMenuWindowDragging(false);
+                                    }
                                 }
                             });
                         } else {
@@ -2242,65 +1832,6 @@ new Titanic().start(proTitle);
             return false;
         }
     };
-    
-        // ================================================================
-    // Telegram paper-plane icon
-    // ================================================================
-        private static class TelegramIcon extends Drawable {
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Path path = new Path();
-        private final int sizePx;
-
-        TelegramIcon(int color, float density) {
-            paint.setColor(color);
-            paint.setStyle(Paint.Style.FILL);
-            this.sizePx = (int) (18 * density);   // 18dp icon
-        }
-
-        @Override public int getIntrinsicWidth()  { return sizePx; }
-        @Override public int getIntrinsicHeight() { return sizePx; }
-
-        @Override
-        public void draw(Canvas canvas) {
-            Rect b = getBounds();
-            if (b.width() <= 0 || b.height() <= 0) return;
-
-            float size = Math.min(b.width(), b.height());
-            float s = size / 24f;
-
-            canvas.save();
-            canvas.translate(b.left + (b.width() - size) / 2f,
-                             b.top + (b.height() - size) / 2f);
-            canvas.scale(s, s);
-
-            // Telegram paper-plane
-            path.reset();
-            path.moveTo(22.0f, 3.0f);
-            path.lineTo(2.0f, 11.5f);
-            path.lineTo(9.5f, 14.0f);
-            path.lineTo(11.5f, 20.0f);
-            path.lineTo(14.5f, 15.0f);
-            path.lineTo(21.0f, 19.5f);
-            path.close();
-            canvas.drawPath(path, paint);
-
-            // Fold line — subtle darker overlay (safe)
-            Paint strokeP = new Paint(Paint.ANTI_ALIAS_FLAG);
-            strokeP.setStyle(Paint.Style.STROKE);
-            strokeP.setStrokeWidth(1.2f);
-            strokeP.setColor(0x33000000);
-            path.reset();
-            path.moveTo(9.5f, 14.0f);
-            path.lineTo(21.0f, 6.5f);
-            canvas.drawPath(path, strokeP);
-
-            canvas.restore();
-        }
-
-        @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); }
-        @Override public void setColorFilter(ColorFilter cf) { paint.setColorFilter(cf); }
-        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
-    }
 
     // ================================================================
     // Responsive layout: text / padding scale + sidebar width + compact tabs
@@ -2361,6 +1892,7 @@ new Titanic().start(proTitle);
             ((ToggleView) v).setScale(currentScale);
         } else if (v instanceof TextView) {
             TextView tv = (TextView) v;
+            if ("no_scale".equals(tv.getTag())) return;
             float[] base = textBase.get(tv);
             if (base == null) {
                 base = new float[] {
@@ -2387,7 +1919,7 @@ new Titanic().start(proTitle);
 
     private void applyTabMetrics() {
         float s = currentScale;
-        int iconSize = Math.max(dp(12), (int) (dp(18) * s));
+        int iconSize = Math.max(dp(14), (int) (dp(18) * s));
         for (TabHolder h : tabHolders) {
             boolean iconOnly = compactMode && h.icon != null;
             if (h.icon != null) {
@@ -2400,8 +1932,8 @@ new Titanic().start(proTitle);
             }
             h.label.setVisibility(iconOnly ? View.GONE : View.VISIBLE);
             h.root.setGravity(iconOnly ? Gravity.CENTER : Gravity.CENTER_VERTICAL);
-            h.root.setPadding((int) (dp(iconOnly ? 2 : 9) * s), (int) (dp(10) * s),
-                              (int) (dp(iconOnly ? 2 : 9) * s), (int) (dp(10) * s));
+            h.root.setPadding((int) (dp(iconOnly ? 2 : 9) * s), (int) (dp(9) * s),
+                              (int) (dp(iconOnly ? 2 : 9) * s), (int) (dp(9) * s));
         }
     }
 
@@ -2430,7 +1962,12 @@ new Titanic().start(proTitle);
                     case MotionEvent.ACTION_MOVE: {
                             float dx = motionEvent.getRawX() - initialTouchX;
                             float dy = motionEvent.getRawY() - initialTouchY;
-                            if (!moved && (Math.abs(dx) > slop || Math.abs(dy) > slop)) moved = true;
+                            if (!moved && (Math.abs(dx) > slop || Math.abs(dy) > slop)) {
+                                moved = true;
+                                if (!isLoggedIn && activeLoginHelper != null) {
+                                    activeLoginHelper.setMenuWindowDragging(true);
+                                }
+                            }
                             if (moved) {
                                 menuFrame.setAlpha(0.7f);
                                 mCollapsed.setAlpha(0.6f);
@@ -2443,6 +1980,9 @@ new Titanic().start(proTitle);
                     case MotionEvent.ACTION_CANCEL:
                         menuFrame.setAlpha(1f);
                         mCollapsed.setAlpha(1f);
+                        if (moved && !isLoggedIn && activeLoginHelper != null) {
+                            activeLoginHelper.setMenuWindowDragging(false);
+                        }
                         if (!moved && motionEvent.getActionMasked() == MotionEvent.ACTION_UP && isViewCollapsed()) {
                             try {
                                 expandMenu();
@@ -2477,9 +2017,12 @@ new Titanic().start(proTitle);
         mInputLNums.clear();
         mInputTexts.clear();
         mCategoryViews.clear();
+        mCategoryLines.clear();
         mCollapseHolders.clear();
         mLinkButtons.clear();
-        mMenuColorBtn = null;
+        mMenuColorRow = null;
+        mMenuColorDot = null;
+        mMenuColorHex = null;
         mMenuTeleportPad = null;
         sidebarLayout.removeAllViews();
         contentLayout.removeAllViews();
@@ -2555,28 +2098,26 @@ if (!categoryNames.contains("Settings")) {
     categoryViewsMap.put("Settings", newCategoryLayout());
 }
 
-    LinearLayout settingsLay = categoryViewsMap.get("Settings");
-    if (settingsLay != null) {
-        settingsLay.removeAllViews();
+        LinearLayout settingsLay = categoryViewsMap.get("Settings");
+        if (settingsLay != null) {
+            settingsLay.removeAllViews();
 
-        Switch(settingsLay, -1, "Save features preference", Preferences.isSaveEnabled());
+            Switch(settingsLay, -1, "Save features preference", Preferences.isSaveEnabled());
 
-        Category(settingsLay, "Menu Color Theme");
+            Category(settingsLay, "Menu Color Theme");
 
-        // ===== Pick Menu Color (shows current color + hex) =====
-        settingsLay.addView(makeMenuColorButton(
-                COLOR_ACCENT, "Menu Color", -29));
-        settingsLay.addView(makeMenuColorButton(
-                FeatureStateStore.DEFAULT_MENU_COLOR, "Reset to Default", -28));
+            settingsLay.addView(makeMenuColorButton(
+                    COLOR_ACCENT, "Menu Color", -29));
+            settingsLay.addView(makeMenuColorButton(
+                    FeatureStateStore.DEFAULT_MENU_COLOR, "Reset to Default", -28));
 
-        Category(settingsLay, "Community");
+            Category(settingsLay, "Community");
 
-        // ===== Telegram button (sky-blue, paper-plane icon) =====
-        ButtonTelegram(settingsLay, "Join our Telegram",
-                "https://t.me/kayesahmmedpro");
+            ButtonTelegram(settingsLay, "Join our Telegram",
+                    "https://t.me/kayesahmmedpro");
 
-        Button(settingsLay, -6, "Close Settings");
-    }
+            Button(settingsLay, -6, "Close Settings");
+        }
         setupSidebarTabs();
         rescaleAll();
         applyTabMetrics();
@@ -2604,16 +2145,17 @@ if (!categoryNames.contains("Settings")) {
 
             LinearLayout tab = new LinearLayout(getContext);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
-            lp.setMargins(0, dp(3), 0, dp(3));
+            lp.setMargins(0, dp(2), 0, dp(2));
             tab.setLayoutParams(lp);
             tab.setOrientation(LinearLayout.HORIZONTAL);
             tab.setGravity(Gravity.CENTER_VERTICAL);
-            tab.setPadding(dp(9), dp(10), dp(9), dp(10));
+            tab.setMinimumHeight(dp(42));
+            tab.setPadding(dp(9), dp(9), dp(9), dp(9));
             tab.setTag(h);
             h.root = tab;
 
             if (SHOW_TAB_ICONS) {
-                h.iconDrawable = new TabIcon(iconTypeFor(catName));
+                h.iconDrawable = ModxIcons.tabIconFor(getContext, catName, COLOR_TEXT_MUTED, 18);
                 ImageView iv = new ImageView(getContext);
                 iv.setLayoutParams(new LinearLayout.LayoutParams(dp(18), dp(18)));
                 iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -2625,10 +2167,11 @@ if (!categoryNames.contains("Settings")) {
             TextView tabText = new TextView(getContext);
             tabText.setText(catName);
             tabText.setTextColor(COLOR_TEXT_MUTED);
-            tabText.setTextSize(12);
+            tabText.setTextSize(12f);
             tabText.setTypeface(fontMedium);
             tabText.setSingleLine(true);
             tabText.setEllipsize(TextUtils.TruncateAt.END);
+            tabText.setIncludeFontPadding(false);
             tabText.setGravity(Gravity.CENTER_VERTICAL);
             LinearLayout.LayoutParams lpText = new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f);
             lpText.setMargins(SHOW_TAB_ICONS ? dp(7) : 0, 0, 0, 0);
@@ -2639,6 +2182,7 @@ if (!categoryNames.contains("Settings")) {
             tab.setOnClickListener(new View.OnClickListener() {
                     @Override
                     public void onClick(View v) {
+                        ModxTheme.hapticTap(v);
                         selectTab(h);
                     }
                 });
@@ -2653,27 +2197,23 @@ if (!categoryNames.contains("Settings")) {
     }
 
     private void styleTab(TabHolder h, boolean selected) {
-        GradientDrawable bg;
         if (selected) {
-            bg = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-                                      new int[]{withAlpha(COLOR_ACCENT, 0x38), withAlpha(COLOR_ACCENT_2, 0x1C)});
-            bg.setStroke(dp(1), withAlpha(COLOR_ACCENT, 0xAA));
+            Drawable bg = ModxTheme.pillBadgeBg(
+                    getContext, ModxTheme.accentSoft(COLOR_ACCENT), ModxTheme.accentLine(COLOR_ACCENT));
+            h.root.setBackground(ModxTheme.withInteractiveRipple(
+                    getContext, bg, ModxTheme.withAlpha(COLOR_ACCENT, 0x24), ModxTheme.RADIUS_DP));
         } else {
-            bg = new GradientDrawable();
-            bg.setColor(0x0DFFFFFF);
+            h.root.setBackground(ModxTheme.withInteractiveRipple(
+                    getContext, ModxTheme.transparentBg(), 0x16FFFFFF, ModxTheme.RADIUS_DP));
         }
-        bg.setCornerRadius(dp(5));
-        h.root.setBackground(bg);
-        h.label.setTextColor(selected ? Color.WHITE : COLOR_TEXT_MUTED);
+        h.label.setTextColor(selected ? ModxTheme.FG : COLOR_TEXT_MUTED);
         h.label.setTypeface(selected ? fontBold : fontMedium);
-        if (h.iconDrawable != null) {
-            h.iconDrawable.setColor(selected ? COLOR_ACCENT : COLOR_TEXT_MUTED);
+        if (h.iconDrawable instanceof SvgIcon) {
+            ((SvgIcon) h.iconDrawable).setColor(selected ? COLOR_ACCENT : COLOR_TEXT_MUTED);
         }
     }
 
     private void selectTab(TabHolder selected) {
-        // ★ FIX: Close any open dropdown to prevent it from overlaying the new tab
-        
         for (TabHolder t : tabHolders) styleTab(t, t == selected);
 
         contentLayout.removeAllViews();
@@ -2686,15 +2226,10 @@ if (!categoryNames.contains("Settings")) {
         }
         contentScrollView.scrollTo(0, 0);
 
-        // content glides in, selected tab pops
         contentLayout.animate().cancel();
         contentLayout.setAlpha(0f);
-        contentLayout.setTranslationY(dp(10));
-        contentLayout.animate().alpha(1f).translationY(0f).setDuration(240).setInterpolator(new DecelerateInterpolator(1.6f)).start();
-
-        selected.root.setScaleX(0.93f);
-        selected.root.setScaleY(0.93f);
-        selected.root.animate().scaleX(1f).scaleY(1f).setDuration(300).setInterpolator(new OvershootInterpolator(1.3f)).start();
+        contentLayout.setTranslationY(dp(6));
+        contentLayout.animate().alpha(1f).translationY(0f).setDuration(180).setInterpolator(new DecelerateInterpolator(1.5f)).start();
     }
 
     private boolean selectTabByName(String name) {
@@ -2874,6 +2409,10 @@ private static boolean isSessionRevokedReason(String reason) {
 }
 
 private void startPeriodicSessionCheck() {
+    startPeriodicSessionCheck(SESSION_REVERIFY_INTERVAL_MS);
+}
+
+private void startPeriodicSessionCheck(long delayMs) {
     stopPeriodicSessionCheck();
     if (!isLoggedIn || stopChecking) return;
     sessionReverifyRunnable = new Runnable() {
@@ -2882,7 +2421,7 @@ private void startPeriodicSessionCheck() {
             runPeriodicSessionCheck();
         }
     };
-    sessionVerifyHandler.postDelayed(sessionReverifyRunnable, SESSION_REVERIFY_INTERVAL_MS);
+    sessionVerifyHandler.postDelayed(sessionReverifyRunnable, delayMs);
 }
 
 private void stopPeriodicSessionCheck() {
@@ -2962,12 +2501,12 @@ private void runPeriodicSessionCheck() {
                         activeSessionToken = fFreshToken;
                         activeSessionUser = fUserOut;
                         activeSessionDeviceId = deviceIdToCheck;
-                        startPeriodicSessionCheck();
+                        startPeriodicSessionCheck(SESSION_REVERIFY_INTERVAL_MS);
                     } else if (isSessionRevokedReason(fReason)) {
                         forceLogoutToLogin(fReason);
                     } else {
-                        // Offline or transient network error: keep active session and recheck next cycle
-                        startPeriodicSessionCheck();
+                        // Offline or transient network error: retry faster within 25m monotonic TTL
+                        startPeriodicSessionCheck(SESSION_REVERIFY_RETRY_MS);
                     }
                 }
             });
@@ -3043,6 +2582,7 @@ private void showLoginScreen(final String forcedLogoutReason) {
             if (sidebarDivider != null) sidebarDivider.setVisibility(View.VISIBLE);
 
             if (contentScrollView instanceof SlimScrollView) {
+                ((SlimScrollView) contentScrollView).setOnUserVerticalScrollListener(null);
                 ((SlimScrollView) contentScrollView).setLoginScrollMode(false);
                 ((SlimScrollView) contentScrollView).setScrollingEnabled(true);
             }
@@ -3148,7 +2688,7 @@ private void showLoginScreen(final String forcedLogoutReason) {
                             if (getParent() != null) {
                                 getParent().requestDisallowInterceptTouchEvent(true);
                             }
-                            loginHelper.dismissTextActionMode();
+                            loginHelper.setMenuWindowDragging(true);
                             // Cancel children's gesture
                             MotionEvent cancel = MotionEvent.obtain(ev);
                             cancel.setAction(MotionEvent.ACTION_CANCEL);
@@ -3177,6 +2717,12 @@ private void showLoginScreen(final String forcedLogoutReason) {
                     if (!wasDragging || action == MotionEvent.ACTION_CANCEL) {
                         super.dispatchTouchEvent(ev);
                     }
+                    if (wasDragging) {
+                        loginHelper.setMenuWindowDragging(false);
+                    } else if (action == MotionEvent.ACTION_UP
+                            && !loginHelper.isTouchOnShowCheck(ev.getRawX(), ev.getRawY())) {
+                        loginHelper.dismissTextActionMode();
+                    }
                     return true;
                 }
             }
@@ -3188,6 +2734,16 @@ private void showLoginScreen(final String forcedLogoutReason) {
             new FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
     contentLayout.addView(dragWrapper,
             new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
+    if (contentScrollView instanceof SlimScrollView) {
+        ((SlimScrollView) contentScrollView).setOnUserVerticalScrollListener(new Runnable() {
+            @Override
+            public void run() {
+                if (activeLoginHelper != null) {
+                    activeLoginHelper.dismissTextActionMode();
+                }
+            }
+        });
+    }
     loginHelper.prepareActionModeHost();
 
     loginLayoutChangeListener = new View.OnLayoutChangeListener() {
@@ -3212,9 +2768,11 @@ private void showLoginScreen(final String forcedLogoutReason) {
             if (isLoggedIn || contentScrollView == null || contentLayout == null) return;
             int sw = screenW();
             int sh = screenH();
+            boolean screenChanged = false;
             if (sw != lastLoginScreenW || sh != lastLoginScreenH) {
                 lastLoginScreenW = sw;
                 lastLoginScreenH = sh;
+                screenChanged = true;
                 keepInsideScreen();
             }
             int vh = contentScrollView.getHeight();
@@ -3226,7 +2784,7 @@ private void showLoginScreen(final String forcedLogoutReason) {
                     visBottom = visRect.bottom;
                 } catch (Exception ignored) { }
             }
-            if (vh != lastLoginViewportH || ch != lastLoginContentH || visBottom != lastLoginVisBottom) {
+            if (vh != lastLoginViewportH || ch != lastLoginContentH || visBottom != lastLoginVisBottom || screenChanged) {
                 boolean kbChanged = (visBottom != lastLoginVisBottom);
                 lastLoginViewportH = vh;
                 lastLoginContentH = ch;
@@ -3238,6 +2796,9 @@ private void showLoginScreen(final String forcedLogoutReason) {
                         focused.requestRectangleOnScreen(
                                 new Rect(0, 0, focused.getWidth(), focused.getHeight()), false);
                     }
+                }
+                if ((kbChanged || screenChanged) && activeLoginHelper != null) {
+                    activeLoginHelper.repositionTextActionMode();
                 }
             }
         }
@@ -3434,7 +2995,6 @@ public void setTeleportPadVisible(boolean visible) {
         activeLoginHelper.cleanup();
         activeLoginHelper = null;
     }
-    stopGlowAnimator();
     if (rootFrame != null && mWindowManager != null) {
         try { mWindowManager.removeView(rootFrame); } catch (Exception e) {}
     }
@@ -3448,18 +3008,18 @@ public void setTeleportPadVisible(boolean visible) {
         b.setText(text);
         b.setAllCaps(false);
         b.setTypeface(fontBold);
-        b.setTextSize(12f);
-        b.setMinHeight(0);
-        b.setMinimumHeight(0);
+        b.setTextSize(12.5f);
+        b.setMinHeight(dp(42));
+        b.setMinimumHeight(dp(42));
         b.setMinWidth(0);
         b.setMinimumWidth(0);
         b.setPadding(dp(16), dp(8), dp(16), dp(8));
         if (primary) {
-            b.setTextColor(Color.WHITE);
-            b.setBackground(gradBg(BTN_GRAD_1, BTN_GRAD_2, 8));
+            b.setTextColor(ModxTheme.onAccent(COLOR_ACCENT));
+            b.setBackground(ModxTheme.primaryButtonBg(getContext, COLOR_ACCENT));
         } else {
-            b.setTextColor(COLOR_TEXT_MUTED);
-            b.setBackground(cardBg(0x0FFFFFFF, COLOR_CARD_BORDER, 6));
+            b.setTextColor(ModxTheme.FG);
+            b.setBackground(ModxTheme.secondaryButtonBg(getContext));
         }
         flatten(b);
         addPressAnim(b);
@@ -3473,17 +3033,14 @@ public void setTeleportPadVisible(boolean visible) {
         LinearLayout box = new LinearLayout(ctx);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(18), dp(16), dp(18), dp(14));
-        GradientDrawable boxBg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                                                      new int[]{COLOR_BG_TOP, COLOR_BG_BOTTOM});
-        boxBg.setCornerRadius(dp(18));
-        boxBg.setStroke(dp(1), withAlpha(COLOR_ACCENT, 0xAA));
-        box.setBackground(boxBg);
+        box.setBackground(ModxTheme.dialogCardBg(ctx));
 
         TextView t = new TextView(ctx);
         t.setText(title);
-        t.setTextColor(COLOR_ACCENT);
+        t.setTextColor(ModxTheme.FG);
         t.setTypeface(fontBold);
-        t.setTextSize(15f);
+        t.setTextSize(16f);
+        t.setIncludeFontPadding(false);
         box.addView(t);
 
         LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
@@ -3504,6 +3061,7 @@ public void setTeleportPadVisible(boolean visible) {
             neg.setOnClickListener(new View.OnClickListener() {
                     @Override
                     public void onClick(View v) {
+                        ModxTheme.hapticTap(v);
                         if (onNeg != null) onNeg.run();
                         if (ref[0] != null) ref[0].dismiss();
                     }
@@ -3515,6 +3073,7 @@ public void setTeleportPadVisible(boolean visible) {
             pos.setOnClickListener(new View.OnClickListener() {
                     @Override
                     public void onClick(View v) {
+                        ModxTheme.hapticTap(v);
                         if (onPos != null) onPos.run();
                         if (ref[0] != null) ref[0].dismiss();
                     }
@@ -3541,12 +3100,12 @@ public void setTeleportPadVisible(boolean visible) {
 
     private EditText makeEditText() {
         EditText e = new EditText(getContext);
-        e.setTextColor(TEXT_COLOR_2);
-        e.setHintTextColor(COLOR_TEXT_MUTED);
+        e.setTextColor(ModxTheme.FG);
+        e.setHintTextColor(ModxTheme.SUBTLE);
         e.setTypeface(fontMedium);
         e.setTextSize(14f);
         e.setSingleLine(true);
-        e.setBackground(cardBg(COLOR_CARD, withAlpha(COLOR_ACCENT, 0x88), 10));
+        e.setBackground(ModxTheme.fieldBoxBg(getContext, COLOR_ACCENT, true));
         e.setPadding(dp(12), dp(10), dp(12), dp(10));
         return e;
     }
@@ -3585,33 +3144,61 @@ public void setTeleportPadVisible(boolean visible) {
     // ================================================================
     private void ColorPicker(LinearLayout linLayout, final int featNum, final String featName, final String defaultHex) {
         final int[] PRESET_COLORS = {
-            0xFF00FF88, 0xFFFF00FF, 0xFF00FFFF, 0xFFFF0000,
-            0xFF00FF00, 0xFF0000FF, 0xFFFFFF00, 0xFFFF8000,
-            0xFFFF00AA, 0xFF9C27B0, 0xFFFFFFFF, 0xFF000000,
-            0xFFFFD700, 0xFF00BFFF, 0xFF32CD32, 0xFFFF4500,
-            0xFF00CED1, 0xFF7FFF00, 0xFFDC143C, 0xFF8A2BE2,
-            0xFF20B2AA, 0xFFF0E68C, 0xFFFF69B4, 0xFFADFF2F
+            0xFF20C997, 0xFFFF00FF, 0xFF00FFFF, 0xFFFF4D4F,
+            0xFF22C55E, 0xFF38BDF8, 0xFFFACC15, 0xFFFB923C,
+            0xFFEC4899, 0xFFA855F7, 0xFFFAF9F5, 0xFF131312,
+            0xFFFFD700, 0xFF60A5FA, 0xFFA3E635, 0xFFFF6B35,
+            0xFF22D3EE, 0xFF4ADE80, 0xFFF43F5E, 0xFF818CF8,
+            0xFF2DD4BF, 0xFFFDE047, 0xFFF472B6, 0xFFE2E8F0
         };
         final String[] COLOR_NAMES = {
-            "Default Green", "Magenta", "Cyan", "Red", "Green", "Blue",
-            "Yellow", "Orange", "Pink", "Purple", "White", "Black",
-            "Gold", "Sky Blue", "Lime", "Orange Red",
-            "Turquoise", "Chartreuse", "Crimson", "Violet",
-            "Sea Green", "Khaki", "Hot Pink", "Green Yellow"
+            "ModX Emerald", "Magenta", "Cyan", "Red", "Green", "Sky Blue",
+            "Yellow", "Orange", "Pink", "Purple", "Off White", "Obsidian",
+            "Gold", "Azure", "Lime", "Coral",
+            "Turquoise", "Mint", "Rose", "Indigo",
+            "Teal", "Lemon", "Blush", "Silver"
         };
 
-        final Button button = new Button(getContext);
-        button.setMinHeight(0);
-        button.setMinimumHeight(0);
-        button.setLayoutParams(rowLp(6, 4, 6, 4));
-        button.setAllCaps(false);
-        button.setTypeface(fontBold);
-        button.setTextSize(12f);
-        button.setPadding(dp(10), dp(13), dp(10), dp(13));
-        flatten(button);
-        addPressAnim(button);
+        final LinearLayout row = new LinearLayout(getContext);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinimumHeight(dp(44));
+        row.setLayoutParams(rowLp(6, 4, 6, 4));
+        row.setPadding(dp(12), dp(9), dp(12), dp(9));
+        row.setBackground(ModxTheme.withInteractiveRipple(
+                getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                0x1AFFFFFF, ModxTheme.RADIUS_DP));
+        addPressAnim(row);
 
-        int defaultColor = 0xFF00FF88;
+        TextView labelTv = new TextView(getContext);
+        labelTv.setText(featName);
+        labelTv.setTextColor(ModxTheme.FG);
+        labelTv.setTypeface(fontMedium);
+        labelTv.setTextSize(12.5f);
+        labelTv.setIncludeFontPadding(false);
+        labelTv.setMaxLines(1);
+        labelTv.setEllipsize(TextUtils.TruncateAt.END);
+        labelTv.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
+
+        final TextView hexView = new TextView(getContext);
+        hexView.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        hexView.setTextSize(11f);
+        hexView.setTextColor(ModxTheme.MUTED);
+        hexView.setIncludeFontPadding(false);
+        hexView.setPadding(dp(7), dp(3), dp(7), dp(3));
+        hexView.setBackground(ModxTheme.pillBadgeBg(getContext, ModxTheme.SURFACE, ModxTheme.LINE));
+        LinearLayout.LayoutParams hxLp = new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
+        hxLp.setMargins(dp(8), 0, dp(8), 0);
+        hexView.setLayoutParams(hxLp);
+
+        final View dotView = new View(getContext);
+        dotView.setLayoutParams(new LinearLayout.LayoutParams(dp(20), dp(20)));
+
+        row.addView(labelTv);
+        row.addView(hexView);
+        row.addView(dotView);
+
+        int defaultColor = ModxTheme.ACCENT;
         try { defaultColor = Color.parseColor(defaultHex); }
         catch (Exception ignored) { }
         final int defaultColorFinal = defaultColor;
@@ -3620,17 +3207,19 @@ public void setTeleportPadVisible(boolean visible) {
         final ColorPickerHolder cpHolder = new ColorPickerHolder();
         cpHolder.featNum      = featNum;
         cpHolder.featName     = featName;
-        cpHolder.button       = button;
+        cpHolder.row          = row;
+        cpHolder.dotView      = dotView;
+        cpHolder.hexView      = hexView;
         cpHolder.defaultColor = defaultColorFinal;
         cpHolder.currentColor = savedColor;
         mColorPickers.put(featNum, cpHolder);
 
-        applyColorButton(button, featName, savedColor);
+        applyColorButton(cpHolder, savedColor);
 
-
-        button.setOnClickListener(new View.OnClickListener() {
+        row.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View view) {
+                    ModxTheme.hapticTap(view);
                     ScrollView scroll = new ScrollView(getContext);
                     LinearLayout grid = new LinearLayout(getContext);
                     grid.setOrientation(LinearLayout.VERTICAL);
@@ -3640,9 +3229,9 @@ public void setTeleportPadVisible(boolean visible) {
 
                     final int cols = 4;
                     for (int i = 0; i < PRESET_COLORS.length; i += cols) {
-                        LinearLayout row = new LinearLayout(getContext);
-                        row.setOrientation(LinearLayout.HORIZONTAL);
-                        row.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
+                        LinearLayout sRow = new LinearLayout(getContext);
+                        sRow.setOrientation(LinearLayout.HORIZONTAL);
+                        sRow.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
 
                         int added = 0;
                         for (int j = 0; j < cols && i + j < PRESET_COLORS.length; j++) {
@@ -3651,25 +3240,31 @@ public void setTeleportPadVisible(boolean visible) {
 
                             LinearLayout cell = new LinearLayout(getContext);
                             LinearLayout.LayoutParams cellLp = new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f);
-                            cellLp.setMargins(dp(3), dp(5), dp(3), dp(5));
+                            cellLp.setMargins(dp(3), dp(4), dp(3), dp(4));
                             cell.setLayoutParams(cellLp);
                             cell.setOrientation(LinearLayout.VERTICAL);
                             cell.setGravity(Gravity.CENTER);
+                            cell.setPadding(dp(4), dp(6), dp(4), dp(6));
+                            cell.setBackground(ModxTheme.withInteractiveRipple(
+                                    getContext,
+                                    ModxTheme.roundRect(getContext, ModxTheme.SURFACE,
+                                            (color == cpHolder.currentColor) ? COLOR_ACCENT : ModxTheme.LINE,
+                                            (color == cpHolder.currentColor) ? 1.5f : 1f, ModxTheme.RADIUS_DP),
+                                    0x1AFFFFFF, ModxTheme.RADIUS_DP));
 
                             View swatch = new View(getContext);
-                            swatch.setLayoutParams(new LinearLayout.LayoutParams(dp(42), dp(42)));
+                            swatch.setLayoutParams(new LinearLayout.LayoutParams(dp(34), dp(34)));
                             GradientDrawable sw = new GradientDrawable();
                             sw.setShape(GradientDrawable.OVAL);
                             sw.setColor(color);
-                            sw.setStroke(dp(2), withAlpha(0xFFFFFF, 0xCC));
+                            sw.setStroke(dp(1), ModxTheme.LINE_STRONG);
                             swatch.setBackground(sw);
-                            addPressAnim(swatch);
 
                             TextView label = new TextView(getContext);
                             label.setText(cname);
-                            label.setTextColor(COLOR_TEXT_MUTED);
+                            label.setTextColor(ModxTheme.MUTED);
                             label.setTypeface(fontRegular);
-                            label.setTextSize(9f);
+                            label.setTextSize(9.5f);
                             label.setGravity(Gravity.CENTER);
                             label.setMaxLines(1);
                             label.setEllipsize(TextUtils.TruncateAt.END);
@@ -3679,28 +3274,29 @@ public void setTeleportPadVisible(boolean visible) {
 
                             cell.addView(swatch);
                             cell.addView(label);
+                            addPressAnim(cell);
 
-                            swatch.setOnClickListener(new View.OnClickListener() {
+                            cell.setOnClickListener(new View.OnClickListener() {
                                     @Override
                                     public void onClick(View v2) {
+                                        ModxTheme.hapticTap(v2);
                                         cpHolder.currentColor = color;
-                                        applyColorButton(button, featName, color);
+                                        applyColorButton(cpHolder, color);
                                         Preferences.changeFeatureColor(featName, featNum, color);
-
-                                        Toast.makeText(getContext, "Color: " + cname, Toast.LENGTH_SHORT).show();
+                                        showMenuToast(featName + ": " + cname);
                                         if (dialogRef[0] != null) dialogRef[0].dismiss();
                                     }
                                 });
 
-                            row.addView(cell);
+                            sRow.addView(cell);
                             added++;
                         }
                         for (int k = added; k < cols; k++) {
                             View empty = new View(getContext);
                             empty.setLayoutParams(new LinearLayout.LayoutParams(0, dp(42), 1f));
-                            row.addView(empty);
+                            sRow.addView(empty);
                         }
-                        grid.addView(row);
+                        grid.addView(sRow);
                     }
 
                     scroll.addView(grid);
@@ -3708,18 +3304,21 @@ public void setTeleportPadVisible(boolean visible) {
                 }
             });
 
-        linLayout.addView(button);
+        linLayout.addView(row);
     }
 
-    private void applyColorButton(Button button, String featName, int color) {
-        GradientDrawable bg = new GradientDrawable();
-        bg.setCornerRadius(dp(6));
-        bg.setColor(color);
-        bg.setStroke(dp(2), withAlpha(0xFFFFFF, 0xB0));
-        button.setBackground(bg);
-        int fg = isLight(color) ? Color.BLACK : Color.WHITE;
-        button.setTextColor(fg);
-        button.setText(Html.fromHtml("<b>" + featName + "</b>  " + hex(color)));
+    private void applyColorButton(ColorPickerHolder holder, int color) {
+        if (holder == null) return;
+        if (holder.dotView != null) {
+            GradientDrawable sw = new GradientDrawable();
+            sw.setShape(GradientDrawable.OVAL);
+            sw.setColor(0xFF000000 | color);
+            sw.setStroke(Math.max(1, dp(1)), ModxTheme.LINE_STRONG);
+            holder.dotView.setBackground(sw);
+        }
+        if (holder.hexView != null) {
+            holder.hexView.setText(hex(color));
+        }
     }
 
     private void featureList(String[] listFT, LinearLayout linearLayout) {
@@ -3758,139 +3357,154 @@ public void setTeleportPadVisible(boolean visible) {
 
 
     private void Switch(LinearLayout linLayout, final int featNum, final String featName, boolean swiOn) {
-    final LinearLayout row = new LinearLayout(getContext);
-    row.setOrientation(LinearLayout.HORIZONTAL);
-    row.setGravity(Gravity.CENTER_VERTICAL);
-    row.setLayoutParams(rowLp(6, 3, 6, 3));
-    final GradientDrawable rowBg = cardBg(COLOR_CARD, COLOR_CARD_BORDER, 6);
-    row.setBackground(rowBg);
+        final LinearLayout row = new LinearLayout(getContext);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinimumHeight(dp(44));
+        row.setLayoutParams(rowLp(6, 3, 6, 3));
+        row.setPadding(dp(12), dp(9), dp(10), dp(9));
 
-    TextView label = new TextView(getContext);
-    label.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
-    label.setText(featName);
-    label.setTextColor(TEXT_COLOR_2);
-    label.setTypeface(fontMedium);
-    label.setTextSize(12f);
-    label.setPadding(dp(12), dp(10), dp(6), dp(10));
-
-    final ToggleView toggle = new ToggleView(getContext, COLOR_ACCENT, COLOR_ACCENT_3, COLOR_TRACK);
-    boolean initial = Preferences.readInitialBool(featName, featNum, swiOn);
-    toggle.setChecked(initial, false);
-    rowBg.setStroke(dp(1), initial ? withAlpha(ToggleON, 0x99) : COLOR_CARD_BORDER);
-    if (featNum == 710) {
-        setTeleportPadVisible(initial);
-    }
-
-    // ★ Toggle state tracking
-    final ToggleHolder holder = new ToggleHolder();
-    holder.featNum    = featNum;
-    holder.featName   = featName;
-    holder.toggle     = toggle;
-    holder.rowBg      = rowBg;
-    holder.state      = new boolean[]{ initial };
-    holder.defaultVal = swiOn;
-    mToggles.put(featNum, holder);
-
-    toggle.setListener(new ToggleView.Listener() {
-        @Override
-        public void onChanged(boolean bool) {
-            holder.state[0] = bool;
-            animateStroke(rowBg,
-                          bool ? COLOR_CARD_BORDER : withAlpha(ToggleON, 0x99),
-                          bool ? withAlpha(ToggleON, 0x99) : COLOR_CARD_BORDER);
-
-            if (!mProgrammaticModeUpdate) {
-                Preferences.changeFeatureBool(featName, featNum, bool);
-            }
-
-            if (featNum == 710) {
-                setTeleportPadVisible(bool);
-            }
-        }
-    });
-
-    row.setOnClickListener(new View.OnClickListener() {
-        @Override
-        public void onClick(View v) {
-            toggle.toggle();
-        }
-    });
-    addPressAnim(row);
-
-    row.addView(label);
-    row.addView(toggle);
-    linLayout.addView(row);
-}
-
-    private void SeekBar(LinearLayout linLayout, final int featNum, final String featName, final int min, final int max) {
-    Integer def = SEEK_DEFAULTS.get(featNum);
-    int defaultVal = (def != null) ? def.intValue() : min;
-    if (defaultVal < min) defaultVal = min;
-    if (defaultVal > max) defaultVal = max;
-
-    int startVal = Preferences.readInitialInt(featName, featNum, defaultVal);
-    if (startVal < min) startVal = min;
-    if (startVal > max) startVal = max;
-
-        LinearLayout card = new LinearLayout(getContext);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setLayoutParams(rowLp(6, 3, 6, 3));
-        card.setBackground(cardBg(COLOR_CARD, COLOR_CARD_BORDER, 6));
-
-        LinearLayout head = new LinearLayout(getContext);
-        head.setOrientation(LinearLayout.HORIZONTAL);
-        head.setGravity(Gravity.CENTER_VERTICAL);
+        boolean initial = Preferences.readInitialBool(featName, featNum, swiOn);
+        final GradientDrawable rowBg = ModxTheme.roundRect(
+                getContext,
+                ModxTheme.CARD,
+                initial ? ModxTheme.accentLine(ToggleON) : ModxTheme.LINE,
+                1f,
+                ModxTheme.RADIUS_DP);
+        row.setBackground(ModxTheme.withInteractiveRipple(
+                getContext, rowBg, ModxTheme.withAlpha(COLOR_ACCENT, 0x1F), ModxTheme.RADIUS_DP));
 
         TextView label = new TextView(getContext);
         label.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
         label.setText(featName);
-        label.setTextColor(TEXT_COLOR_2);
+        label.setTextColor(ModxTheme.FG);
         label.setTypeface(fontMedium);
-        label.setTextSize(12f);
-        label.setPadding(dp(12), dp(10), dp(6), dp(2));
+        label.setTextSize(12.5f);
+        label.setMaxLines(2);
+        label.setEllipsize(TextUtils.TruncateAt.END);
+        label.setIncludeFontPadding(false);
+        label.setPadding(0, 0, dp(8), 0);
+
+        final ToggleView toggle = new ToggleView(getContext, COLOR_ACCENT, COLOR_ACCENT_3, COLOR_TRACK);
+        toggle.setChecked(initial, false);
+        if (featNum == 710) {
+            setTeleportPadVisible(initial);
+        }
+
+        final ToggleHolder holder = new ToggleHolder();
+        holder.featNum    = featNum;
+        holder.featName   = featName;
+        holder.toggle     = toggle;
+        holder.rowBg      = rowBg;
+        holder.state      = new boolean[]{ initial };
+        holder.defaultVal = swiOn;
+        mToggles.put(featNum, holder);
+
+        toggle.setListener(new ToggleView.Listener() {
+            @Override
+            public void onChanged(boolean bool) {
+                holder.state[0] = bool;
+                animateStroke(rowBg,
+                        bool ? ModxTheme.LINE : ModxTheme.accentLine(ToggleON),
+                        bool ? ModxTheme.accentLine(ToggleON) : ModxTheme.LINE);
+
+                if (!mProgrammaticModeUpdate) {
+                    Preferences.changeFeatureBool(featName, featNum, bool);
+                }
+
+                if (featNum == 710) {
+                    setTeleportPadVisible(bool);
+                }
+            }
+        });
+
+        row.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                ModxTheme.hapticTap(v);
+                toggle.toggle();
+            }
+        });
+        addPressAnim(row);
+
+        row.addView(label);
+        row.addView(toggle);
+        linLayout.addView(row);
+    }
+
+    private void SeekBar(LinearLayout linLayout, final int featNum, final String featName, final int min, final int max) {
+        Integer def = SEEK_DEFAULTS.get(featNum);
+        int defVal = (def != null) ? def.intValue() : min;
+        if (defVal < min) defVal = min;
+        if (defVal > max) defVal = max;
+        final int defaultVal = defVal;
+
+        int startVal = Preferences.readInitialInt(featName, featNum, defaultVal);
+        if (startVal < min) startVal = min;
+        if (startVal > max) startVal = max;
+
+        LinearLayout card = new LinearLayout(getContext);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setClipChildren(false);
+        card.setClipToPadding(false);
+        card.setLayoutParams(rowLp(6, 3, 6, 3));
+        card.setBackground(ModxTheme.cardSurface(getContext, ModxTheme.LINE));
+        card.setPadding(dp(12), dp(9), dp(12), dp(8));
+
+        LinearLayout head = new LinearLayout(getContext);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setClipChildren(false);
+        head.setClipToPadding(false);
+
+        TextView label = new TextView(getContext);
+        label.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
+        label.setText(featName);
+        label.setTextColor(ModxTheme.FG);
+        label.setTypeface(fontMedium);
+        label.setTextSize(12.5f);
         label.setSingleLine(true);
         label.setEllipsize(TextUtils.TruncateAt.END);
-        
+        label.setIncludeFontPadding(false);
+        label.setPadding(0, 0, dp(8), 0);
 
         final TextView chip = new TextView(getContext);
-        LinearLayout.LayoutParams chipLp = new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
-        chipLp.setMargins(0, dp(8), dp(10), 0);
-        chip.setLayoutParams(chipLp);
+        chip.setTag("no_scale");
+        chip.setLayoutParams(new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT));
         int displayStart = (featNum == 103) ? (startVal + 30) : startVal;
-chip.setText(String.valueOf(displayStart));
-        chip.setTextColor(Color.parseColor(NumberTxtColor));
-        chip.setTypeface(fontBold);
-        chip.setTextSize(11f);
+        chip.setText(String.valueOf(displayStart));
+        chip.setTextColor(COLOR_ACCENT);
+        chip.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        chip.setTextSize(11.5f);
         chip.setGravity(Gravity.CENTER);
-        chip.setPadding(dp(8), dp(2), dp(8), dp(2));
-        chip.setBackground(cardBg(withAlpha(Color.parseColor(NumberTxtColor), 0x18), withAlpha(Color.parseColor(NumberTxtColor), 0x66), 8));
+        chip.setIncludeFontPadding(false);
+        chip.setMinHeight(dp(26));
+        chip.setPadding(dp(9), dp(3), dp(9), dp(3));
+        chip.setBackground(ModxTheme.pillBadgeBg(
+                getContext, ModxTheme.accentSoft(COLOR_ACCENT), ModxTheme.accentLine(COLOR_ACCENT)));
 
         head.addView(label);
         head.addView(chip);
 
-                final SeekBar seekBar = new SeekBar(getContext);
-        seekBar.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
-        seekBar.setPadding(dp(16), dp(16), dp(16), dp(18));   // ★ thumb না কাটার জন্য বেশি padding
-        
+        final SeekBar seekBar = new SeekBar(getContext);
+        LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
+        sbLp.setMargins(0, dp(4), 0, 0);
+        seekBar.setLayoutParams(sbLp);
+        seekBar.setPadding(dp(8), dp(2), dp(8), dp(2));
+        seekBar.setMinimumHeight(dp(26));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            seekBar.setMinHeight(dp(26));
+            seekBar.setMaxHeight(dp(28));
+        }
+
         seekBar.setMax(max);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) seekBar.setMin(min);
-        SeekTrackDrawable trackDrawable = new SeekTrackDrawable(dpf(6f), COLOR_TRACK, COLOR_ACCENT, COLOR_SUCCESS);
+        SeekTrackDrawable trackDrawable = new SeekTrackDrawable(
+                dpf(4f), COLOR_TRACK, COLOR_ACCENT, COLOR_ACCENT_3);
         seekBar.setProgressDrawable(trackDrawable);
 
-        GradientDrawable thumbGlow = new GradientDrawable();
-        thumbGlow.setShape(GradientDrawable.OVAL);
-        thumbGlow.setColor(withAlpha(COLOR_ACCENT, 0x44));
-        thumbGlow.setSize(dp(22), dp(22));
-
-        GradientDrawable thumbCore = new GradientDrawable();
-        thumbCore.setShape(GradientDrawable.OVAL);
-        thumbCore.setColor(0xFFFFFFFF);
-        thumbCore.setStroke(dp(3), COLOR_ACCENT);
-        thumbCore.setSize(dp(14), dp(14));
-
-        LayerDrawable thumbLd = new LayerDrawable(new Drawable[]{thumbGlow, thumbCore});
-        thumbLd.setLayerInset(1, dp(4), dp(4), dp(4), dp(4));
-        seekBar.setThumb(thumbLd);
+        GradientDrawable thumbCore = makeSeekThumbDrawable();
+        seekBar.setThumb(thumbCore);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) seekBar.setSplitTrack(false);
         seekBar.setProgress(startVal);
 
@@ -3906,19 +3520,60 @@ chip.setText(String.valueOf(displayStart));
                     }
                     int disp = (featNum == 103) ? (val + 30) : val;
                     chip.setText(String.valueOf(disp));
+                    if (z) {
+                        ModxTheme.hapticTick(s);
+                    }
                     if (!mProgrammaticModeUpdate) {
                         Preferences.changeFeatureInt(featName, featNum, val);
                     }
                 }
             });
-            
+
+        chip.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    ModxTheme.hapticTap(v);
+                    final int dMin = (featNum == 103) ? (min + 30) : min;
+                    final int dMax = (featNum == 103) ? (max + 30) : max;
+                    final EditText editText = makeEditText();
+                    editText.setHint(dMin + " .. " + dMax);
+                    editText.setInputType(InputType.TYPE_CLASS_NUMBER);
+                    editText.setKeyListener(DigitsKeyListener.getInstance("0123456789"));
+                    editText.setText(chip.getText());
+                    editText.setSelection(editText.getText().length());
+                    showInputDialog(featName, editText, new Runnable() {
+                            @Override
+                            public void run() {
+                                try {
+                                    String raw = editText.getText().toString().trim();
+                                    if (raw.isEmpty()) return;
+                                    int entered = Integer.parseInt(raw);
+                                    int internal = (featNum == 103) ? (entered - 30) : entered;
+                                    if (internal < min) internal = min;
+                                    if (internal > max) internal = max;
+                                    setSeekBarValue(featNum, internal, false);
+                                } catch (NumberFormatException ignored) { }
+                            }
+                        });
+                }
+            });
+
+        chip.setOnLongClickListener(new View.OnLongClickListener() {
+                @Override
+                public boolean onLongClick(View v) {
+                    ModxTheme.hapticTap(v);
+                    setSeekBarValue(featNum, defaultVal, false);
+                    showMenuToast("Reset " + featName + " to default");
+                    return true;
+                }
+            });
+
         SeekBarHolder sbHolder = new SeekBarHolder();
         sbHolder.featNum       = featNum;
         sbHolder.featName      = featName;
         sbHolder.seekBar       = seekBar;
         sbHolder.chip          = chip;
         sbHolder.trackDrawable = trackDrawable;
-        sbHolder.thumbGlow     = thumbGlow;
         sbHolder.thumbCore     = thumbCore;
         sbHolder.min           = min;
         sbHolder.max           = max;
@@ -3930,45 +3585,38 @@ chip.setText(String.valueOf(displayStart));
         linLayout.addView(card);
     }
 
-    private Drawable makeSeekThumb() {
-        GradientDrawable glow = new GradientDrawable();
-        glow.setShape(GradientDrawable.OVAL);
-        glow.setColor(withAlpha(COLOR_ACCENT, 0x44));
-        glow.setSize(dp(22), dp(22));
-
+    private GradientDrawable makeSeekThumbDrawable() {
         GradientDrawable core = new GradientDrawable();
         core.setShape(GradientDrawable.OVAL);
-        core.setColor(0xFFFFFFFF);
-        core.setStroke(dp(3), COLOR_ACCENT);
-        core.setSize(dp(14), dp(14));
-
-        LayerDrawable ld = new LayerDrawable(new Drawable[]{glow, core});
-        ld.setLayerInset(1, dp(4), dp(4), dp(4), dp(4));
-        return ld;
+        core.setColor(ModxTheme.FG);
+        core.setStroke(Math.max(2, dp(2)), COLOR_ACCENT);
+        int sz = dp(16);
+        core.setSize(sz, sz);
+        return core;
     }
 
-        private void Button(LinearLayout linLayout, final int featNum, final String featName) {
+    private Drawable makeSeekThumb() {
+        return makeSeekThumbDrawable();
+    }
+
+    private void Button(LinearLayout linLayout, final int featNum, final String featName) {
         final Button button = new Button(getContext);
-        button.setMinHeight(0);
-        button.setMinimumHeight(0);
+        button.setMinHeight(dp(42));
+        button.setMinimumHeight(dp(42));
         button.setLayoutParams(rowLp(6, 4, 6, 4));
         button.setAllCaps(false);
         button.setText(Html.fromHtml(featName));
         button.setTypeface(fontBold);
-        button.setTextSize(12f);
-        button.setPadding(dp(10), dp(11), dp(10), dp(11));
+        button.setTextSize(12.5f);
+        button.setIncludeFontPadding(false);
+        button.setPadding(dp(12), dp(10), dp(12), dp(10));
 
-        // ★ Special style for Close button (-6) — distinct danger color
         if (featNum == -6) {
-            button.setTextColor(lighten(COLOR_DANGER, 0.45f));
-            button.setBackground(cardBg(
-                    withAlpha(COLOR_DANGER, 0x1F),
-                    withAlpha(COLOR_DANGER, 0xCC), 8));
+            button.setTextColor(ModxTheme.FG);
+            button.setBackground(ModxTheme.secondaryButtonBg(getContext));
         } else {
-            button.setTextColor(Color.WHITE);
-            GradientDrawable btnBg = gradBg(BTN_GRAD_1, BTN_GRAD_2, 8);
-            btnBg.setStroke(dp(1), 0x55FFFFFF);
-            button.setBackground(btnBg);
+            button.setTextColor(ModxTheme.onAccent(COLOR_ACCENT));
+            button.setBackground(ModxTheme.primaryButtonBg(getContext, COLOR_ACCENT));
         }
 
         flatten(button);
@@ -3977,8 +3625,7 @@ chip.setText(String.valueOf(displayStart));
         button.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-         
-                // ★ Camera Tab Auto Open
+                ModxTheme.hapticTap(v);
                 if (featNum == 997) {
                     selectTabByName("Camera");
                     return;
@@ -3999,66 +3646,108 @@ chip.setText(String.valueOf(displayStart));
         });
         linLayout.addView(button);
     }
-private Button makeMenuColorButton(final int color, final String label,
-                                    final int featNum) {
-    final Button button = new Button(getContext);
-    button.setMinHeight(0);
-    button.setMinimumHeight(0);
-    button.setLayoutParams(rowLp(6, 4, 6, 4));
-    button.setAllCaps(false);
-    button.setTypeface(fontBold);
-    button.setTextSize(12f);
-    button.setPadding(dp(10), dp(13), dp(10), dp(13));
-    flatten(button);
-    addPressAnim(button);
 
-    applyMenuColorButtonStyle(button, label, color);
-    if (featNum == -29) {
-        mMenuColorBtn = button;
+    private LinearLayout makeMenuColorButton(final int color, final String label, final int featNum) {
+        final LinearLayout row = new LinearLayout(getContext);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinimumHeight(dp(44));
+        row.setLayoutParams(rowLp(6, 4, 6, 4));
+        row.setPadding(dp(12), dp(9), dp(12), dp(9));
+        row.setBackground(ModxTheme.withInteractiveRipple(
+                getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                ModxTheme.withAlpha(COLOR_ACCENT, 0x1F), ModxTheme.RADIUS_DP));
+
+        TextView labelTv = new TextView(getContext);
+        labelTv.setText(label);
+        labelTv.setTextColor(ModxTheme.FG);
+        labelTv.setTypeface(fontMedium);
+        labelTv.setTextSize(12.5f);
+        labelTv.setIncludeFontPadding(false);
+        labelTv.setMaxLines(1);
+        labelTv.setEllipsize(TextUtils.TruncateAt.END);
+        labelTv.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
+
+        TextView hexTv = new TextView(getContext);
+        hexTv.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        hexTv.setTextSize(11f);
+        hexTv.setTextColor(ModxTheme.MUTED);
+        hexTv.setIncludeFontPadding(false);
+        hexTv.setPadding(dp(7), dp(3), dp(7), dp(3));
+        hexTv.setBackground(ModxTheme.pillBadgeBg(getContext, ModxTheme.SURFACE, ModxTheme.LINE));
+        LinearLayout.LayoutParams hxLp = new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
+        hxLp.setMargins(dp(8), 0, dp(8), 0);
+        hexTv.setLayoutParams(hxLp);
+
+        View dot = new View(getContext);
+        dot.setLayoutParams(new LinearLayout.LayoutParams(dp(20), dp(20)));
+
+        row.addView(labelTv);
+        row.addView(hexTv);
+        row.addView(dot);
+
+        applyMenuColorRowStyle(dot, hexTv, color);
+        if (featNum == -29) {
+            mMenuColorRow = row;
+            mMenuColorDot = dot;
+            mMenuColorHex = hexTv;
+        }
+
+        addPressAnim(row);
+        row.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                ModxTheme.hapticTap(v);
+                if (featNum == -29) {
+                    showMenuColorPickerDialog();
+                } else if (featNum == -28) {
+                    resetMenuColorToDefaultInPlace();
+                }
+            }
+        });
+        return row;
     }
 
-    button.setOnClickListener(new View.OnClickListener() {
-        @Override
-        public void onClick(View v) {
-            if (featNum == -29) {
-                showMenuColorPickerDialog();
-            } else if (featNum == -28) {
-                resetMenuColorToDefaultInPlace();
-            }
+    private void applyMenuColorRowStyle(View dot, TextView hexTv, int color) {
+        if (dot != null) {
+            GradientDrawable sw = new GradientDrawable();
+            sw.setShape(GradientDrawable.OVAL);
+            sw.setColor(0xFF000000 | color);
+            sw.setStroke(Math.max(1, dp(1)), ModxTheme.LINE_STRONG);
+            dot.setBackground(sw);
         }
-    });
-    return button;
-}
-
-private void applyMenuColorButtonStyle(Button button, String label, int color) {
-    GradientDrawable bg = new GradientDrawable();
-    bg.setCornerRadius(dp(6));
-    bg.setColor(color);
-    bg.setStroke(dp(2), withAlpha(0xFFFFFF, 0xB0));
-    button.setBackground(bg);
-    int fg = bestTextOnColor(color);
-    button.setTextColor(fg);
-    button.setText(Html.fromHtml(
-        "<b>" + label + "</b>  " + hex(color)));
-}
+        if (hexTv != null) {
+            hexTv.setText(hex(color));
+        }
+    }
 
     private void ButtonLink(LinearLayout linLayout, final String featName, final String url) {
         final Button button = new Button(getContext);
-        button.setMinHeight(0);
-        button.setMinimumHeight(0);
+        button.setMinHeight(dp(42));
+        button.setMinimumHeight(dp(42));
         button.setLayoutParams(rowLp(6, 4, 6, 4));
         button.setAllCaps(false);
         button.setTextColor(COLOR_ACCENT);
-        button.setText(Html.fromHtml(featName + " &#8599;"));
-        button.setTypeface(fontBold);
-        button.setTextSize(12f);
-        button.setPadding(dp(10), dp(11), dp(10), dp(11));
-        button.setBackground(cardBg(withAlpha(COLOR_ACCENT, 0x14), withAlpha(COLOR_ACCENT, 0x88), 6));
+        button.setText(featName);
+        button.setTypeface(fontMedium);
+        button.setTextSize(12.5f);
+        button.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        button.setIncludeFontPadding(false);
+        button.setPadding(dp(12), dp(10), dp(12), dp(10));
+        button.setBackground(ModxTheme.withInteractiveRipple(
+                getContext,
+                ModxTheme.pillBadgeBg(getContext, ModxTheme.accentSoft(COLOR_ACCENT), ModxTheme.accentLine(COLOR_ACCENT)),
+                ModxTheme.withAlpha(COLOR_ACCENT, 0x24),
+                ModxTheme.RADIUS_DP));
+        button.setCompoundDrawablesWithIntrinsicBounds(
+                null, null, ModxIcons.externalLink(COLOR_ACCENT, dp(15)), null);
+        button.setCompoundDrawablePadding(dp(8));
         flatten(button);
         addPressAnim(button);
         button.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
+                    ModxTheme.hapticTap(v);
                     Intent intent = new Intent(Intent.ACTION_VIEW);
                     intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                     intent.setData(Uri.parse(url));
@@ -4071,74 +3760,265 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
 
     private void applyOnOffStyle(Button button, String name, boolean on) {
         if (on) {
-            button.setBackground(cardBg(withAlpha(ToggleON, 0x1F), withAlpha(ToggleON, 0xCC), 6));
+            button.setBackground(ModxTheme.withInteractiveRipple(
+                    getContext,
+                    ModxTheme.roundRect(getContext, ModxTheme.accentSoft(ToggleON), ModxTheme.accentLine(ToggleON), 1f, ModxTheme.RADIUS_DP),
+                    ModxTheme.withAlpha(ToggleON, 0x24), ModxTheme.RADIUS_DP));
             button.setText(Html.fromHtml(name + "  <font color='" + hex(ToggleON) + "'><b>ON</b></font>"));
         } else {
-            button.setBackground(cardBg(withAlpha(ToggleOFF, 0x14), withAlpha(ToggleOFF, 0xBB), 6));
-            button.setText(Html.fromHtml(name + "  <font color='" + hex(ToggleOFF) + "'><b>OFF</b></font>"));
+            button.setBackground(ModxTheme.withInteractiveRipple(
+                    getContext,
+                    ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                    0x1AFFFFFF, ModxTheme.RADIUS_DP));
+            button.setText(Html.fromHtml(name + "  <font color='" + hex(ModxTheme.SUBTLE) + "'><b>OFF</b></font>"));
+        }
+    }
+
+    private String modeSummaryFor(int featNum) {
+        if (featNum == MODE_SIMPLE) return "Auto Revive · Unlimited Coins & Shop · Jump 35";
+        if (featNum == MODE_MAX)    return "Simple + God Mode · Max Jump · Powerup · Fast Lane";
+        if (featNum == MODE_ULTRA)  return "Max + Chams · Low Gravity · Follow Cam · Wall Hack";
+        return "";
+    }
+
+    private void applyModeCardStyle(ModeButtonHolder h, boolean on) {
+        if (h == null || h.row == null) return;
+        if (on) {
+            Drawable bg = ModxTheme.roundRect(
+                    getContext, ModxTheme.accentSoft(COLOR_ACCENT),
+                    ModxTheme.accentLine(COLOR_ACCENT), 1.5f, ModxTheme.RADIUS_DP);
+            h.row.setBackground(ModxTheme.withInteractiveRipple(
+                    getContext, bg, ModxTheme.withAlpha(COLOR_ACCENT, 0x24), ModxTheme.RADIUS_DP));
+        } else {
+            h.row.setBackground(ModxTheme.withInteractiveRipple(
+                    getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                    0x1AFFFFFF, ModxTheme.RADIUS_DP));
+        }
+        if (h.iconView != null) {
+            h.iconView.setImageDrawable(on
+                    ? ModxIcons.checkCircle(COLOR_ACCENT, dp(18))
+                    : ModxIcons.circle(ModxTheme.SUBTLE, dp(18)));
+        }
+        if (h.titleView != null) {
+            h.titleView.setTextColor(ModxTheme.FG);
+        }
+        if (h.summaryView != null) {
+            h.summaryView.setTextColor(on ? ModxTheme.FG : ModxTheme.MUTED);
+        }
+        if (h.badgeView != null) {
+            h.badgeView.setText(on ? "Active" : "Off");
+            h.badgeView.setTextColor(on ? ModxTheme.onAccent(COLOR_ACCENT) : ModxTheme.SUBTLE);
+            h.badgeView.setBackground(ModxTheme.pillBadgeBg(
+                    getContext,
+                    on ? COLOR_ACCENT : ModxTheme.SURFACE,
+                    on ? COLOR_ACCENT : ModxTheme.LINE));
         }
     }
 
     private void ButtonOnOff(LinearLayout linLayout, final int featNum, String featName, final boolean switchedOn) {
-        final Button button = new Button(getContext);
-        button.setMinHeight(0);
-        button.setMinimumHeight(0);
-        button.setLayoutParams(rowLp(6, 4, 6, 4));
-        button.setTextColor(TEXT_COLOR_2);
-        button.setAllCaps(false);
-        button.setTypeface(fontMedium);
-        button.setTextSize(12f);
-        button.setPadding(dp(10), dp(11), dp(10), dp(11));
-        flatten(button);
-        addPressAnim(button);
-
         final String finalfeatName = featName.replace("OnOff_", "");
         final boolean isMode = (featNum == MODE_SIMPLE || featNum == MODE_MAX || featNum == MODE_ULTRA);
         final boolean isResetAll = (featNum == MODE_RESET);
 
-        final boolean initialState = isResetAll
-                ? false
-                : Preferences.readInitialBool(finalfeatName, featNum, switchedOn);
+        if (isMode) {
+            final LinearLayout row = new LinearLayout(getContext);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setMinimumHeight(dp(52));
+            row.setLayoutParams(rowLp(6, 3, 6, 3));
+            row.setPadding(dp(11), dp(9), dp(11), dp(9));
+            addPressAnim(row);
+
+            ImageView iconView = new ImageView(getContext);
+            LinearLayout.LayoutParams iLp = new LinearLayout.LayoutParams(dp(18), dp(18));
+            iLp.setMargins(0, 0, dp(9), 0);
+            iconView.setLayoutParams(iLp);
+            iconView.setScaleType(ImageView.ScaleType.FIT_CENTER);
+
+            LinearLayout textCol = new LinearLayout(getContext);
+            textCol.setOrientation(LinearLayout.VERTICAL);
+            textCol.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
+
+            TextView titleView = new TextView(getContext);
+            titleView.setText(finalfeatName);
+            titleView.setTextColor(ModxTheme.FG);
+            titleView.setTypeface(fontBold);
+            titleView.setTextSize(12.5f);
+            titleView.setMaxLines(1);
+            titleView.setEllipsize(TextUtils.TruncateAt.END);
+            titleView.setIncludeFontPadding(false);
+
+            TextView summaryView = new TextView(getContext);
+            summaryView.setText(modeSummaryFor(featNum));
+            summaryView.setTextColor(ModxTheme.MUTED);
+            summaryView.setTypeface(fontRegular);
+            summaryView.setTextSize(10.5f);
+            summaryView.setMaxLines(1);
+            summaryView.setEllipsize(TextUtils.TruncateAt.END);
+            summaryView.setIncludeFontPadding(false);
+            summaryView.setPadding(0, dp(2), 0, 0);
+
+            textCol.addView(titleView);
+            textCol.addView(summaryView);
+
+            TextView badgeView = new TextView(getContext);
+            badgeView.setTag("no_scale");
+            badgeView.setTypeface(fontBold);
+            badgeView.setTextSize(10f);
+            badgeView.setIncludeFontPadding(false);
+            badgeView.setGravity(Gravity.CENTER);
+            badgeView.setPadding(dp(8), dp(3), dp(8), dp(3));
+            LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
+            bLp.setMargins(dp(8), 0, 0, 0);
+            badgeView.setLayoutParams(bLp);
+
+            row.addView(iconView);
+            row.addView(textCol);
+            row.addView(badgeView);
+
+            final boolean initialState = Preferences.readInitialBool(finalfeatName, featNum, switchedOn);
+            final boolean[] state = new boolean[]{ initialState };
+
+            final ModeButtonHolder h = new ModeButtonHolder();
+            h.featNum     = featNum;
+            h.name        = finalfeatName;
+            h.row         = row;
+            h.iconView    = iconView;
+            h.titleView   = titleView;
+            h.summaryView = summaryView;
+            h.badgeView   = badgeView;
+            h.state       = state;
+            mModeButtons.put(featNum, h);
+            applyModeCardStyle(h, initialState);
+
+            row.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    ModxTheme.hapticTap(v);
+                    handleModeButtonToggle(h);
+                }
+            });
+            linLayout.addView(row);
+            return;
+        }
+
+        if (isResetAll) {
+            final LinearLayout row = new LinearLayout(getContext);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setMinimumHeight(dp(48));
+            row.setLayoutParams(rowLp(6, 5, 6, 4));
+            row.setPadding(dp(11), dp(9), dp(11), dp(9));
+            row.setBackground(ModxTheme.dangerOutlineButtonBg(getContext, false));
+            addPressAnim(row);
+
+            final ImageView iconView = new ImageView(getContext);
+            LinearLayout.LayoutParams iLp = new LinearLayout.LayoutParams(dp(18), dp(18));
+            iLp.setMargins(0, 0, dp(9), 0);
+            iconView.setLayoutParams(iLp);
+            iconView.setImageDrawable(ModxIcons.refreshCw(ModxTheme.DANGER, dp(18)));
+
+            LinearLayout textCol = new LinearLayout(getContext);
+            textCol.setOrientation(LinearLayout.VERTICAL);
+            textCol.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
+
+            final TextView titleView = new TextView(getContext);
+            titleView.setText(finalfeatName);
+            titleView.setTextColor(ModxTheme.DANGER);
+            titleView.setTypeface(fontBold);
+            titleView.setTextSize(12.5f);
+            titleView.setMaxLines(1);
+            titleView.setIncludeFontPadding(false);
+
+            final TextView subView = new TextView(getContext);
+            subView.setText("Restores every toggle, slider & preset");
+            subView.setTextColor(ModxTheme.MUTED);
+            subView.setTypeface(fontRegular);
+            subView.setTextSize(10.5f);
+            subView.setMaxLines(1);
+            subView.setEllipsize(TextUtils.TruncateAt.END);
+            subView.setIncludeFontPadding(false);
+            subView.setPadding(0, dp(2), 0, 0);
+
+            textCol.addView(titleView);
+            textCol.addView(subView);
+
+            row.addView(iconView);
+            row.addView(textCol);
+
+            final boolean[] armed = new boolean[]{ false };
+            final Runnable[] disarmHolder = new Runnable[1];
+            final Runnable resetDoneRevert = new Runnable() {
+                @Override
+                public void run() {
+                    if (row.getParent() != null) {
+                        row.setBackground(ModxTheme.dangerOutlineButtonBg(getContext, false));
+                        titleView.setText(finalfeatName);
+                        titleView.setTextColor(ModxTheme.DANGER);
+                        subView.setText("Restores every toggle, slider & preset");
+                        iconView.setImageDrawable(ModxIcons.refreshCw(ModxTheme.DANGER, dp(18)));
+                    }
+                }
+            };
+            disarmHolder[0] = new Runnable() {
+                @Override
+                public void run() {
+                    armed[0] = false;
+                    resetDoneRevert.run();
+                }
+            };
+
+            row.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    ModxTheme.hapticTap(v);
+                    if (!armed[0]) {
+                        armed[0] = true;
+                        row.removeCallbacks(disarmHolder[0]);
+                        row.setBackground(ModxTheme.dangerOutlineButtonBg(getContext, true));
+                        titleView.setText("Tap again to confirm reset");
+                        subView.setText("Clears all active toggles, sliders & presets");
+                        row.postDelayed(disarmHolder[0], 2500L);
+                        return;
+                    }
+                    armed[0] = false;
+                    row.removeCallbacks(disarmHolder[0]);
+                    resetAllFeaturesAction(row, titleView, subView, iconView, finalfeatName, resetDoneRevert);
+                }
+            });
+            linLayout.addView(row);
+            return;
+        }
+
+        final Button button = new Button(getContext);
+        button.setMinHeight(dp(42));
+        button.setMinimumHeight(dp(42));
+        button.setLayoutParams(rowLp(6, 4, 6, 4));
+        button.setTextColor(ModxTheme.FG);
+        button.setAllCaps(false);
+        button.setTypeface(fontMedium);
+        button.setTextSize(12.5f);
+        button.setIncludeFontPadding(false);
+        button.setPadding(dp(12), dp(10), dp(12), dp(10));
+        flatten(button);
+        addPressAnim(button);
+
+        final boolean initialState = Preferences.readInitialBool(finalfeatName, featNum, switchedOn);
         final boolean[] state = new boolean[]{ initialState };
         applyOnOffStyle(button, finalfeatName, state[0]);
 
-        if (isMode) {
-            ModeButtonHolder h = new ModeButtonHolder();
-            h.featNum = featNum;
-            h.name    = finalfeatName;
-            h.button  = button;
-            h.state   = state;
-            mModeButtons.put(featNum, h);
-        } else if (!isResetAll) {
-            OtherButtonOnOffHolder oh = new OtherButtonOnOffHolder();
-            oh.featNum    = featNum;
-            oh.name       = finalfeatName;
-            oh.button     = button;
-            oh.state      = state;
-            oh.defaultVal = switchedOn;
-            mOtherButtonOnOffs.put(featNum, oh);
-        }
-
-        final Runnable resetDoneRevert = isResetAll ? new Runnable() {
-            @Override
-            public void run() {
-                if (button.getParent() != null) {
-                    applyOnOffStyle(button, finalfeatName, false);
-                }
-            }
-        } : null;
+        OtherButtonOnOffHolder oh = new OtherButtonOnOffHolder();
+        oh.featNum    = featNum;
+        oh.name       = finalfeatName;
+        oh.button     = button;
+        oh.state      = state;
+        oh.defaultVal = switchedOn;
+        mOtherButtonOnOffs.put(featNum, oh);
 
         button.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (isResetAll) {
-                    resetAllFeaturesAction(button, finalfeatName, resetDoneRevert);
-                    return;
-                }
-                if (isMode) {
-                    handleModeButtonToggle(featNum, finalfeatName, button, state);
-                    return;
-                }
+                ModxTheme.hapticTap(v);
                 state[0] = !state[0];
                 Preferences.changeFeatureBool(finalfeatName, featNum, state[0]);
                 applyOnOffStyle(button, finalfeatName, state[0]);
@@ -4155,8 +4035,11 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
         }
     }
 
-    private void handleModeButtonToggle(final int featNum, final String featName,
-                                        final Button button, final boolean[] state) {
+    private void handleModeButtonToggle(final ModeButtonHolder holder) {
+        if (holder == null) return;
+        final int featNum = holder.featNum;
+        final String featName = holder.name;
+        final boolean[] state = holder.state;
         runOnMainThread(new Runnable() {
             @Override
             public void run() {
@@ -4173,16 +4056,16 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
                             ModeButtonHolder other = mModeButtons.get(fn);
                             if (other != null && other.state[0]) {
                                 other.state[0] = false;
-                                applyOnOffStyle(other.button, other.name, false);
+                                applyModeCardStyle(other, false);
                                 Preferences.forceSyncBool(other.name, other.featNum, false, true);
                                 applyModeToMenuInternal(fn, false);
                             }
                         }
                     }
 
-                    // Step 2: Update the clicked Mode button (UI + Store/Disk + Native)
+                    // Step 2: Update the clicked Mode card (UI + Store/Disk + Native)
                     state[0] = newState;
-                    applyOnOffStyle(button, featName, newState);
+                    applyModeCardStyle(holder, newState);
                     Preferences.forceSyncBool(featName, featNum, newState, true);
 
                     // Step 3: Apply this Mode's full preset (leaves non-mode manual choices alone)
@@ -4195,8 +4078,9 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
         });
     }
 
-    private void resetAllFeaturesAction(final Button resetButton, final String resetName,
-                                        final Runnable revertRunnable) {
+    private void resetAllFeaturesAction(final LinearLayout resetRow, final TextView titleView,
+                                        final TextView subView, final ImageView iconView,
+                                        final String resetName, final Runnable revertRunnable) {
         runOnMainThread(new Runnable() {
             @Override
             public void run() {
@@ -4204,13 +4088,13 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
                 mProgrammaticModeUpdate = true;
                 Preferences.beginBatch();
                 try {
-                    // 1. Turn all Mode buttons OFF (UI + Store/Disk; native 803 resets all game globals)
+                    // 1. Turn all Mode cards OFF (UI + Store/Disk; native 803 resets all game globals)
                     for (int fn : MODE_FEATNUMS) {
                         ModeButtonHolder mh = mModeButtons.get(fn);
                         if (mh != null) {
                             if (mh.state[0]) {
                                 mh.state[0] = false;
-                                applyOnOffStyle(mh.button, mh.name, false);
+                                applyModeCardStyle(mh, false);
                             }
                             Preferences.forceSyncBool(mh.name, mh.featNum, false, false);
                         } else {
@@ -4286,49 +4170,51 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
                     mProgrammaticModeUpdate = false;
                 }
 
-                // Momentary "Done" flash, then return to OFF
-                if (revertRunnable != null) {
-                    resetButton.removeCallbacks(revertRunnable);
-                    resetButton.setBackground(cardBg(withAlpha(ToggleON, 0x1F), withAlpha(ToggleON, 0xCC), 6));
-                    resetButton.setText(Html.fromHtml(resetName + "  <font color='" + hex(ToggleON) + "'><b>Done</b></font>"));
-                    resetButton.postDelayed(revertRunnable, 900);
-                } else {
-                    applyOnOffStyle(resetButton, resetName, false);
+                showMenuToast("All features reset");
+                if (revertRunnable != null && resetRow != null) {
+                    resetRow.removeCallbacks(revertRunnable);
+                    resetRow.setBackground(ModxTheme.pillBadgeBg(
+                            getContext, ModxTheme.badgeBg(ModxTheme.SUCCESS), ModxTheme.badgeBorder(ModxTheme.SUCCESS)));
+                    if (titleView != null) {
+                        titleView.setText("Done");
+                        titleView.setTextColor(ModxTheme.SUCCESS);
+                    }
+                    if (subView != null) {
+                        subView.setText("All features restored to defaults");
+                    }
+                    if (iconView != null) {
+                        iconView.setImageDrawable(ModxIcons.checkCircle(ModxTheme.SUCCESS, dp(18)));
+                    }
+                    resetRow.postDelayed(revertRunnable, 900);
                 }
             }
         });
     }
-    
+
     // ================================================================
-    // Telegram button — Sky blue + Telegram paper-plane icon
+    // Telegram button — Sky blue (#229ED9) + Telegram paper-plane icon
     // ================================================================
     private void ButtonTelegram(LinearLayout linLayout, final String label, final String url) {
         final Button button = new Button(getContext);
-        button.setMinHeight(0);
-        button.setMinimumHeight(0);
+        button.setMinHeight(dp(44));
+        button.setMinimumHeight(dp(44));
         button.setLayoutParams(rowLp(6, 4, 6, 4));
         button.setAllCaps(false);
         button.setTextColor(Color.WHITE);
         button.setTypeface(fontBold);
-        button.setTextSize(12f);
-        button.setPadding(dp(12), dp(11), dp(12), dp(11));
+        button.setTextSize(12.5f);
+        button.setIncludeFontPadding(false);
+        button.setPadding(dp(12), dp(10), dp(12), dp(10));
         button.setText(label);
         button.setGravity(Gravity.CENTER);
 
-        // Telegram blue background (#229ED9)
-        int TG_BLUE = Color.parseColor("#229ED9");
-        int TG_BLUE_DEEP = Color.parseColor("#1A7EB0");
-        GradientDrawable bg = new GradientDrawable(
-                GradientDrawable.Orientation.LEFT_RIGHT,
-                new int[]{TG_BLUE, TG_BLUE_DEEP});
-        bg.setCornerRadius(dp(8));
-        bg.setStroke(dp(1), 0x55FFFFFF);
-        button.setBackground(bg);
+        button.setBackground(ModxTheme.withInteractiveRipple(
+                getContext,
+                ModxTheme.roundRect(getContext, ModxTheme.TELEGRAM, ModxTheme.TELEGRAM_DEEP, 1f, ModxTheme.RADIUS_DP),
+                0x26FFFFFF, ModxTheme.RADIUS_DP));
 
-        // Telegram paper-plane icon (left of text)
-        float density = safeDisplayMetrics(getContext).density;
-        TelegramIcon icon = new TelegramIcon(Color.WHITE, density);
-        button.setCompoundDrawablesWithIntrinsicBounds(icon, null, null, null);
+        button.setCompoundDrawablesWithIntrinsicBounds(
+                ModxIcons.telegramPlane(Color.WHITE, dp(18)), null, null, null);
         button.setCompoundDrawablePadding(dp(8));
 
         flatten(button);
@@ -4337,6 +4223,7 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
         button.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                ModxTheme.hapticTap(v);
                 try {
                     Intent intent = new Intent(Intent.ACTION_VIEW);
                     intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -4364,8 +4251,8 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
             h.state[0] = newState;
             h.toggle.setChecked(newState, true);
             animateStroke(h.rowBg,
-                          newState ? COLOR_CARD_BORDER : withAlpha(ToggleON, 0x99),
-                          newState ? withAlpha(ToggleON, 0x99) : COLOR_CARD_BORDER);
+                    newState ? ModxTheme.LINE : ModxTheme.accentLine(ToggleON),
+                    newState ? ModxTheme.accentLine(ToggleON) : ModxTheme.LINE);
             if (featNum == 710) setTeleportPadVisible(newState);
         }
         if (forceSync) {
@@ -4386,8 +4273,8 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
         if (h.checkBox.isChecked() != newState) {
             h.checkBox.setChecked(newState);
             animateStroke(h.bg,
-                          newState ? COLOR_CARD_BORDER : withAlpha(CheckBoxColor, 0x99),
-                          newState ? withAlpha(CheckBoxColor, 0x99) : COLOR_CARD_BORDER);
+                    newState ? ModxTheme.LINE : ModxTheme.accentLine(CheckBoxColor),
+                    newState ? ModxTheme.accentLine(CheckBoxColor) : ModxTheme.LINE);
         }
         if (forceSync) {
             Preferences.forceSyncBool(h.featName, featNum, newState, true);
@@ -4446,9 +4333,9 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
                     TextView t = (TextView) child;
                     if (j == index) {
                         t.setTextColor(COLOR_ACCENT);
-                        t.setBackground(cardBg(withAlpha(COLOR_ACCENT, 0x1A), 0, 4));
+                        t.setBackground(ModxTheme.roundRect(getContext, ModxTheme.accentSoft(COLOR_ACCENT), 0, 0f, 4f));
                     } else {
-                        t.setTextColor(TEXT_COLOR_2);
+                        t.setTextColor(ModxTheme.FG);
                         t.setBackground(null);
                     }
                 }
@@ -4471,7 +4358,7 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
         }
         if (h.currentColor != color) {
             h.currentColor = color;
-            applyColorButton(h.button, h.featName, color);
+            applyColorButton(h, color);
         }
         if (forceSync) {
             Preferences.forceSyncColor(h.featName, featNum, color, true);
@@ -4519,126 +4406,133 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
             }
         }
     }
-         // ================================================================
-    // Perfect Inline Dropdown (No PopupWindow, No Bugs)
     // ================================================================
-            private void Spinner(LinearLayout linLayout, final int featNum, final String featName, final String list) {
-    final Context ctx = getContext;
-    final List<String> lists = new LinkedList<String>(Arrays.asList(list.split(",")));
+    // Inline Dropdown (ModX Theme)
+    // ================================================================
+    private void Spinner(LinearLayout linLayout, final int featNum, final String featName, final String list) {
+        final Context ctx = getContext;
+        final List<String> lists = new LinkedList<String>(Arrays.asList(list.split(",")));
 
-    // ১. মেইন কন্টেইনার (যা spinner row এবং dropdown list দুটোই ধরে রাখবে)
-    final LinearLayout container = new LinearLayout(ctx);
-    container.setOrientation(LinearLayout.VERTICAL);
-    container.setLayoutParams(rowLp(6, 3, 6, 3));
+        final LinearLayout container = new LinearLayout(ctx);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setLayoutParams(rowLp(6, 3, 6, 3));
 
-    // ২. Spinner Row (যেটি সবসময় দেখা যাবে)
-    final LinearLayout spinnerRow = new LinearLayout(ctx);
-    spinnerRow.setBackground(cardBg(COLOR_CARD, COLOR_CARD_BORDER, 6));
-    spinnerRow.setGravity(Gravity.CENTER_VERTICAL);
-    spinnerRow.setPadding(dp(12), dp(11), dp(12), dp(11));
-    spinnerRow.setOrientation(LinearLayout.HORIZONTAL);
+        final LinearLayout spinnerRow = new LinearLayout(ctx);
+        spinnerRow.setBackground(ModxTheme.withInteractiveRipple(
+                ctx, ModxTheme.cardSurface(ctx, ModxTheme.LINE),
+                ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
+        spinnerRow.setGravity(Gravity.CENTER_VERTICAL);
+        spinnerRow.setMinimumHeight(dp(42));
+        spinnerRow.setPadding(dp(12), dp(10), dp(12), dp(10));
+        spinnerRow.setOrientation(LinearLayout.HORIZONTAL);
 
-    final TextView tvName = new TextView(ctx);
-    tvName.setTextColor(TEXT_COLOR_2);
-    tvName.setTypeface(fontMedium);
-    tvName.setTextSize(12f);
-    tvName.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
+        final TextView tvName = new TextView(ctx);
+        tvName.setTextColor(ModxTheme.FG);
+        tvName.setTypeface(fontMedium);
+        tvName.setTextSize(12.5f);
+        tvName.setIncludeFontPadding(false);
+        tvName.setMaxLines(1);
+        tvName.setEllipsize(TextUtils.TruncateAt.END);
+        tvName.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
 
-    final ImageView arrowIv = new ImageView(ctx);
-    TabIcon chevIcon = new TabIcon(TabIcon.CHEVRON);
-    chevIcon.setColor(COLOR_ACCENT);
-    arrowIv.setImageDrawable(chevIcon);
-    arrowIv.setLayoutParams(new LinearLayout.LayoutParams(dp(18), dp(18)));
+        final ImageView arrowIv = new ImageView(ctx);
+        final SvgIcon chevIcon = ModxIcons.chevronDown(COLOR_ACCENT, dp(18));
+        arrowIv.setImageDrawable(chevIcon);
+        arrowIv.setLayoutParams(new LinearLayout.LayoutParams(dp(18), dp(18)));
 
-    spinnerRow.addView(tvName);
-    spinnerRow.addView(arrowIv);
+        spinnerRow.addView(tvName);
+        spinnerRow.addView(arrowIv);
 
-    final int savedIdx = Preferences.readInitialInt(featName, featNum, 0);
-    final int initIdx = (savedIdx >= 0 && savedIdx < lists.size()) ? savedIdx : 0;
-    tvName.setText(featName + ": " + lists.get(initIdx));
+        final int savedIdx = Preferences.readInitialInt(featName, featNum, 0);
+        final int initIdx = (savedIdx >= 0 && savedIdx < lists.size()) ? savedIdx : 0;
+        tvName.setText(featName + ": " + lists.get(initIdx));
 
-    // ৩. Dropdown List (যা ক্লিক করলে ওপেন হবে)
-    final LinearLayout dropdownList = new LinearLayout(ctx);
-    dropdownList.setOrientation(LinearLayout.VERTICAL);
-    dropdownList.setVisibility(View.GONE);
-    dropdownList.setBackground(cardBg(COLOR_BG_TOP, withAlpha(COLOR_ACCENT, 0xAA), 8));
-    dropdownList.setPadding(dp(4), dp(4), dp(4), dp(4));
-    
-    LinearLayout.LayoutParams listLp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
-    listLp.setMargins(0, dp(4), 0, 0);
-    dropdownList.setLayoutParams(listLp);
-
-    for (int i = 0; i < lists.size(); i++) {
-        final int index = i;
-        TextView tv = new TextView(ctx);
-        tv.setText(lists.get(i));
-        tv.setTextColor(TEXT_COLOR_2);
-        tv.setTypeface(fontMedium);
-        tv.setTextSize(12f);
-        tv.setPadding(dp(12), dp(12), dp(12), dp(12));
-        
-        if (index == initIdx) {
-            tv.setTextColor(COLOR_ACCENT);
-            tv.setBackground(cardBg(withAlpha(COLOR_ACCENT, 0x1A), 0, 4));
-        }
-
-        tv.setOnClickListener(new View.OnClickListener() {
-    @Override
-    public void onClick(View v) {
-        setSpinnerValue(featNum, index);   // ★ highlight + nameView + prefs — সব এক জায়গায়
+        final LinearLayout dropdownList = new LinearLayout(ctx);
+        dropdownList.setOrientation(LinearLayout.VERTICAL);
         dropdownList.setVisibility(View.GONE);
-        arrowIv.animate().rotation(0f).setDuration(200).start();
-    }
-});
-        dropdownList.addView(tv);
-    }
+        dropdownList.setBackground(ModxTheme.roundRect(
+                ctx, ModxTheme.SURFACE, ModxTheme.LINE, 1f, ModxTheme.RADIUS_DP));
+        dropdownList.setPadding(dp(4), dp(4), dp(4), dp(4));
 
-    // ৪. Spinner Row-তে ক্লিক করলে Toggle হবে
-    spinnerRow.setOnClickListener(new View.OnClickListener() {
-        @Override
-        public void onClick(View v) {
-            if (dropdownList.getVisibility() == View.VISIBLE) {
-                dropdownList.setVisibility(View.GONE);
-                arrowIv.animate().rotation(0f).setDuration(200).start();
-            } else {
-                dropdownList.setVisibility(View.VISIBLE);
-                arrowIv.animate().rotation(180f).setDuration(200).start();
+        LinearLayout.LayoutParams listLp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
+        listLp.setMargins(0, dp(4), 0, 0);
+        dropdownList.setLayoutParams(listLp);
+
+        for (int i = 0; i < lists.size(); i++) {
+            final int index = i;
+            TextView tv = new TextView(ctx);
+            tv.setText(lists.get(i));
+            tv.setTextColor(ModxTheme.FG);
+            tv.setTypeface(fontMedium);
+            tv.setTextSize(12f);
+            tv.setIncludeFontPadding(false);
+            tv.setGravity(Gravity.CENTER_VERTICAL);
+            tv.setMinimumHeight(dp(40));
+            tv.setPadding(dp(12), dp(9), dp(12), dp(9));
+
+            if (index == initIdx) {
+                tv.setTextColor(COLOR_ACCENT);
+                tv.setBackground(ModxTheme.roundRect(ctx, ModxTheme.accentSoft(COLOR_ACCENT), 0, 0f, 4f));
             }
+
+            tv.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    ModxTheme.hapticTap(v);
+                    setSpinnerValue(featNum, index);
+                    dropdownList.setVisibility(View.GONE);
+                    arrowIv.animate().rotation(0f).setDuration(200).start();
+                }
+            });
+            dropdownList.addView(tv);
         }
-    });
-    
-    SpinnerHolder spHolder = new SpinnerHolder();
-    spHolder.featNum      = featNum;
-    spHolder.featName     = featName;
-    spHolder.nameView     = tvName;
-    spHolder.dropdownList = dropdownList;
-    spHolder.chevIcon     = chevIcon;
-    spHolder.items        = lists.toArray(new String[0]);
-    spHolder.currentIdx   = initIdx;
-    mSpinners.put(featNum, spHolder);
 
-    container.addView(spinnerRow);
-    container.addView(dropdownList);
-    linLayout.addView(container);
-}
+        spinnerRow.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                ModxTheme.hapticTap(v);
+                if (dropdownList.getVisibility() == View.VISIBLE) {
+                    dropdownList.setVisibility(View.GONE);
+                    arrowIv.animate().rotation(0f).setDuration(200).start();
+                } else {
+                    dropdownList.setVisibility(View.VISIBLE);
+                    arrowIv.animate().rotation(180f).setDuration(200).start();
+                }
+            }
+        });
+        addPressAnim(spinnerRow);
 
-        
-    
-    
-    
+        SpinnerHolder spHolder = new SpinnerHolder();
+        spHolder.featNum      = featNum;
+        spHolder.featName     = featName;
+        spHolder.nameView     = tvName;
+        spHolder.dropdownList = dropdownList;
+        spHolder.chevIcon     = chevIcon;
+        spHolder.items        = lists.toArray(new String[0]);
+        spHolder.currentIdx   = initIdx;
+        mSpinners.put(featNum, spHolder);
+
+        container.addView(spinnerRow);
+        container.addView(dropdownList);
+        linLayout.addView(container);
+    }
+
     private void InputNum(LinearLayout linLayout, final int featNum, final String featName, final int maxValue) {
         final Button button = new Button(getContext);
-        button.setMinHeight(0);
-        button.setMinimumHeight(0);
+        button.setMinHeight(dp(42));
+        button.setMinimumHeight(dp(42));
         int num = Preferences.readInitialInt(featName, featNum, 0);
         button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>" + num + "</font>"));
         button.setAllCaps(false);
         button.setLayoutParams(rowLp(6, 4, 6, 4));
         button.setTypeface(fontMedium);
-        button.setTextSize(12f);
-        button.setPadding(dp(10), dp(11), dp(10), dp(11));
-        button.setBackground(cardBg(COLOR_CARD, withAlpha(COLOR_ACCENT, 0x66), 6));
-        button.setTextColor(TEXT_COLOR_2);
+        button.setTextSize(12.5f);
+        button.setIncludeFontPadding(false);
+        button.setPadding(dp(12), dp(10), dp(12), dp(10));
+        button.setBackground(ModxTheme.withInteractiveRipple(
+                getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
+        button.setTextColor(ModxTheme.FG);
         flatten(button);
         addPressAnim(button);
         final InputHolder inHolder = new InputHolder();
@@ -4650,6 +4544,7 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
         button.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View view) {
+                    ModxTheme.hapticTap(view);
                     final EditText editText = makeEditText();
                     if (maxValue != 0) editText.setHint("Max: " + maxValue);
                     editText.setInputType(InputType.TYPE_CLASS_NUMBER);
@@ -4676,17 +4571,20 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
 
     private void InputLNum(LinearLayout linLayout, final int featNum, final String featName, final long maxValue) {
         final Button button = new Button(getContext);
-        button.setMinHeight(0);
-        button.setMinimumHeight(0);
+        button.setMinHeight(dp(42));
+        button.setMinimumHeight(dp(42));
         long num = Preferences.readInitialLong(featName, featNum, 0L);
         button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>" + num + "</font>"));
         button.setAllCaps(false);
         button.setLayoutParams(rowLp(6, 4, 6, 4));
         button.setTypeface(fontMedium);
-        button.setTextSize(12f);
-        button.setPadding(dp(10), dp(11), dp(10), dp(11));
-        button.setBackground(cardBg(COLOR_CARD, withAlpha(COLOR_ACCENT, 0x66), 6));
-        button.setTextColor(TEXT_COLOR_2);
+        button.setTextSize(12.5f);
+        button.setIncludeFontPadding(false);
+        button.setPadding(dp(12), dp(10), dp(12), dp(10));
+        button.setBackground(ModxTheme.withInteractiveRipple(
+                getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
+        button.setTextColor(ModxTheme.FG);
         flatten(button);
         addPressAnim(button);
         final InputHolder ilHolder = new InputHolder();
@@ -4698,6 +4596,7 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
         button.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View view) {
+                    ModxTheme.hapticTap(view);
                     final EditText editText = makeEditText();
                     if (maxValue != 0) editText.setHint("Max: " + maxValue);
                     editText.setInputType(InputType.TYPE_CLASS_NUMBER);
@@ -4724,17 +4623,20 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
 
     private void InputText(LinearLayout linLayout, final int featNum, final String featName) {
         final Button button = new Button(getContext);
-        button.setMinHeight(0);
-        button.setMinimumHeight(0);
+        button.setMinHeight(dp(42));
+        button.setMinimumHeight(dp(42));
         String string = Preferences.readInitialString(featName, featNum, "");
         button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>" + string + "</font>"));
         button.setAllCaps(false);
         button.setLayoutParams(rowLp(6, 4, 6, 4));
         button.setTypeface(fontMedium);
-        button.setTextSize(12f);
-        button.setPadding(dp(10), dp(11), dp(10), dp(11));
-        button.setBackground(cardBg(COLOR_CARD, withAlpha(COLOR_ACCENT, 0x66), 6));
-        button.setTextColor(TEXT_COLOR_2);
+        button.setTextSize(12.5f);
+        button.setIncludeFontPadding(false);
+        button.setPadding(dp(12), dp(10), dp(12), dp(10));
+        button.setBackground(ModxTheme.withInteractiveRipple(
+                getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
+        button.setTextColor(ModxTheme.FG);
         flatten(button);
         addPressAnim(button);
         final InputHolder itHolder = new InputHolder();
@@ -4746,6 +4648,7 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
         button.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View view) {
+                    ModxTheme.hapticTap(view);
                     final EditText editText = makeEditText();
                     showInputDialog("Input text", editText, new Runnable() {
                             @Override
@@ -4763,25 +4666,30 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
 
     private void CheckBox(LinearLayout linLayout, final int featNum, final String featName, boolean switchedOn) {
         final CheckBox checkBox = new CheckBox(getContext);
-        final GradientDrawable cbBg = cardBg(COLOR_CARD, COLOR_CARD_BORDER, 6);
+        boolean initial = Preferences.readInitialBool(featName, featNum, switchedOn);
+        final GradientDrawable cbBg = ModxTheme.roundRect(
+                getContext, ModxTheme.CARD,
+                initial ? ModxTheme.accentLine(CheckBoxColor) : ModxTheme.LINE,
+                1f, ModxTheme.RADIUS_DP);
         checkBox.setLayoutParams(rowLp(6, 3, 6, 3));
-        checkBox.setBackground(cbBg);
+        checkBox.setBackground(ModxTheme.withInteractiveRipple(
+                getContext, cbBg, ModxTheme.withAlpha(CheckBoxColor, 0x1A), ModxTheme.RADIUS_DP));
         checkBox.setText(featName);
-        checkBox.setTextColor(TEXT_COLOR_2);
+        checkBox.setTextColor(ModxTheme.FG);
         checkBox.setTypeface(fontMedium);
-        checkBox.setTextSize(12f);
+        checkBox.setTextSize(12.5f);
+        checkBox.setMinimumHeight(dp(42));
         checkBox.setPadding(dp(10), dp(9), dp(10), dp(9));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) checkBox.setButtonTintList(ColorStateList.valueOf(CheckBoxColor));
-        boolean initial = Preferences.readInitialBool(featName, featNum, switchedOn);
         checkBox.setChecked(initial);
 
-        if (initial) cbBg.setStroke(dp(1), withAlpha(CheckBoxColor, 0x99));
         checkBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
                 @Override
                 public void onCheckedChanged(CompoundButton bv, boolean isChecked) {
+                    ModxTheme.hapticTap(bv);
                     animateStroke(cbBg,
-                                  isChecked ? COLOR_CARD_BORDER : withAlpha(CheckBoxColor, 0x99),
-                                  isChecked ? withAlpha(CheckBoxColor, 0x99) : COLOR_CARD_BORDER);
+                            isChecked ? ModxTheme.LINE : ModxTheme.accentLine(CheckBoxColor),
+                            isChecked ? ModxTheme.accentLine(CheckBoxColor) : ModxTheme.LINE);
                     if (!mProgrammaticModeUpdate) {
                         Preferences.changeFeatureBool(featName, featNum, isChecked);
                     }
@@ -4801,13 +4709,13 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
         final List<String> lists = new LinkedList<String>(Arrays.asList(list.split(",")));
         final TextView textView = new TextView(getContext);
         textView.setText(featName + ":");
-        textView.setTextColor(TEXT_COLOR_2);
+        textView.setTextColor(ModxTheme.FG);
         textView.setTypeface(fontBold);
-        textView.setTextSize(12f);
+        textView.setTextSize(12.5f);
         textView.setPadding(0, dp(2), 0, dp(4));
         final RadioGroup radioGroup = new RadioGroup(getContext);
         radioGroup.setLayoutParams(rowLp(6, 3, 6, 3));
-        radioGroup.setBackground(cardBg(COLOR_CARD, COLOR_CARD_BORDER, 6));
+        radioGroup.setBackground(ModxTheme.cardSurface(getContext, ModxTheme.LINE));
         radioGroup.setPadding(dp(12), dp(8), dp(12), dp(8));
         radioGroup.setOrientation(LinearLayout.VERTICAL);
         radioGroup.addView(textView);
@@ -4821,15 +4729,17 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
             final String finalfeatName = featName, radioName = lists.get(i);
             View.OnClickListener rl = new View.OnClickListener() {
                 public void onClick(View v) {
+                    ModxTheme.hapticTap(v);
                     rgHolder.selectedName = radioName;
                     textView.setText(Html.fromHtml(finalfeatName + ": <font color='" + NumberTxtColor + "'>" + radioName));
                     Preferences.changeFeatureInt(finalfeatName, featNum, radioGroup.indexOfChild(Radioo));
                 }
             };
             Radioo.setText(lists.get(i));
-            Radioo.setTextColor(Color.parseColor("#C6C8D0"));
+            Radioo.setTextColor(ModxTheme.MUTED);
             Radioo.setTypeface(fontRegular);
             Radioo.setTextSize(12f);
+            Radioo.setMinimumHeight(dp(40));
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) Radioo.setButtonTintList(ColorStateList.valueOf(RadioColor));
             Radioo.setOnClickListener(rl);
             radioGroup.addView(Radioo);
@@ -4907,28 +4817,26 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
         collapseSub.setVisibility(View.GONE);
         mCollapse = collapseSub;
 
-        // header row: title + rotating chevron
         LinearLayout headRow = new LinearLayout(getContext);
         headRow.setOrientation(LinearLayout.HORIZONTAL);
         headRow.setGravity(Gravity.CENTER_VERTICAL);
-        GradientDrawable colBg = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-                                                      new int[]{CollapseColor, withAlpha(COLOR_ACCENT_2, 0x30)});
-        colBg.setCornerRadius(dp(6));
-        colBg.setStroke(dp(1), withAlpha(COLOR_ACCENT, 0x77));
-        headRow.setBackground(colBg);
+        headRow.setMinimumHeight(dp(42));
+        headRow.setBackground(ModxTheme.withInteractiveRipple(
+                getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
 
         final TextView textView = new TextView(getContext);
         textView.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
         textView.setText(text);
         textView.setGravity(Gravity.CENTER_VERTICAL);
-        textView.setTextColor(COLOR_ACCENT);
+        textView.setTextColor(ModxTheme.FG);
         textView.setTypeface(fontBold);
-        textView.setTextSize(12f);
-        textView.setPadding(dp(12), dp(12), dp(6), dp(12));
+        textView.setTextSize(12.5f);
+        textView.setIncludeFontPadding(false);
+        textView.setPadding(dp(12), dp(11), dp(6), dp(11));
 
         final ImageView chevron = new ImageView(getContext);
-        TabIcon chevIcon = new TabIcon(TabIcon.CHEVRON);
-        chevIcon.setColor(COLOR_ACCENT);
+        SvgIcon chevIcon = ModxIcons.chevronDown(COLOR_ACCENT, dp(18));
         chevron.setImageDrawable(chevIcon);
         LinearLayout.LayoutParams chLp = new LinearLayout.LayoutParams(dp(18), dp(18));
         chLp.setMargins(0, 0, dp(10), 0);
@@ -4943,6 +4851,7 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
                 boolean isChecked = expanded;
                 @Override
                 public void onClick(View v) {
+                    ModxTheme.hapticTap(v);
                     isChecked = !isChecked;
                     chevron.animate().rotation(isChecked ? 180f : 0f).setDuration(230).setInterpolator(new DecelerateInterpolator()).start();
                     animateSection(collapseSub, isChecked);
@@ -4964,46 +4873,162 @@ private void applyMenuColorButtonStyle(Button button, String label, int color) {
     }
 
     private void Category(LinearLayout linLayout, String text) {
+        LinearLayout wrap = new LinearLayout(getContext);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setLayoutParams(rowLp(6, 4, 6, 2));
+
         TextView textView = new TextView(getContext);
-        GradientDrawable catBg = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-                                                      new int[]{withAlpha(COLOR_ACCENT, 0x00), withAlpha(COLOR_ACCENT, 0x2A), withAlpha(COLOR_ACCENT_2, 0x00)});
-        textView.setBackground(catBg);
-        textView.setText(Html.fromHtml(text));
-        textView.setGravity(Gravity.CENTER);
-        textView.setTextColor(COLOR_ACCENT);
+        String plain = Html.fromHtml(text).toString().trim().toUpperCase(java.util.Locale.US);
+        textView.setText(plain);
+        textView.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        textView.setTextColor(ModxTheme.SUBTLE);
         textView.setTypeface(fontBold);
-        textView.setTextSize(12f);
-        textView.setPadding(0, dp(7), 0, dp(7));
+        textView.setTextSize(10.5f);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            textView.setLetterSpacing(0.06f);
+        }
+        textView.setIncludeFontPadding(false);
+        textView.setPadding(dp(2), dp(8), dp(2), dp(4));
+
+        View divider = new View(getContext);
+        divider.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, Math.max(1, dp(1))));
+        divider.setBackgroundColor(ModxTheme.HAIRLINE);
+
         mCategoryViews.add(textView);
+        mCategoryLines.add(divider);
+        wrap.addView(textView);
+        wrap.addView(divider);
+        linLayout.addView(wrap);
+    }
+
+    private void TextView(LinearLayout linLayout, String text) {
+        TextView(linLayout, -1, text, false);
+    }
+
+    private void TextView(LinearLayout linLayout, int featNum, String text, boolean small) {
+        if (featNum == 992) {
+            LinearLayout accordion = new LinearLayout(getContext);
+            accordion.setOrientation(LinearLayout.VERTICAL);
+            accordion.setLayoutParams(rowLp(6, 6, 6, 4));
+            accordion.setBackground(ModxTheme.cardSurface(getContext, ModxTheme.LINE));
+
+            LinearLayout headRow = new LinearLayout(getContext);
+            headRow.setOrientation(LinearLayout.HORIZONTAL);
+            headRow.setGravity(Gravity.CENTER_VERTICAL);
+            headRow.setMinimumHeight(dp(40));
+            headRow.setPadding(dp(11), dp(8), dp(10), dp(8));
+
+            ImageView infoIv = new ImageView(getContext);
+            infoIv.setImageDrawable(ModxIcons.info(ModxTheme.INFO, dp(15)));
+            LinearLayout.LayoutParams iLp = new LinearLayout.LayoutParams(dp(15), dp(15));
+            iLp.setMargins(0, 0, dp(8), 0);
+            infoIv.setLayoutParams(iLp);
+
+            TextView headTitle = new TextView(getContext);
+            headTitle.setText("What do the modes do?");
+            headTitle.setTextColor(ModxTheme.MUTED);
+            headTitle.setTypeface(fontMedium);
+            headTitle.setTextSize(11.5f);
+            headTitle.setIncludeFontPadding(false);
+            headTitle.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
+
+            final ImageView chevIv = new ImageView(getContext);
+            chevIv.setImageDrawable(ModxIcons.chevronDown(ModxTheme.SUBTLE, dp(16)));
+            chevIv.setLayoutParams(new LinearLayout.LayoutParams(dp(16), dp(16)));
+
+            headRow.addView(infoIv);
+            headRow.addView(headTitle);
+            headRow.addView(chevIv);
+
+            final LinearLayout bodyWrap = new LinearLayout(getContext);
+            bodyWrap.setOrientation(LinearLayout.VERTICAL);
+            bodyWrap.setVisibility(View.GONE);
+            bodyWrap.setPadding(dp(11), 0, dp(11), dp(10));
+
+            String cleaned = text == null ? "" : text.replaceFirst("^(<br\\s*/?>\\s*)+", "");
+            cleaned = cleaned.replace("#3DDB87", ModxTheme.hex6(COLOR_ACCENT));
+            TextView bodyTv = new TextView(getContext);
+            bodyTv.setText(Html.fromHtml(cleaned));
+            bodyTv.setTextColor(ModxTheme.MUTED);
+            bodyTv.setTypeface(fontRegular);
+            bodyTv.setTextSize(10.5f);
+            bodyTv.setLineSpacing(dpf(2f), 1.0f);
+            bodyWrap.addView(bodyTv);
+
+            addPressAnim(headRow);
+            headRow.setOnClickListener(new View.OnClickListener() {
+                boolean open = false;
+                @Override
+                public void onClick(View v) {
+                    ModxTheme.hapticTap(v);
+                    open = !open;
+                    chevIv.animate().rotation(open ? 180f : 0f).setDuration(200).start();
+                    animateSection(bodyWrap, open);
+                }
+            });
+
+            accordion.addView(headRow);
+            accordion.addView(bodyWrap);
+            linLayout.addView(accordion);
+            return;
+        }
+
+        if (featNum == 993 || featNum == 996) {
+            final boolean isInfo = (featNum == 993);
+            int tone = isInfo ? ModxTheme.INFO : ModxTheme.WARNING;
+
+            LinearLayout strip = new LinearLayout(getContext);
+            strip.setOrientation(LinearLayout.HORIZONTAL);
+            strip.setGravity(Gravity.CENTER_VERTICAL);
+            strip.setLayoutParams(rowLp(6, 4, 6, 4));
+            strip.setPadding(dp(10), dp(8), dp(10), dp(8));
+            strip.setBackground(ModxTheme.withInteractiveRipple(
+                    getContext,
+                    ModxTheme.pillBadgeBg(getContext, ModxTheme.badgeBg(tone), ModxTheme.badgeBorder(tone)),
+                    ModxTheme.withAlpha(tone, 0x22), ModxTheme.RADIUS_DP));
+
+            ImageView iconIv = new ImageView(getContext);
+            iconIv.setImageDrawable(isInfo ? ModxIcons.info(tone, dp(15)) : ModxIcons.alertCircle(tone, dp(15)));
+            LinearLayout.LayoutParams iLp = new LinearLayout.LayoutParams(dp(15), dp(15));
+            iLp.setMargins(0, 0, dp(8), 0);
+            iconIv.setLayoutParams(iLp);
+
+            String cleaned = text == null ? "" : text.replace("⚠ ", "").replace("⚠", "");
+            cleaned = cleaned.replace("#3DDB87", ModxTheme.hex6(COLOR_ACCENT));
+            cleaned = cleaned.replace("#8D8F99", ModxTheme.hex6(ModxTheme.MUTED));
+            TextView tv = new TextView(getContext);
+            tv.setText(Html.fromHtml(cleaned));
+            tv.setTextColor(ModxTheme.FG);
+            tv.setTypeface(fontRegular);
+            tv.setTextSize(10.5f);
+            tv.setLineSpacing(dpf(1.5f), 1.0f);
+            tv.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
+
+            strip.addView(iconIv);
+            strip.addView(tv);
+
+            if (isInfo) {
+                addPressAnim(strip);
+                strip.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        ModxTheme.hapticTap(v);
+                        selectTabByName("Camera");
+                    }
+                });
+            }
+            linLayout.addView(strip);
+            return;
+        }
+
+        TextView textView = new TextView(getContext);
+        textView.setText(Html.fromHtml(text));
+        textView.setTextColor(ModxTheme.MUTED);
+        textView.setTypeface(fontRegular);
+        textView.setTextSize(small ? 10.5f : 12f);
+        textView.setPadding(dp(10), dp(5), dp(10), dp(5));
         linLayout.addView(textView);
     }
-
-    
-    
-    private void TextView(LinearLayout linLayout, String text) {
-    // এখানে featNum হিসেবে -1 পাস করা হলো, কারণ এটি সাধারণ টেক্সট
-    TextView(linLayout, -1, text, false);
-}
-
-private void TextView(LinearLayout linLayout, int featNum, String text, boolean small) {
-    TextView textView = new TextView(getContext);
-    textView.setText(Html.fromHtml(text));
-    textView.setTextColor(Color.parseColor("#C6C8D0"));
-    textView.setTypeface(fontRegular);
-    textView.setTextSize(small ? 10f : 12f);
-    textView.setPadding(dp(12), dp(5), dp(12), dp(5));
-
-    // ★ Camera Tab Auto Open on clicking "Click here"
-    if (featNum == 993) {
-        textView.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                selectTabByName("Camera");
-            }
-        });
-    }
-    linLayout.addView(textView);
-}
 
     private void WebTextView(LinearLayout linLayout, String text) {
         WebView wView = new WebView(getContext);
@@ -5026,296 +5051,291 @@ private void TextView(LinearLayout linLayout, int featNum, String text, boolean 
         wView.getSettings().setCacheMode(WebSettings.LOAD_NO_CACHE);
         linLayout.addView(wView);
     }
+
     static String actionName(int a) {
-    switch (a) {
-        case MotionEvent.ACTION_DOWN:    return "DOWN";
-        case MotionEvent.ACTION_UP:      return "UP";
-        case MotionEvent.ACTION_MOVE:    return "MOVE";
-        case MotionEvent.ACTION_CANCEL:  return "CANCEL";
-        case MotionEvent.ACTION_OUTSIDE: return "OUTSIDE";
-        default: return "OTHER_" + a;
-    }
-}
-private static int darken(int color, float factor) {
-    int r = (int)(Color.red(color) * factor);
-    int g = (int)(Color.green(color) * factor);
-    int b = (int)(Color.blue(color) * factor);
-    return Color.argb(Color.alpha(color),
-        Math.max(0, Math.min(255, r)),
-        Math.max(0, Math.min(255, g)),
-        Math.max(0, Math.min(255, b)));
-}
-
-private static int lighten(int color, float factor) {
-    int r = Color.red(color) + (int)((255 - Color.red(color)) * factor);
-    int g = Color.green(color) + (int)((255 - Color.green(color)) * factor);
-    int b = Color.blue(color) + (int)((255 - Color.blue(color)) * factor);
-    return Color.argb(Color.alpha(color),
-        Math.max(0, Math.min(255, r)),
-        Math.max(0, Math.min(255, g)),
-        Math.max(0, Math.min(255, b)));
-}
-
-/**
- * Live preview — palette থেকে drag করার সময় সাথে সাথে in-place apply,
- * কিন্তু rebuild বা disk write হয় না।
- */
-private void applyMenuColorLive(int baseColor) {
-    int safeColor = ensureReadableAccent(baseColor);
-    COLOR_ACCENT   = safeColor;
-    COLOR_ACCENT_2 = darken(safeColor, 0.65f);
-    COLOR_ACCENT_3 = lighten(safeColor, 0.35f);
-    TEXT_COLOR = safeColor;
-    BTN_COLOR  = safeColor;
-    BORDER_COLOR = safeColor;
-    SeekBarColor = safeColor;
-    SeekBarProgressColor = safeColor;
-    CheckBoxColor = safeColor;
-    RadioColor    = safeColor;
-    NumberTxtColor = String.format("#%06X", (0xFFFFFF & safeColor));
-
-    // Header & chrome live update
-    updateHeaderColors();
-
-    // Resize handle grip
-    if (resizeHandle != null) {
-        resizeHandle.setBackground(makeGripDrawable(withAlpha(COLOR_ACCENT, 0xE0), dpf(1.7f)));
-    }
-
-    // Sidebar tab colors update
-    for (TabHolder h : tabHolders) styleTab(h, isTabSelected(h));
-
-    // Update all content controls in-place (zero rebuild, zero scroll jump, zero native call)
-    updateThemedControlsInPlace();
-}
-
-private void updateThemedControlsInPlace() {
-    if (mMenuColorBtn != null) {
-        applyMenuColorButtonStyle(mMenuColorBtn, "Menu Color", COLOR_ACCENT);
-    }
-    for (ToggleHolder th : mToggles.values()) {
-        if (th.toggle != null) {
-            th.toggle.setColors(COLOR_ACCENT, COLOR_ACCENT_3, COLOR_TRACK);
+        switch (a) {
+            case MotionEvent.ACTION_DOWN:    return "DOWN";
+            case MotionEvent.ACTION_UP:      return "UP";
+            case MotionEvent.ACTION_MOVE:    return "MOVE";
+            case MotionEvent.ACTION_CANCEL:  return "CANCEL";
+            case MotionEvent.ACTION_OUTSIDE: return "OUTSIDE";
+            default: return "OTHER_" + a;
         }
     }
-    for (SeekBarHolder sb : mSeekBars.values()) {
-        if (sb.trackDrawable != null) {
-            sb.trackDrawable.setColors(COLOR_ACCENT, COLOR_SUCCESS);
-        }
-        if (sb.thumbGlow != null) {
-            sb.thumbGlow.setColor(withAlpha(COLOR_ACCENT, 0x44));
-        }
-        if (sb.thumbCore != null) {
-            sb.thumbCore.setStroke(dp(3), COLOR_ACCENT);
-        }
-        if (sb.seekBar != null) {
-            sb.seekBar.invalidate();
-        }
-        if (sb.chip != null) {
-            sb.chip.setTextColor(COLOR_ACCENT);
-            sb.chip.setBackground(cardBg(withAlpha(COLOR_ACCENT, 0x18), withAlpha(COLOR_ACCENT, 0x66), 8));
-        }
+
+    private static int darken(int color, float factor) {
+        int r = (int)(Color.red(color) * factor);
+        int g = (int)(Color.green(color) * factor);
+        int b = (int)(Color.blue(color) * factor);
+        return Color.argb(Color.alpha(color),
+            Math.max(0, Math.min(255, r)),
+            Math.max(0, Math.min(255, g)),
+            Math.max(0, Math.min(255, b)));
     }
-    for (SpinnerHolder sp : mSpinners.values()) {
-        if (sp.chevIcon != null) {
-            sp.chevIcon.setColor(COLOR_ACCENT);
+
+    private static int lighten(int color, float factor) {
+        int r = Color.red(color) + (int)((255 - Color.red(color)) * factor);
+        int g = Color.green(color) + (int)((255 - Color.green(color)) * factor);
+        int b = Color.blue(color) + (int)((255 - Color.blue(color)) * factor);
+        return Color.argb(Color.alpha(color),
+            Math.max(0, Math.min(255, r)),
+            Math.max(0, Math.min(255, g)),
+            Math.max(0, Math.min(255, b)));
+    }
+
+    /**
+     * Live preview — applies accent tokens in-place without rebuilding views or writing to disk.
+     */
+    private void applyMenuColorLive(int baseColor) {
+        int safeColor = ensureReadableAccent(baseColor);
+        COLOR_ACCENT   = safeColor;
+        COLOR_ACCENT_2 = ModxTheme.accentPress(safeColor);
+        COLOR_ACCENT_3 = ModxTheme.accentHover(safeColor);
+        TEXT_COLOR = safeColor;
+        BTN_COLOR  = safeColor;
+        BTN_GRAD_1 = safeColor;
+        BTN_GRAD_2 = COLOR_ACCENT_2;
+        SeekBarColor = safeColor;
+        SeekBarProgressColor = safeColor;
+        CheckBoxColor = safeColor;
+        RadioColor    = safeColor;
+        ToggleON      = safeColor;
+        BtnON         = safeColor;
+        NumberTxtColor = ModxTheme.hex6(safeColor);
+
+        updateHeaderColors();
+
+        if (resizeHandle != null) {
+            resizeHandle.setBackground(makeGripDrawable(ModxTheme.SUBTLE, dpf(1.6f)));
         }
-        if (sp.dropdownList != null) {
-            sp.dropdownList.setBackground(cardBg(COLOR_BG_TOP, withAlpha(COLOR_ACCENT, 0xAA), 8));
-            for (int j = 0; j < sp.dropdownList.getChildCount(); j++) {
-                View child = sp.dropdownList.getChildAt(j);
-                if (child instanceof TextView) {
-                    TextView tv = (TextView) child;
-                    if (j == sp.currentIdx) {
-                        tv.setTextColor(COLOR_ACCENT);
-                        tv.setBackground(cardBg(withAlpha(COLOR_ACCENT, 0x1A), 0, 4));
-                    } else {
-                        tv.setTextColor(TEXT_COLOR_2);
-                        tv.setBackground(null);
+
+        for (TabHolder h : tabHolders) styleTab(h, isTabSelected(h));
+
+        updateThemedControlsInPlace();
+    }
+
+    private void updateThemedControlsInPlace() {
+        if (mMenuColorDot != null || mMenuColorHex != null) {
+            applyMenuColorRowStyle(mMenuColorDot, mMenuColorHex, COLOR_ACCENT);
+        }
+        for (ToggleHolder th : mToggles.values()) {
+            if (th.toggle != null) {
+                th.toggle.setColors(COLOR_ACCENT, COLOR_ACCENT_3, COLOR_TRACK);
+            }
+            if (th.rowBg != null && th.state != null && th.state[0]) {
+                th.rowBg.setStroke(Math.max(1, dp(1)), ModxTheme.accentLine(ToggleON));
+            }
+        }
+        for (ModeButtonHolder mh : mModeButtons.values()) {
+            if (mh != null && mh.state != null) {
+                applyModeCardStyle(mh, mh.state[0]);
+            }
+        }
+        for (OtherButtonOnOffHolder oh : mOtherButtonOnOffs.values()) {
+            if (oh != null && oh.button != null && oh.state != null) {
+                applyOnOffStyle(oh.button, oh.name, oh.state[0]);
+            }
+        }
+        for (SeekBarHolder sb : mSeekBars.values()) {
+            if (sb.trackDrawable != null) {
+                sb.trackDrawable.setColors(COLOR_ACCENT, COLOR_ACCENT_3);
+            }
+            if (sb.thumbCore != null) {
+                sb.thumbCore.setStroke(Math.max(2, dp(2)), COLOR_ACCENT);
+            }
+            if (sb.seekBar != null) {
+                sb.seekBar.invalidate();
+            }
+            if (sb.chip != null) {
+                sb.chip.setTextColor(COLOR_ACCENT);
+                sb.chip.setBackground(ModxTheme.pillBadgeBg(
+                        getContext, ModxTheme.accentSoft(COLOR_ACCENT), ModxTheme.accentLine(COLOR_ACCENT)));
+            }
+        }
+        for (SpinnerHolder sp : mSpinners.values()) {
+            if (sp.chevIcon != null) {
+                sp.chevIcon.setColor(COLOR_ACCENT);
+            }
+            if (sp.dropdownList != null) {
+                sp.dropdownList.setBackground(ModxTheme.roundRect(
+                        getContext, ModxTheme.SURFACE, ModxTheme.LINE, 1f, ModxTheme.RADIUS_DP));
+                for (int j = 0; j < sp.dropdownList.getChildCount(); j++) {
+                    View child = sp.dropdownList.getChildAt(j);
+                    if (child instanceof TextView) {
+                        TextView tv = (TextView) child;
+                        if (j == sp.currentIdx) {
+                            tv.setTextColor(COLOR_ACCENT);
+                            tv.setBackground(ModxTheme.roundRect(getContext, ModxTheme.accentSoft(COLOR_ACCENT), 0, 0f, 4f));
+                        } else {
+                            tv.setTextColor(ModxTheme.FG);
+                            tv.setBackground(null);
+                        }
                     }
                 }
             }
         }
-    }
-    for (CheckBoxHolder cb : mCheckBoxes.values()) {
-        if (cb.checkBox != null) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                cb.checkBox.setButtonTintList(ColorStateList.valueOf(CheckBoxColor));
-            }
-            if (cb.bg != null && cb.checkBox.isChecked()) {
-                cb.bg.setStroke(dp(1), withAlpha(CheckBoxColor, 0x99));
-            }
-        }
-    }
-    for (RadioGroupHolder rg : mRadioGroups.values()) {
-        if (rg.radioGroup != null) {
-            for (int i = 0; i < rg.radioGroup.getChildCount(); i++) {
-                View c = rg.radioGroup.getChildAt(i);
-                if (c instanceof RadioButton && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    ((RadioButton) c).setButtonTintList(ColorStateList.valueOf(RadioColor));
+        for (CheckBoxHolder cb : mCheckBoxes.values()) {
+            if (cb.checkBox != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    cb.checkBox.setButtonTintList(ColorStateList.valueOf(CheckBoxColor));
+                }
+                if (cb.bg != null && cb.checkBox.isChecked()) {
+                    cb.bg.setStroke(Math.max(1, dp(1)), ModxTheme.accentLine(CheckBoxColor));
                 }
             }
         }
-        if (rg.titleView != null && rg.selectedName != null) {
-            rg.titleView.setText(Html.fromHtml(rg.featName + ": <font color='" + NumberTxtColor + "'>" + rg.selectedName));
+        for (RadioGroupHolder rg : mRadioGroups.values()) {
+            if (rg.radioGroup != null) {
+                for (int i = 0; i < rg.radioGroup.getChildCount(); i++) {
+                    View c = rg.radioGroup.getChildAt(i);
+                    if (c instanceof RadioButton && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        ((RadioButton) c).setButtonTintList(ColorStateList.valueOf(RadioColor));
+                    }
+                }
+            }
+            if (rg.titleView != null && rg.selectedName != null) {
+                rg.titleView.setText(Html.fromHtml(rg.featName + ": <font color='" + NumberTxtColor + "'>" + rg.selectedName));
+            }
+        }
+        updateInputHoldersTheme(mInputNums);
+        updateInputHoldersTheme(mInputLNums);
+        updateInputHoldersTheme(mInputTexts);
+
+        for (TextView catTv : mCategoryViews) {
+            if (catTv != null) {
+                catTv.setTextColor(ModxTheme.SUBTLE);
+            }
+        }
+        for (View div : mCategoryLines) {
+            if (div != null) {
+                div.setBackgroundColor(ModxTheme.HAIRLINE);
+            }
+        }
+        for (CollapseHolder ch : mCollapseHolders) {
+            if (ch.headRow != null) {
+                ch.headRow.setBackground(ModxTheme.withInteractiveRipple(
+                        getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                        ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
+            }
+            if (ch.titleView != null) {
+                ch.titleView.setTextColor(ModxTheme.FG);
+            }
+            if (ch.chevIcon != null) {
+                ch.chevIcon.setColor(COLOR_ACCENT);
+            }
+        }
+        for (Button lb : mLinkButtons) {
+            if (lb != null) {
+                lb.setTextColor(COLOR_ACCENT);
+                lb.setBackground(ModxTheme.withInteractiveRipple(
+                        getContext,
+                        ModxTheme.pillBadgeBg(getContext, ModxTheme.accentSoft(COLOR_ACCENT), ModxTheme.accentLine(COLOR_ACCENT)),
+                        ModxTheme.withAlpha(COLOR_ACCENT, 0x24),
+                        ModxTheme.RADIUS_DP));
+                lb.setCompoundDrawablesWithIntrinsicBounds(
+                        null, null, ModxIcons.externalLink(COLOR_ACCENT, dp(15)), null);
+            }
+        }
+        if (mMenuTeleportPad != null) {
+            mMenuTeleportPad.setAccentColor(COLOR_ACCENT);
         }
     }
-    updateInputHoldersTheme(mInputNums);
-    updateInputHoldersTheme(mInputLNums);
-    updateInputHoldersTheme(mInputTexts);
 
-    for (TextView catTv : mCategoryViews) {
-        if (catTv != null) {
-            GradientDrawable catBg = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-                    new int[]{withAlpha(COLOR_ACCENT, 0x00), withAlpha(COLOR_ACCENT, 0x2A), withAlpha(COLOR_ACCENT_2, 0x00)});
-            catTv.setBackground(catBg);
-            catTv.setTextColor(COLOR_ACCENT);
+    private void updateInputHoldersTheme(HashMap<Integer, InputHolder> map) {
+        for (InputHolder ih : map.values()) {
+            if (ih.button != null) {
+                ih.button.setText(Html.fromHtml(ih.featName + ": <font color='" + NumberTxtColor + "'>"
+                        + TextUtils.htmlEncode(ih.currentValueText != null ? ih.currentValueText : "") + "</font>"));
+            }
         }
     }
-    for (CollapseHolder ch : mCollapseHolders) {
-        if (ch.headRow != null) {
-            GradientDrawable colBg = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-                    new int[]{CollapseColor, withAlpha(COLOR_ACCENT_2, 0x30)});
-            colBg.setCornerRadius(dp(6));
-            colBg.setStroke(dp(1), withAlpha(COLOR_ACCENT, 0x77));
-            ch.headRow.setBackground(colBg);
+
+    private void resetMenuColorToDefaultInPlace() {
+        int defAccent = ensureReadableAccent(FeatureStateStore.DEFAULT_MENU_COLOR);
+        mCurrentHueF = getHueFromColor(defAccent);
+        applyMenuColorLive(defAccent);
+        Preferences.setMenuAccentColor(defAccent);
+        showMenuToast(Preferences.isSaveEnabled() ? "Menu color reset & saved" : "Menu color reset");
+    }
+
+    /**
+     * Commit — Apply button commits theme in-place and persists if Save is enabled.
+     */
+    private void applyMenuColor(final int baseColor) {
+        int safeAccent = ensureReadableAccent(baseColor);
+        mCurrentHueF = getHueFromColor(safeAccent);
+        applyMenuColorLive(safeAccent);
+        Preferences.recordMenuColorUsed(safeAccent);
+        Preferences.setMenuAccentColor(safeAccent);
+        showMenuToast(Preferences.isSaveEnabled() ? "Menu color saved" : "Menu color applied");
+    }
+
+    private boolean isTabSelected(TabHolder h) {
+        for (TabHolder t : tabHolders) {
+            LinearLayout catView = categoryViewsMap.get(t.name);
+            if (catView != null && catView.getParent() == contentLayout) {
+                return t == h;
+            }
         }
-        if (ch.titleView != null) {
-            ch.titleView.setTextColor(COLOR_ACCENT);
-        }
-        if (ch.chevIcon != null) {
-            ch.chevIcon.setColor(COLOR_ACCENT);
-        }
+        return false;
     }
-    for (Button lb : mLinkButtons) {
-        if (lb != null) {
-            lb.setTextColor(COLOR_ACCENT);
-            lb.setBackground(cardBg(withAlpha(COLOR_ACCENT, 0x14), withAlpha(COLOR_ACCENT, 0x88), 6));
+
+    /**
+     * Header (ModX Lab / PRO / gear / footer buttons) live token update.
+     */
+    private void updateHeaderColors() {
+        if (mTitleView != null) {
+            mTitleView.setTextColor(ModxTheme.FG);
         }
-    }
-    if (mMenuTeleportPad != null) {
-        mMenuTeleportPad.setAccentColor(COLOR_ACCENT);
-    }
-}
-
-private void updateInputHoldersTheme(HashMap<Integer, InputHolder> map) {
-    for (InputHolder ih : map.values()) {
-        if (ih.button != null) {
-            ih.button.setBackground(cardBg(COLOR_CARD, withAlpha(COLOR_ACCENT, 0x66), 6));
-            ih.button.setText(Html.fromHtml(ih.featName + ": <font color='" + NumberTxtColor + "'>"
-                    + TextUtils.htmlEncode(ih.currentValueText != null ? ih.currentValueText : "") + "</font>"));
+        if (mTitleDot != null) {
+            GradientDrawable dotBg = new GradientDrawable();
+            dotBg.setShape(GradientDrawable.OVAL);
+            dotBg.setColor(COLOR_ACCENT);
+            mTitleDot.setBackground(dotBg);
         }
-    }
-}
+        if (mSubTitleView != null) {
+            mSubTitleView.setTextColor(ModxTheme.MUTED);
+        }
 
-private void resetMenuColorToDefaultInPlace() {
-    int defAccent = ensureReadableAccent(FeatureStateStore.DEFAULT_MENU_COLOR);
-    mCurrentHueF = getHueFromColor(defAccent);
-    applyMenuColorLive(defAccent);
-    Preferences.setMenuAccentColor(defAccent);
-    Toast.makeText(getContext,
-            Preferences.isSaveEnabled() ? "Menu color reset & saved" : "Menu color reset",
-            Toast.LENGTH_SHORT).show();
-}
+        if (mProView != null) {
+            mProView.setBackground(ModxTheme.pillBadgeBg(
+                    getContext, ModxTheme.accentSoft(COLOR_ACCENT), ModxTheme.accentLine(COLOR_ACCENT)));
+            mProView.setTextColor(COLOR_ACCENT);
+        }
 
-/**
- * Commit — Apply ট্যাপ করলে theme in-place apply ও (Save ON থাকলে) persist হয়।
- * কোনো rebuild, tab jump, scroll reset বা native call হয় না।
- */
-private void applyMenuColor(final int baseColor) {
-    int safeAccent = ensureReadableAccent(baseColor);
-    mCurrentHueF = getHueFromColor(safeAccent);
-    applyMenuColorLive(safeAccent);
-    Preferences.recordMenuColorUsed(safeAccent);
-    Preferences.setMenuAccentColor(safeAccent);
+        if (mSettingsIcon != null) {
+            mSettingsIcon.setImageDrawable(ModxIcons.settings(COLOR_ACCENT, dp(19)));
+            mSettingsIcon.setBackground(ModxTheme.ghostIconBg(getContext, COLOR_ACCENT));
+        }
 
-    Toast.makeText(getContext,
-            Preferences.isSaveEnabled() ? "Menu color saved" : "Menu color applied",
-            Toast.LENGTH_SHORT).show();
-}
+        if (mMinimizeBtn != null) {
+            mMinimizeBtn.setBackground(ModxTheme.secondaryButtonBg(getContext));
+            mMinimizeBtn.setTextColor(ModxTheme.FG);
+            mMinimizeBtn.setCompoundDrawablesWithIntrinsicBounds(
+                    ModxIcons.minimize(ModxTheme.MUTED, dp(14)), null, null, null);
+        }
 
-private boolean isTabSelected(TabHolder h) {
-    // কোনো tab selected কিনা চেক — TabHolder এ tag দিয়ে track করা হয়
-    for (TabHolder t : tabHolders) {
-        LinearLayout catView = categoryViewsMap.get(t.name);
-        if (catView != null && catView.getParent() == contentLayout) {
-            return t == h;
+        if (mHideBtn != null) {
+            mHideBtn.setBackground(ModxTheme.dangerOutlineButtonBg(getContext, false));
+            mHideBtn.setTextColor(ModxTheme.DANGER);
+        }
+
+        if (mShimmerViewRef != null) {
+            mShimmerViewRef.setBackgroundColor(ModxTheme.LINE);
+        }
+        if (sidebarDivider != null) {
+            sidebarDivider.setBackgroundColor(ModxTheme.LINE);
+        }
+        if (mBottomDivider != null) {
+            mBottomDivider.setBackgroundColor(ModxTheme.LINE);
+        }
+        if (sidebarScroll instanceof SlimScrollView) {
+            ((SlimScrollView) sidebarScroll).setAccentColor(COLOR_ACCENT);
+        }
+        if (contentScrollView instanceof SlimScrollView) {
+            ((SlimScrollView) contentScrollView).setAccentColor(COLOR_ACCENT);
         }
     }
-    return false;
-}
-
-/**
- * Header (ModX Lab / PRO / gear) colors update।
- */
-private void updateHeaderColors() {
-    // ---- Title (ModX Lab) ----
-    if (mTitleView != null) {
-        mTitleView.setTextColor(COLOR_ACCENT);
-    }
-    if (mSubTitleView != null) {
-    mSubTitleView.setTextColor(Color.WHITE);
-}
-
-    // ---- PRO badge ----
-    if (mProView != null) {
-    mProView.setBackground(cardBg(
-        withAlpha(COLOR_ACCENT, 0x1A),
-        withAlpha(COLOR_ACCENT, 0x99), 8));
-    mProView.setTextColor(Color.WHITE);   // ← white text
-}
-
-    // ---- Settings gear icon ----
-    if (mSettingsIcon != null) {
-        TabIcon icon = new TabIcon(TabIcon.GEAR);
-        icon.setColor(COLOR_ACCENT);
-        mSettingsIcon.setImageDrawable(icon);
-        GradientDrawable gearBg = new GradientDrawable();
-        gearBg.setShape(GradientDrawable.OVAL);
-        gearBg.setColor(withAlpha(COLOR_ACCENT, 0x14));
-        gearBg.setStroke(dp(1), withAlpha(COLOR_ACCENT, 0x55));
-        mSettingsIcon.setBackground(gearBg);
-    }
-
-    // ---- MINIMIZE button ----
-    if (mMinimizeBtn != null) {
-        mMinimizeBtn.setBackground(cardBg(
-            withAlpha(COLOR_ACCENT, 0x1A),
-            withAlpha(COLOR_ACCENT, 0x77), 6));
-        mMinimizeBtn.setTextColor(COLOR_ACCENT);
-    }
-
-    // ---- HIDE/KILL button (bright red, always) ----
-    if (mHideBtn != null) {
-        int DANGER_BRIGHT = Color.parseColor("#FF3B30");
-        mHideBtn.setBackground(cardBg(
-                withAlpha(DANGER_BRIGHT, 0x1F),
-                withAlpha(DANGER_BRIGHT, 0x99), 6));
-        mHideBtn.setTextColor(DANGER_BRIGHT);
-    }
-
-    // ---- Shimmer line (update colors in-place, zero view churn) ----
-    if (mShimmerViewRef instanceof ShimmerLine) {
-        ((ShimmerLine) mShimmerViewRef).setColors(COLOR_ACCENT, COLOR_ACCENT_2);
-    }
-
-    // ---- Dividers ----
-    if (sidebarDivider != null) {
-        sidebarDivider.setBackgroundColor(withAlpha(COLOR_ACCENT, 0x24));
-    }
-    if (mBottomDivider != null) {
-        GradientDrawable line = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-                new int[]{withAlpha(COLOR_ACCENT, 0x00), withAlpha(COLOR_ACCENT, 0x70), withAlpha(COLOR_ACCENT_2, 0x70), withAlpha(COLOR_ACCENT_2, 0x00)});
-        mBottomDivider.setBackground(line);
-    }
-        // ---- Scrollbar colors (both sidebar & content) ----
-    if (sidebarScroll instanceof SlimScrollView) {
-        ((SlimScrollView) sidebarScroll).setAccentColor(COLOR_ACCENT);
-    }
-    if (contentScrollView instanceof SlimScrollView) {
-        ((SlimScrollView) contentScrollView).setAccentColor(COLOR_ACCENT);
-    }
-}
 
 // ================================================================
 // Hue Ring View (strict ring hit-test, zero onDraw allocations)
@@ -5348,7 +5368,7 @@ private static class ColorWheelView extends View {
     private float cx, cy, outerR, ringWidth, ringMidR, innerR, swatchR, hitInnerR, hitOuterR;
     private float currentHue = 145f;
     private float preDragHue = 145f;
-    private int previewColor = 0xFF3DDB87;
+    private int previewColor = ModxTheme.ACCENT;
     private int lastHapticStep = -1;
     private boolean dragging = false;
     private Listener listener;
@@ -5363,21 +5383,21 @@ private static class ColorWheelView extends View {
         ringPaint.setStyle(Paint.Style.STROKE);
         borderPaint.setStyle(Paint.Style.STROKE);
         borderPaint.setStrokeWidth(1.2f * density);
-        borderPaint.setColor(0x66000000);
+        borderPaint.setColor(ModxTheme.withAlpha(ModxTheme.SURFACE, 0xCC));
 
         centerPaint.setStyle(Paint.Style.FILL);
         centerRingPaint.setStyle(Paint.Style.STROKE);
         centerRingPaint.setStrokeWidth(1.5f * density);
-        centerRingPaint.setColor(0x55FFFFFF);
+        centerRingPaint.setColor(ModxTheme.withAlpha(ModxTheme.FG, 0x44));
 
         markerFillPaint.setStyle(Paint.Style.FILL);
         markerWhitePaint.setStyle(Paint.Style.STROKE);
         markerWhitePaint.setStrokeWidth(2.6f * density);
-        markerWhitePaint.setColor(0xFFFFFFFF);
+        markerWhitePaint.setColor(ModxTheme.FG);
 
         markerDarkPaint.setStyle(Paint.Style.STROKE);
         markerDarkPaint.setStrokeWidth(1.4f * density);
-        markerDarkPaint.setColor(0xCC000000);
+        markerDarkPaint.setColor(ModxTheme.withAlpha(ModxTheme.SURFACE, 0xDD));
     }
 
     private static float normalizeHue(float h) {
@@ -5550,7 +5570,7 @@ private static class SatValSquareView extends View {
     SatValSquareView(Context ctx, float hue, float sat, float val) {
         super(ctx);
         this.density = safeDisplayMetrics(ctx).density;
-        this.cornerR = 10f * density;
+        this.cornerR = ModxTheme.RADIUS_DP * density;
         this.pad = 10f * density;
         this.hue = hue;
         this.sat = clamp01(sat);
@@ -5559,16 +5579,16 @@ private static class SatValSquareView extends View {
 
         borderPaint.setStyle(Paint.Style.STROKE);
         borderPaint.setStrokeWidth(1.2f * density);
-        borderPaint.setColor(0x55FFFFFF);
+        borderPaint.setColor(ModxTheme.LINE_STRONG);
 
         markerFillPaint.setStyle(Paint.Style.FILL);
         markerWhitePaint.setStyle(Paint.Style.STROKE);
         markerWhitePaint.setStrokeWidth(2.5f * density);
-        markerWhitePaint.setColor(0xFFFFFFFF);
+        markerWhitePaint.setColor(ModxTheme.FG);
 
         markerDarkPaint.setStyle(Paint.Style.STROKE);
         markerDarkPaint.setStrokeWidth(1.4f * density);
-        markerDarkPaint.setColor(0xCC000000);
+        markerDarkPaint.setColor(ModxTheme.withAlpha(ModxTheme.SURFACE, 0xDD));
     }
 
     private static float clamp01(float v) {
@@ -5734,7 +5754,7 @@ private static class PickerMaxHeightScrollView extends ScrollView {
 }
 
 private static final int[] CURATED_ACCENT_PRESETS = new int[] {
-    0xFF3DDB87, // ModX Green (Default)
+    ModxTheme.ACCENT, // ModX Emerald #20C997 (Default)
     0xFF22D3EE, // Cyan
     0xFF38BDF8, // Sky Blue
     0xFF60A5FA, // Azure
@@ -5798,7 +5818,7 @@ private View makeSwatchItem(final int color, final View.OnClickListener onClick,
     GradientDrawable gd = new GradientDrawable();
     gd.setShape(GradientDrawable.OVAL);
     gd.setColor(0xFF000000 | color);
-    gd.setStroke(dp(1), withAlpha(0xFFFFFF, 0x55));
+    gd.setStroke(dp(1), ModxTheme.LINE_STRONG);
     dot.setBackground(gd);
 
     if (ringsOut != null) {
@@ -5846,11 +5866,8 @@ private void showMenuColorPickerDialog() {
     box.setFocusableInTouchMode(true);
     box.requestFocus();
 
-    final GradientDrawable boxBg = new GradientDrawable(
-            GradientDrawable.Orientation.TOP_BOTTOM,
-            new int[]{COLOR_BG_TOP, COLOR_BG_BOTTOM});
-    boxBg.setCornerRadius(dp(16));
-    boxBg.setStroke(dp(1), withAlpha(COLOR_ACCENT, 0xAA));
+    final GradientDrawable boxBg = ModxTheme.roundRect(
+            getContext, ModxTheme.CARD, ModxTheme.LINE, 1f, ModxTheme.RADIUS_DP);
     box.setBackground(boxBg);
 
     // ---- 1. Top Header Bar (Title + Reset button) ----
@@ -5859,9 +5876,18 @@ private void showMenuColorPickerDialog() {
     headerRow.setGravity(Gravity.CENTER_VERTICAL);
     headerRow.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
 
+    View titleDot = new View(getContext);
+    LinearLayout.LayoutParams dotLp = new LinearLayout.LayoutParams(dp(8), dp(8));
+    dotLp.setMargins(0, 0, dp(8), 0);
+    titleDot.setLayoutParams(dotLp);
+    final GradientDrawable titleDotBg = new GradientDrawable();
+    titleDotBg.setShape(GradientDrawable.OVAL);
+    titleDotBg.setColor(COLOR_ACCENT);
+    titleDot.setBackground(titleDotBg);
+
     final TextView title = new TextView(getContext);
     title.setText("Menu Color Palette");
-    title.setTextColor(COLOR_ACCENT);
+    title.setTextColor(ModxTheme.FG);
     title.setTypeface(fontBold);
     title.setTextSize(15f);
     title.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
@@ -5871,16 +5897,17 @@ private void showMenuColorPickerDialog() {
     resetBtn.setAllCaps(false);
     resetBtn.setTypeface(fontMedium);
     resetBtn.setTextSize(11f);
-    resetBtn.setTextColor(TEXT_COLOR_2);
+    resetBtn.setTextColor(ModxTheme.FG);
     resetBtn.setMinHeight(dp(34));
     resetBtn.setMinimumHeight(dp(34));
     resetBtn.setMinWidth(0);
     resetBtn.setMinimumWidth(0);
-    resetBtn.setPadding(dp(10), dp(4), dp(10), dp(4));
-    resetBtn.setBackground(cardBg(COLOR_CARD, COLOR_CARD_BORDER, 8));
+    resetBtn.setPadding(dp(12), dp(4), dp(12), dp(4));
+    resetBtn.setBackground(ModxTheme.secondaryButtonBg(getContext));
     flatten(resetBtn);
     addPressAnim(resetBtn);
 
+    headerRow.addView(titleDot);
     headerRow.addView(title);
     headerRow.addView(resetBtn);
     box.addView(headerRow);
@@ -5895,9 +5922,9 @@ private void showMenuColorPickerDialog() {
     previewBanner.setLayoutParams(prevLp);
 
     final GradientDrawable previewBg = new GradientDrawable();
-    previewBg.setCornerRadius(dp(10));
+    previewBg.setCornerRadius(dpf(ModxTheme.RADIUS_DP));
     previewBg.setColor(rawPickedHolder[0]);
-    previewBg.setStroke(dp(1), withAlpha(0xFFFFFF, 0x66));
+    previewBg.setStroke(dp(1), ModxTheme.LINE_STRONG);
     previewBanner.setBackground(previewBg);
 
     LinearLayout previewTextCol = new LinearLayout(getContext);
@@ -5908,13 +5935,13 @@ private void showMenuColorPickerDialog() {
     previewHexTv.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
     previewHexTv.setTextSize(15f);
     previewHexTv.setText(hex(rawPickedHolder[0]));
-    previewHexTv.setTextColor(bestTextOnColor(rawPickedHolder[0]));
+    previewHexTv.setTextColor(ModxTheme.onAccent(rawPickedHolder[0]));
 
     final TextView previewSubTv = new TextView(getContext);
     previewSubTv.setTypeface(fontRegular);
     previewSubTv.setTextSize(10f);
     previewSubTv.setText("Live Preview");
-    previewSubTv.setTextColor(withAlpha(bestTextOnColor(rawPickedHolder[0]), 0xCC));
+    previewSubTv.setTextColor(ModxTheme.withAlpha(ModxTheme.onAccent(rawPickedHolder[0]), 0xCC));
 
     previewTextCol.addView(previewHexTv);
     previewTextCol.addView(previewSubTv);
@@ -5924,7 +5951,14 @@ private void showMenuColorPickerDialog() {
     origChip.setOrientation(LinearLayout.HORIZONTAL);
     origChip.setGravity(Gravity.CENTER_VERTICAL);
     origChip.setPadding(dp(8), dp(5), dp(8), dp(5));
-    origChip.setBackground(cardBg(0x66000000, 0x55FFFFFF, 8));
+    origChip.setBackground(ModxTheme.withInteractiveRipple(
+            getContext,
+            ModxTheme.roundRect(getContext,
+                    ModxTheme.withAlpha(ModxTheme.SURFACE, 0xCC),
+                    ModxTheme.withAlpha(ModxTheme.FG, 0x44),
+                    1f, ModxTheme.RADIUS_DP),
+            0x26FFFFFF,
+            ModxTheme.RADIUS_DP));
     origChip.setClickable(true);
     origChip.setFocusable(true);
 
@@ -5933,12 +5967,12 @@ private void showMenuColorPickerDialog() {
     GradientDrawable origDotBg = new GradientDrawable();
     origDotBg.setShape(GradientDrawable.OVAL);
     origDotBg.setColor(mColorPickerOriginalColor);
-    origDotBg.setStroke(dp(1), Color.WHITE);
+    origDotBg.setStroke(dp(1), ModxTheme.FG);
     origDot.setBackground(origDotBg);
 
     TextView origLbl = new TextView(getContext);
     origLbl.setText("Orig");
-    origLbl.setTextColor(Color.WHITE);
+    origLbl.setTextColor(ModxTheme.FG);
     origLbl.setTypeface(fontMedium);
     origLbl.setTextSize(10f);
     LinearLayout.LayoutParams origLblLp = new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
@@ -5984,15 +6018,15 @@ private void showMenuColorPickerDialog() {
 
     TextView hexLabel = new TextView(getContext);
     hexLabel.setText("HEX");
-    hexLabel.setTextColor(COLOR_TEXT_MUTED);
+    hexLabel.setTextColor(ModxTheme.MUTED);
     hexLabel.setTypeface(fontBold);
     hexLabel.setTextSize(11f);
     hexLabel.setPadding(0, 0, dp(10), 0);
 
     final EditText hexInput = new EditText(getContext);
-    hexInput.setTextColor(Color.WHITE);
-    hexInput.setHintTextColor(COLOR_TEXT_MUTED);
-    hexInput.setHint("#3DDB87");
+    hexInput.setTextColor(ModxTheme.FG);
+    hexInput.setHintTextColor(ModxTheme.SUBTLE);
+    hexInput.setHint("#20C997");
     hexInput.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
     hexInput.setTextSize(13f);
     hexInput.setSingleLine(true);
@@ -6001,14 +6035,15 @@ private void showMenuColorPickerDialog() {
     hexInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
     hexInput.setImeOptions(EditorInfo.IME_ACTION_DONE);
     hexInput.setFilters(new InputFilter[]{new InputFilter.LengthFilter(9)});
-    hexInput.setHighlightColor(withAlpha(COLOR_ACCENT, 0x55));
-    final GradientDrawable hexInputBg = cardBg(COLOR_CARD, withAlpha(COLOR_ACCENT, 0x66), 8);
+    hexInput.setHighlightColor(ModxTheme.accentFocusRing(COLOR_ACCENT));
+    final GradientDrawable hexInputBg = ModxTheme.roundRect(
+            getContext, ModxTheme.INPUT, ModxTheme.LINE_STRONG, 1f, ModxTheme.RADIUS_DP);
     hexInput.setBackground(hexInputBg);
     hexInput.setText(hex(rawPickedHolder[0]));
     hexInput.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
 
     final TextView hexErrorTv = new TextView(getContext);
-    hexErrorTv.setTextColor(lighten(COLOR_DANGER, 0.25f));
+    hexErrorTv.setTextColor(ModxTheme.DANGER);
     hexErrorTv.setTypeface(fontRegular);
     hexErrorTv.setTextSize(10f);
     hexErrorTv.setPadding(dp(2), dp(3), 0, 0);
@@ -6052,7 +6087,7 @@ private void showMenuColorPickerDialog() {
         public void run() {
             int raw = rawPickedHolder[0];
             int safe = ensureReadableAccent(raw);
-            int onPreview = bestTextOnColor(raw);
+            int onPreview = ModxTheme.onAccent(raw);
 
             previewBg.setColor(raw);
             previewHexTv.setText(hex(raw));
@@ -6062,16 +6097,13 @@ private void showMenuColorPickerDialog() {
             } else {
                 previewSubTv.setText("Live Preview");
             }
-            previewSubTv.setTextColor(withAlpha(onPreview, 0xCC));
+            previewSubTv.setTextColor(ModxTheme.withAlpha(onPreview, 0xCC));
 
-            boxBg.setStroke(dp(1), withAlpha(safe, 0xAA));
-            title.setTextColor(safe);
+            boxBg.setStroke(dp(1), ModxTheme.accentLine(safe));
+            titleDotBg.setColor(safe);
 
-            GradientDrawable applyBg = new GradientDrawable();
-            applyBg.setCornerRadius(dp(8));
-            applyBg.setColor(safe);
-            okBtn.setBackground(applyBg);
-            okBtn.setTextColor(bestTextOnColor(safe));
+            okBtn.setBackground(ModxTheme.primaryButtonBg(getContext, safe));
+            okBtn.setTextColor(ModxTheme.onAccent(safe));
 
             if (!hexInput.hasFocus()) {
                 updatingHex[0] = true;
@@ -6079,13 +6111,13 @@ private void showMenuColorPickerDialog() {
                 hexInput.setSelection(hexInput.getText().length());
                 updatingHex[0] = false;
                 hexErrorTv.setVisibility(View.GONE);
-                hexInputBg.setStroke(dp(1), withAlpha(safe, 0x66));
+                hexInputBg.setStroke(dp(1), ModxTheme.LINE_STRONG);
             }
 
             for (int i = 0; i < allSwatchRings.size(); i++) {
                 SwatchRingHolder h = allSwatchRings.get(i);
                 boolean match = (h.color == raw || h.color == safe);
-                h.bg.setStroke(dp(match ? 2 : 1), match ? Color.WHITE : withAlpha(0xFFFFFF, 0x55));
+                h.bg.setStroke(dp(match ? 2 : 1), match ? ModxTheme.FG : ModxTheme.LINE_STRONG);
             }
 
             // Live preview across the menu (never persists)
@@ -6137,9 +6169,9 @@ private void showMenuColorPickerDialog() {
             if (actionId == EditorInfo.IME_ACTION_DONE) {
                 Integer parsed = parseHexColorStrict(hexInput.getText().toString());
                 if (parsed == null) {
-                    hexErrorTv.setText("Enter 6 hex digits (e.g. #3DDB87)");
+                    hexErrorTv.setText("Enter 6 hex digits (e.g. #20C997)");
                     hexErrorTv.setVisibility(View.VISIBLE);
-                    hexInputBg.setStroke(dp(1), COLOR_DANGER);
+                    hexInputBg.setStroke(dp(1), ModxTheme.DANGER);
                 } else {
                     hexInput.clearFocus();
                     box.requestFocus();
@@ -6165,16 +6197,16 @@ private void showMenuColorPickerDialog() {
             Integer parsed = parseHexColorStrict(txt);
             if (parsed != null) {
                 hexErrorTv.setVisibility(View.GONE);
-                hexInputBg.setStroke(dp(1), withAlpha(COLOR_ACCENT, 0x88));
+                hexInputBg.setStroke(dp(1), COLOR_ACCENT);
                 rawPickedHolder[0] = parsed;
                 Color.colorToHSV(parsed, curHsv);
                 wheel.setState(curHsv[0], parsed);
                 svSquare.setHSV(curHsv[0], curHsv[1], curHsv[2]);
                 syncUiRunnable[0].run();
             } else {
-                hexErrorTv.setText("Enter 6 hex digits (e.g. #3DDB87)");
+                hexErrorTv.setText("Enter 6 hex digits (e.g. #20C997)");
                 hexErrorTv.setVisibility(View.VISIBLE);
-                hexInputBg.setStroke(dp(1), COLOR_DANGER);
+                hexInputBg.setStroke(dp(1), ModxTheme.DANGER);
             }
         }
     });
@@ -6187,6 +6219,7 @@ private void showMenuColorPickerDialog() {
         public void onClick(View v) {
             Integer cObj = viewColorMap.get(v);
             if (cObj == null) return;
+            ModxTheme.hapticTap(v);
             int c = cObj;
             if (hexInput.hasFocus()) {
                 hexInput.clearFocus();
@@ -6204,10 +6237,11 @@ private void showMenuColorPickerDialog() {
     viewColorMap.put(origChip, mColorPickerOriginalColor);
     origChip.setOnClickListener(selectColorAction[0]);
 
-    // Reset button resets picker to default green #3DDB87 (still Cancelable!)
+    // Reset button resets picker to default accent #20C997 (still Cancelable!)
     resetBtn.setOnClickListener(new View.OnClickListener() {
         @Override
         public void onClick(View v) {
+            ModxTheme.hapticTap(v);
             int def = FeatureStateStore.DEFAULT_MENU_COLOR;
             if (hexInput.hasFocus()) {
                 hexInput.clearFocus();
@@ -6224,7 +6258,7 @@ private void showMenuColorPickerDialog() {
     // ---- 5. Curated Presets (12 swatches: 2 rows of 6) ----
     TextView presetsLbl = new TextView(getContext);
     presetsLbl.setText("Presets");
-    presetsLbl.setTextColor(COLOR_TEXT_MUTED);
+    presetsLbl.setTextColor(ModxTheme.MUTED);
     presetsLbl.setTypeface(fontBold);
     presetsLbl.setTextSize(11f);
     LinearLayout.LayoutParams pLblLp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
@@ -6251,7 +6285,7 @@ private void showMenuColorPickerDialog() {
     if (recentColors != null && recentColors.length > 0) {
         TextView recentLbl = new TextView(getContext);
         recentLbl.setText("Recent");
-        recentLbl.setTextColor(COLOR_TEXT_MUTED);
+        recentLbl.setTextColor(ModxTheme.MUTED);
         recentLbl.setTypeface(fontBold);
         recentLbl.setTextSize(11f);
         LinearLayout.LayoutParams rLblLp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
@@ -6294,6 +6328,7 @@ private void showMenuColorPickerDialog() {
     cancelBtn.setOnClickListener(new View.OnClickListener() {
         @Override
         public void onClick(View v) {
+            ModxTheme.hapticTap(v);
             if (dialogRef[0] != null) dialogRef[0].cancel();
         }
     });
@@ -6305,12 +6340,13 @@ private void showMenuColorPickerDialog() {
     okBtn.setOnClickListener(new View.OnClickListener() {
         @Override
         public void onClick(View v) {
+            ModxTheme.hapticTap(v);
             if (hexInput.hasFocus()) {
                 Integer typed = parseHexColorStrict(hexInput.getText().toString());
                 if (typed == null) {
-                    hexErrorTv.setText("Enter 6 hex digits (e.g. #3DDB87)");
+                    hexErrorTv.setText("Enter 6 hex digits (e.g. #20C997)");
                     hexErrorTv.setVisibility(View.VISIBLE);
-                    hexInputBg.setStroke(dp(1), COLOR_DANGER);
+                    hexInputBg.setStroke(dp(1), ModxTheme.DANGER);
                     return;
                 }
                 rawPickedHolder[0] = typed;
@@ -6471,39 +6507,39 @@ private static final int PAD_H_DP = 100;    // ★ 23% ছোট
         slop = ViewConfiguration.get(ctx).getScaledTouchSlop();
 
         bgPaint.setStyle(Paint.Style.FILL);
-        bgPaint.setColor(0x88121A1E);           // dark semi-transparent
+        bgPaint.setColor(ModxTheme.withAlpha(ModxTheme.SURFACE, 0xE6));
 
         framePaint.setStyle(Paint.Style.STROKE);
-        framePaint.setStrokeWidth(dp(2));
-        framePaint.setColor(0xFF3DDB87);
+        framePaint.setStrokeWidth(dp(1.5f));
+        framePaint.setColor(ModxTheme.ACCENT);
 
         crossPaint.setStyle(Paint.Style.STROKE);
         crossPaint.setStrokeWidth(dpf(1f));
-        crossPaint.setColor(0x803DDB87);
+        crossPaint.setColor(ModxTheme.withAlpha(ModxTheme.ACCENT, 0x66));
 
         markerPaint.setStyle(Paint.Style.FILL);
-        markerPaint.setColor(0xFF3DDB87);
+        markerPaint.setColor(ModxTheme.ACCENT);
 
         glowPaint.setStyle(Paint.Style.STROKE);
         glowPaint.setStrokeWidth(dpf(2f));
-        glowPaint.setColor(0x663DDB87);
+        glowPaint.setColor(ModxTheme.withAlpha(ModxTheme.ACCENT, 0x55));
 
         whitePaint.setStyle(Paint.Style.FILL);
-        whitePaint.setColor(0xFFFFFFFF);
+        whitePaint.setColor(ModxTheme.FG);
 
-        labelPaint.setColor(0x998D8F99);
+        labelPaint.setColor(ModxTheme.SUBTLE);
         labelPaint.setTextSize(dp(9));
         labelPaint.setAntiAlias(true);
         labelPaint.setFakeBoldText(true);
 
-        coordPaint.setColor(0xFFFFFFFF);
+        coordPaint.setColor(ModxTheme.FG);
         coordPaint.setTextSize(dp(10));
         coordPaint.setTextAlign(Paint.Align.CENTER);
         coordPaint.setAntiAlias(true);
         coordPaint.setFakeBoldText(true);
 
         handlePaint.setStyle(Paint.Style.FILL);
-        handlePaint.setColor(0x703DDB87);
+        handlePaint.setColor(ModxTheme.withAlpha(ModxTheme.ACCENT, 0x80));
 
         setClickable(true);
         setFocusable(false);
@@ -6532,7 +6568,7 @@ private static final int PAD_H_DP = 100;    // ★ 23% ছোট
 
         // Rounded background
         RectF bg = new RectF(0, 0, w, h);
-        canvas.drawRoundRect(bg, dp(10), dp(10), bgPaint);
+        canvas.drawRoundRect(bg, dp(ModxTheme.RADIUS_DP), dp(ModxTheme.RADIUS_DP), bgPaint);
 
         // Drag bar at top (visual only)
         RectF handle = new RectF(dp(50), dp(3), w - dp(50), dp(8));
@@ -6544,7 +6580,7 @@ private static final int PAD_H_DP = 100;    // ★ 23% ছোট
         RectF content = new RectF(l, t, r, b);
 
         // Frame
-        canvas.drawRoundRect(content, dp(6), dp(6), framePaint);
+        canvas.drawRoundRect(content, dp(ModxTheme.RADIUS_DP), dp(ModxTheme.RADIUS_DP), framePaint);
 
         // Crosshair
         float cx = (l + r) / 2f;
@@ -6654,8 +6690,8 @@ private static final int PAD_H_DP = 100;    // ★ 23% ছোট
 private void TeleportPad(LinearLayout linLayout) {
     // Helper text
     TextView hint = new TextView(getContext);
-    hint.setText("Tap inside → teleport to safe spot\nDrag top bar to move floating pad");
-    hint.setTextColor(COLOR_TEXT_MUTED);
+    hint.setText("Tap inside -> teleport to safe spot\nDrag top bar to move floating pad");
+    hint.setTextColor(ModxTheme.MUTED);
     hint.setTextSize(10f);
     hint.setTypeface(fontRegular);
     hint.setPadding(dp(8), dp(2), dp(8), dp(6));
@@ -6686,27 +6722,27 @@ private class TeleportPadView extends View {
     TeleportPadView(Context ctx) {
         super(ctx);
         bgPaint.setStyle(Paint.Style.FILL);
-        bgPaint.setColor(0xE6121A1E);
+        bgPaint.setColor(ModxTheme.SURFACE);
 
         framePaint.setStyle(Paint.Style.STROKE);
-        framePaint.setStrokeWidth(dpf(1.5f));         // ★ 2dp → 1.5dp
-framePaint.setColor(0xCC3DDB87);
+        framePaint.setStrokeWidth(dpf(1.5f));
+        framePaint.setColor(ModxTheme.withAlpha(COLOR_ACCENT, 0xCC));
 
         crossPaint.setStyle(Paint.Style.STROKE);
         crossPaint.setStrokeWidth(dpf(1f));
-        crossPaint.setColor(0x603DDB87);
+        crossPaint.setColor(ModxTheme.withAlpha(COLOR_ACCENT, 0x55));
 
         markerPaint.setStyle(Paint.Style.FILL);
         markerPaint.setColor(COLOR_ACCENT);
 
         glowPaint.setStyle(Paint.Style.STROKE);
         glowPaint.setStrokeWidth(dp(2));
-        glowPaint.setColor(0x553DDB87);
+        glowPaint.setColor(ModxTheme.withAlpha(COLOR_ACCENT, 0x55));
 
         whitePaint.setStyle(Paint.Style.FILL);
-        whitePaint.setColor(0xFFFFFFFF);
+        whitePaint.setColor(ModxTheme.FG);
 
-        labelPaint.setColor(COLOR_TEXT_MUTED);
+        labelPaint.setColor(ModxTheme.SUBTLE);
         labelPaint.setTextSize(dp(9));
         labelPaint.setAntiAlias(true);
         labelPaint.setFakeBoldText(true);
@@ -6716,6 +6752,9 @@ framePaint.setColor(0xCC3DDB87);
 
     void setAccentColor(int c) {
         markerPaint.setColor(c);
+        framePaint.setColor(ModxTheme.withAlpha(c, 0xCC));
+        crossPaint.setColor(ModxTheme.withAlpha(c, 0x55));
+        glowPaint.setColor(ModxTheme.withAlpha(c, 0x55));
         invalidate();
     }
 
@@ -6738,8 +6777,8 @@ framePaint.setColor(0xCC3DDB87);
         float pad = dp(4);
         RectF rect = new RectF(pad, pad, w - pad, h - pad);
 
-        canvas.drawRoundRect(new RectF(0, 0, w, h), dp(8), dp(8), bgPaint);
-        canvas.drawRoundRect(rect, dp(6), dp(6), framePaint);
+        canvas.drawRoundRect(new RectF(0, 0, w, h), dpf(ModxTheme.RADIUS_DP), dpf(ModxTheme.RADIUS_DP), bgPaint);
+        canvas.drawRoundRect(rect, dpf(ModxTheme.RADIUS_DP), dpf(ModxTheme.RADIUS_DP), framePaint);
 
         float cx = w / 2f;
         float cy = h / 2f;

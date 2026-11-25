@@ -80,7 +80,10 @@ static std::atomic<uint32_t> g_IntegrityWordC{0xABCDEF01u};
 static std::atomic<bool>     g_TokenVerified{false};
 static std::atomic<uint32_t> g_TokenWord{0x01020304u};
 static std::atomic<int64_t>  g_TokenExpiryMs{0};
+static std::atomic<int64_t>  g_SessionMonoDeadlineMs{0};
+static std::atomic<int64_t>  g_HighestSeenWallMs{0};
 static std::atomic<uint32_t> g_ToggleCounter{0};
+static std::atomic<uint32_t> g_ReverifyTick{0};
 
 static std::mutex g_SecMutex;
 static JavaVM* g_JavaVm = nullptr;
@@ -88,6 +91,7 @@ static std::string g_CachedApkPath;
 static bool g_HasExpectedApkStat = false;
 static uint64_t g_ExpectedApkSize = 0;
 static uint64_t g_ExpectedApkInode = 0;
+static std::vector<uint8_t> g_CachedEd25519Pk;
 
 static std::string g_ActiveToken;
 static std::string g_ActiveUser;
@@ -96,6 +100,29 @@ static std::string g_ActiveNonce;
 
 static std::atomic<bool> g_WatchdogStarted{false};
 static std::atomic<SecurityGuard::LockdownCallback> g_LockdownCb{nullptr};
+
+static int64_t monotonicMs() {
+    struct timespec ts{};
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+        return (int64_t)ts.tv_sec * 1000LL + (int64_t)(ts.tv_nsec / 1000000LL);
+    }
+    return (int64_t)time(nullptr) * 1000LL;
+}
+
+static bool updateAndCheckWallClock(int64_t nowWallMs) {
+    if (nowWallMs <= 0) return false;
+    int64_t prev = g_HighestSeenWallMs.load(std::memory_order_acquire);
+    if (prev > 0 && nowWallMs + 120000LL < prev) {
+        return false; // Clock rolled back > 2 minutes
+    }
+    while (nowWallMs > prev) {
+        if (g_HighestSeenWallMs.compare_exchange_weak(
+                prev, nowWallMs, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            break;
+        }
+    }
+    return true;
+}
 
 static inline void markWordA(bool ok) {
     g_IntegrityWordA.store(ok ? (kSeedA1 ^ kSeedA2) : 0xDEAD0001u, std::memory_order_release);
@@ -124,6 +151,7 @@ static void triggerLockdown(bool forceExit) {
     g_IntegrityWordC.store(0u, std::memory_order_release);
     g_TokenWord.store(0u, std::memory_order_release);
     g_TokenExpiryMs.store(0, std::memory_order_release);
+    g_SessionMonoDeadlineMs.store(0, std::memory_order_release);
 
     {
         std::lock_guard<std::mutex> lock(g_SecMutex);
@@ -1149,11 +1177,44 @@ static bool verifyApkHashesOnDisk(const std::string& apkPath, const std::string&
 // ================================================================
 // Internal Ed25519 Session Token Verification
 // ================================================================
+static bool getEd25519PublicKeyBytes(std::vector<uint8_t>& outPk) {
+    {
+        std::lock_guard<std::mutex> lock(g_SecMutex);
+        if (g_CachedEd25519Pk.size() == 32) {
+            outPk = g_CachedEd25519Pk;
+            return true;
+        }
+    }
+
+    std::vector<uint8_t> pkBytes;
+    if (!hexDecode(std::string(ED25519_PUBLIC_KEY()), pkBytes) || pkBytes.size() != 32) {
+        SEC_DIAG_LOG(204, "Ed25519 public key missing or invalid");
+        return false;
+    }
+    bool allZero = true;
+    for (uint8_t b : pkBytes) {
+        if (b != 0) { allZero = false; break; }
+    }
+    if (allZero) {
+        SEC_DIAG_LOG(204, "Ed25519 public key is all-zero");
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_SecMutex);
+        g_CachedEd25519Pk = pkBytes;
+    }
+    outPk = std::move(pkBytes);
+    return true;
+}
+
 static bool verifyTokenInternal(const std::string& token,
                                 const std::string& expectedUser,
                                 const std::string& expectedDevice,
                                 const std::string& expectedNonce,
-                                int64_t* outExpiryMs) {
+                                int64_t* outExpiryMs,
+                                int64_t* outSessionTtlMs,
+                                bool checkActiveMonoDeadline) {
     if (token.empty() || expectedUser.empty() || expectedDevice.empty() || expectedNonce.empty()) {
         return false;
     }
@@ -1176,16 +1237,7 @@ static bool verifyTokenInternal(const std::string& token,
     }
 
     std::vector<uint8_t> pkBytes;
-    if (!hexDecode(std::string(ED25519_PUBLIC_KEY()), pkBytes) || pkBytes.size() != 32) {
-        SEC_DIAG_LOG(204, "Ed25519 public key missing or invalid");
-        return false;
-    }
-    bool allZero = true;
-    for (uint8_t b : pkBytes) {
-        if (b != 0) { allZero = false; break; }
-    }
-    if (allZero) {
-        SEC_DIAG_LOG(204, "Ed25519 public key is all-zero");
+    if (!getEd25519PublicKeyBytes(pkBytes)) {
         return false;
     }
 
@@ -1208,9 +1260,13 @@ static bool verifyTokenInternal(const std::string& token,
     std::string tokUser   = getJsonField(payloadJson, "u");
     std::string tokDevice = getJsonField(payloadJson, "d");
     std::string tokExpiry = getJsonField(payloadJson, "e");
+    std::string tokSe     = getJsonField(payloadJson, "se");
+    std::string tokRe     = getJsonField(payloadJson, "re");
+    std::string tokTv     = getJsonField(payloadJson, "tv");
+    std::string tokIat    = getJsonField(payloadJson, "i");
     std::string tokNonce  = getJsonField(payloadJson, "n");
 
-    if (tokUser.empty() || tokDevice.empty() || tokNonce.empty()) {
+    if (tokUser.empty() || tokDevice.empty() || tokNonce.empty() || tokSe.empty() || tokIat.empty()) {
         SEC_DIAG_LOG(204, "Token claims incomplete");
         return false;
     }
@@ -1228,22 +1284,64 @@ static bool verifyTokenInternal(const std::string& token,
     }
 
     int64_t parsedExpiry = 0;
-    if (!tokExpiry.empty()) {
-        try {
-            parsedExpiry = std::stoll(tokExpiry);
-            if (parsedExpiry > 0) {
-                int64_t nowMs = (int64_t)time(nullptr) * 1000LL;
-                if (nowMs > parsedExpiry) {
-                    SEC_DIAG_LOG(204, "Token expired");
-                    return false;
-                }
-            }
-        } catch (...) {
-            SEC_DIAG_LOG(204, "Token expiry parse error");
+    int64_t parsedSe = 0;
+    int64_t parsedRe = 0;
+    int64_t parsedIat = 0;
+    int64_t parsedTv = 0;
+    try {
+        parsedIat = std::stoll(tokIat);
+        parsedSe = std::stoll(tokSe);
+        if (!tokExpiry.empty()) parsedExpiry = std::stoll(tokExpiry);
+        if (!tokRe.empty()) parsedRe = std::stoll(tokRe);
+        if (!tokTv.empty()) parsedTv = std::stoll(tokTv);
+    } catch (...) {
+        SEC_DIAG_LOG(204, "Token claim parse error");
+        return false;
+    }
+
+    if (parsedIat <= 0 || parsedSe <= parsedIat || parsedTv < 1) {
+        SEC_DIAG_LOG(204, "Token temporal/version claims invalid");
+        return false;
+    }
+
+    int64_t nowWallMs = (int64_t)time(nullptr) * 1000LL;
+    if (!updateAndCheckWallClock(nowWallMs)) {
+        SEC_DIAG_LOG(204, "Device wall-clock rollback detected");
+        return false;
+    }
+
+    if (parsedExpiry > 0 && nowWallMs > parsedExpiry) {
+        SEC_DIAG_LOG(204, "Token license expired");
+        return false;
+    }
+    if (parsedRe > 0 && nowWallMs > parsedRe) {
+        SEC_DIAG_LOG(204, "Token remember window expired");
+        return false;
+    }
+
+    // Clamp short session TTL to 1..30 min + 10 min offline grace (25 min max for 15 min se)
+    int64_t rawTtlMs = parsedSe - parsedIat;
+    if (rawTtlMs < 60000LL) rawTtlMs = 60000LL;
+    if (rawTtlMs > 1800000LL) rawTtlMs = 1800000LL;
+    int64_t sessionTtlWithGrace = rawTtlMs + 600000LL;
+
+    // If wall-clock is reasonably synced with server time, also reject wall-stale short tokens
+    int64_t clockSkewMs = nowWallMs - parsedIat;
+    if (clockSkewMs > -600000LL && clockSkewMs < 86400000LL && nowWallMs > (parsedSe + 600000LL)) {
+        SEC_DIAG_LOG(204, "Short session token expired (wall clock)");
+        return false;
+    }
+
+    if (checkActiveMonoDeadline) {
+        int64_t monoDeadline = g_SessionMonoDeadlineMs.load(std::memory_order_acquire);
+        if (monoDeadline <= 0 || monotonicMs() > monoDeadline) {
+            SEC_DIAG_LOG(204, "Short session token expired (monotonic TTL)");
             return false;
         }
     }
+
     if (outExpiryMs) *outExpiryMs = parsedExpiry;
+    if (outSessionTtlMs) *outSessionTtlMs = sessionTtlWithGrace;
     return true;
 }
 
@@ -1414,7 +1512,7 @@ bool verifyPathFeatureGate(JNIEnv* env) {
         nonce = g_ActiveNonce;
     }
     int64_t expMs = 0;
-    if (!verifyTokenInternal(tok, usr, dev, nonce, &expMs)) {
+    if (!verifyTokenInternal(tok, usr, dev, nonce, &expMs, nullptr, true)) {
         triggerLockdown(false);
         return false;
     }
@@ -1423,7 +1521,7 @@ bool verifyPathFeatureGate(JNIEnv* env) {
 
 bool verifyPathToggle(JNIEnv* env, jobject ctx, int featNum) {
     (void)env; (void)ctx;
-    if (!g_Verified.load(std::memory_order_acquire) || !isWordAOk() || !isWordBOk()) {
+    if (!g_Verified.load(std::memory_order_acquire) || !isWordAOk() || !isWordBOk() || !isWordCOk()) {
         triggerLockdown(false);
         return false;
     }
@@ -1433,8 +1531,18 @@ bool verifyPathToggle(JNIEnv* env, jobject ctx, int featNum) {
         return false;
     }
 
+    int64_t nowWallMs = (int64_t)time(nullptr) * 1000LL;
+    if (!updateAndCheckWallClock(nowWallMs)) {
+        triggerLockdown(false);
+        return false;
+    }
     int64_t expMs = g_TokenExpiryMs.load(std::memory_order_acquire);
-    if (expMs > 0 && ((int64_t)time(nullptr) * 1000LL) > expMs) {
+    if (expMs > 0 && nowWallMs > expMs) {
+        triggerLockdown(false);
+        return false;
+    }
+    int64_t monoDeadline = g_SessionMonoDeadlineMs.load(std::memory_order_acquire);
+    if (monoDeadline <= 0 || monotonicMs() > monoDeadline) {
         triggerLockdown(false);
         return false;
     }
@@ -1465,7 +1573,7 @@ bool verifyPathToggle(JNIEnv* env, jobject ctx, int featNum) {
             dev = g_ActiveDeviceId;
             nonce = g_ActiveNonce;
         }
-        if (!verifyTokenInternal(tok, usr, dev, nonce, nullptr)) {
+        if (!verifyTokenInternal(tok, usr, dev, nonce, nullptr, nullptr, true)) {
             triggerLockdown(false);
             return false;
         }
@@ -1486,7 +1594,7 @@ bool verifyPathToggle(JNIEnv* env, jobject ctx, int featNum) {
 }
 
 bool isReadyForHooks() {
-    if (!g_Verified.load(std::memory_order_acquire) || !isWordAOk() || !isWordBOk()) {
+    if (!g_Verified.load(std::memory_order_acquire) || !isWordAOk() || !isWordBOk() || !isWordCOk()) {
         return false;
     }
     if (!g_TokenVerified.load(std::memory_order_acquire) ||
@@ -1512,7 +1620,7 @@ bool isReadyForHooks() {
         triggerLockdown(true);
         return false;
     }
-    if (!verifyTokenInternal(tok, usr, dev, nonce, nullptr)) {
+    if (!verifyTokenInternal(tok, usr, dev, nonce, nullptr, nullptr, true)) {
         return false;
     }
     return true;
@@ -1523,9 +1631,14 @@ bool periodicReverify() {
 
     std::string cachedPath, tok, usr, dev, nonce;
     bool tokActive = false;
+    bool hasStat = false;
+    uint64_t expSize = 0, expInode = 0;
     {
         std::lock_guard<std::mutex> lock(g_SecMutex);
         cachedPath = g_CachedApkPath;
+        hasStat = g_HasExpectedApkStat;
+        expSize = g_ExpectedApkSize;
+        expInode = g_ExpectedApkInode;
         tokActive = g_TokenVerified.load(std::memory_order_acquire);
         tok = g_ActiveToken;
         usr = g_ActiveUser;
@@ -1533,11 +1646,23 @@ bool periodicReverify() {
         nonce = g_ActiveNonce;
     }
 
-    if (!cachedPath.empty() && !verifyApkHashesOnDisk(cachedPath, "")) {
-        return false;
+    if (!cachedPath.empty()) {
+        uint32_t tick = g_ReverifyTick.fetch_add(1, std::memory_order_relaxed);
+        bool needFullRehash = !hasStat || (tick % 3u == 0u);
+        if (!needFullRehash) {
+            struct stat st{};
+            if (stat(cachedPath.c_str(), &st) != 0 ||
+                (uint64_t)st.st_size != expSize ||
+                (uint64_t)st.st_ino != expInode) {
+                needFullRehash = true;
+            }
+        }
+        if (needFullRehash && !verifyApkHashesOnDisk(cachedPath, "")) {
+            return false;
+        }
     }
 
-    if (tokActive && !verifyTokenInternal(tok, usr, dev, nonce, nullptr)) {
+    if (tokActive && !verifyTokenInternal(tok, usr, dev, nonce, nullptr, nullptr, true)) {
         return false;
     }
     return true;
@@ -1557,7 +1682,7 @@ Java_com_android_support_SecurityNative_verifyNative(
 // ================================================================
 // JNI: verifySessionToken (Ed25519 public-key verification + nonce binding)
 // Token format: <base64url(json_payload)>.<base64url(ed25519_sig)>
-// Payload fields: {"u":"<user>","e":<expiryMs>,"d":"<deviceId>","i":<iatMs>,"n":"<nonce>"}
+// Payload fields: {"u":"<user>","e":<expiryMs>,"se":<shortExpMs>,"re":<remExpMs>,"tv":<ver>,"d":"<deviceId>","i":<iatMs>,"n":"<nonce>"}
 // ================================================================
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_android_support_SecurityNative_verifySessionToken(
@@ -1597,7 +1722,9 @@ Java_com_android_support_SecurityNative_verifySessionToken(
     env->ReleaseStringUTFChars(jNonce, cn);
 
     int64_t expiryMs = 0;
-    if (!verifyTokenInternal(token, expectedUser, expectedDevice, expectedNonce, &expiryMs)) {
+    int64_t sessionTtlMs = 0;
+    if (!verifyTokenInternal(token, expectedUser, expectedDevice, expectedNonce,
+                             &expiryMs, &sessionTtlMs, false)) {
         return JNI_FALSE;
     }
 
@@ -1609,6 +1736,7 @@ Java_com_android_support_SecurityNative_verifySessionToken(
         g_ActiveNonce = expectedNonce;
     }
     g_TokenExpiryMs.store(expiryMs, std::memory_order_release);
+    g_SessionMonoDeadlineMs.store(monotonicMs() + sessionTtlMs, std::memory_order_release);
     g_TokenWord.store(kSeedT1 ^ kSeedA2, std::memory_order_release);
     g_TokenVerified.store(true, std::memory_order_release);
     ensureWatchdogStarted();
@@ -1621,6 +1749,7 @@ Java_com_android_support_SecurityNative_clearVerifiedSession(JNIEnv*, jclass) {
     g_TokenVerified.store(false, std::memory_order_release);
     g_TokenWord.store(0u, std::memory_order_release);
     g_TokenExpiryMs.store(0, std::memory_order_release);
+    g_SessionMonoDeadlineMs.store(0, std::memory_order_release);
     {
         std::lock_guard<std::mutex> lock(g_SecMutex);
         g_ActiveToken.clear();

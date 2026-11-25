@@ -49,40 +49,32 @@ final class DiagLogViewer {
 
         LinearLayout card = new LinearLayout(ctx);
         card.setOrientation(LinearLayout.VERTICAL);
-        int pad = dp(12, density);
+        int pad = dp(14, density);
         card.setPadding(pad, pad, pad, pad);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.parseColor("#141720"));
-        bg.setCornerRadius(dp(12, density));
-        bg.setStroke(dp(1, density), Color.parseColor("#3DDB87"));
-        card.setBackground(bg);
+        card.setBackground(ModxTheme.dialogCardBg(ctx));
 
         TextView title = new TextView(ctx);
         title.setText("Live Diag Logs (PID " + Process.myPid() + " / API " + Build.VERSION.SDK_INT + ")");
-        title.setTextColor(Color.parseColor("#3DDB87"));
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setTextColor(ModxTheme.ACCENT);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        title.setTypeface(ModxTheme.FONT_SEMIBOLD);
         card.addView(title);
 
         final ScrollView scroll = new ScrollView(ctx);
         scroll.setFillViewport(true);
-        GradientDrawable logBg = new GradientDrawable();
-        logBg.setColor(Color.parseColor("#0B0D12"));
-        logBg.setCornerRadius(dp(8, density));
-        logBg.setStroke(dp(1, density), Color.parseColor("#2A2F3D"));
-        scroll.setBackground(logBg);
+        scroll.setBackground(ModxTheme.roundRect(ctx, ModxTheme.SURFACE, ModxTheme.LINE, 1f, ModxTheme.RADIUS_DP));
         LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, (int) (dm.heightPixels * 0.45f));
-        sLp.setMargins(0, dp(8, density), 0, dp(8, density));
+        sLp.setMargins(0, dp(10, density), 0, dp(10, density));
         scroll.setLayoutParams(sLp);
 
         final TextView logTv = new TextView(ctx);
         logTv.setText("Loading logs...");
-        logTv.setTextColor(Color.parseColor("#D9DEE8"));
+        logTv.setTextColor(ModxTheme.FG);
         logTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f);
         logTv.setTypeface(Typeface.MONOSPACE);
         logTv.setTextIsSelectable(true);
-        int logPad = dp(8, density);
+        int logPad = dp(10, density);
         logTv.setPadding(logPad, logPad, logPad, logPad);
         scroll.addView(logTv, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -94,22 +86,22 @@ final class DiagLogViewer {
 
         final AlertDialog[] dlgRef = new AlertDialog[1];
 
-        Button copyBtn = makeBtn(ctx, "Copy", "#2BB673", "#0C2418", density);
-        Button clearBtn = makeBtn(ctx, "Clear", "#3A3F4D", "#ECE8DF", density);
-        Button closeBtn = makeBtn(ctx, "Close", "#262934", "#A7A9B2", density);
+        Button copyBtn = makeBtn(ctx, "Copy", true, density);
+        Button clearBtn = makeBtn(ctx, "Clear", false, density);
+        Button closeBtn = makeBtn(ctx, "Close", false, density);
 
         LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(
-                0, dp(36, density), 1f);
+                0, dp(40, density), 1f);
         bLp.setMargins(0, 0, dp(6, density), 0);
         copyBtn.setLayoutParams(bLp);
 
         LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
-                0, dp(36, density), 1f);
+                0, dp(40, density), 1f);
         cLp.setMargins(0, 0, dp(6, density), 0);
         clearBtn.setLayoutParams(cLp);
 
         LinearLayout.LayoutParams xLp = new LinearLayout.LayoutParams(
-                0, dp(36, density), 1f);
+                0, dp(40, density), 1f);
         closeBtn.setLayoutParams(xLp);
 
         btnRow.addView(copyBtn);
@@ -120,6 +112,7 @@ final class DiagLogViewer {
         copyBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                ModxTheme.hapticTap(v);
                 try {
                     ClipboardManager cm = (ClipboardManager)
                             ctx.getSystemService(Context.CLIPBOARD_SERVICE);
@@ -135,6 +128,7 @@ final class DiagLogViewer {
         clearBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                ModxTheme.hapticTap(v);
                 logTv.setText("(cleared)");
                 new Thread(new Runnable() {
                     @Override
@@ -152,6 +146,7 @@ final class DiagLogViewer {
         closeBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                ModxTheme.hapticTap(v);
                 if (dlgRef[0] != null) {
                     try { dlgRef[0].dismiss(); } catch (Throwable ignored) { }
                 }
@@ -261,22 +256,24 @@ final class DiagLogViewer {
                 || line.contains("AndroidRuntime");
     }
 
-    private static Button makeBtn(Context ctx, String text, String bgHex, String fgHex, float density) {
+    private static Button makeBtn(Context ctx, String text, boolean primary, float density) {
         Button b = new Button(ctx);
         b.setText(text);
         b.setAllCaps(false);
-        b.setTextColor(Color.parseColor(fgHex));
-        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-        b.setTypeface(Typeface.DEFAULT_BOLD);
+        b.setTextColor(primary ? ModxTheme.ON_ACCENT : ModxTheme.MUTED);
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        b.setTypeface(primary ? ModxTheme.FONT_SEMIBOLD : ModxTheme.FONT_MEDIUM);
         b.setMinHeight(0);
         b.setMinimumHeight(0);
         b.setMinWidth(0);
         b.setMinimumWidth(0);
-        b.setPadding(dp(6, density), 0, dp(6, density), 0);
-        GradientDrawable g = new GradientDrawable();
-        g.setColor(Color.parseColor(bgHex));
-        g.setCornerRadius(dp(8, density));
-        b.setBackground(g);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            b.setStateListAnimator(null);
+        }
+        b.setPadding(dp(8, density), 0, dp(8, density), 0);
+        b.setBackground(primary
+                ? ModxTheme.primaryButtonBg(ctx, ModxTheme.ACCENT)
+                : ModxTheme.secondaryButtonBg(ctx));
         return b;
     }
 

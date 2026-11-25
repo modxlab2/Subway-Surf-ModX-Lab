@@ -1,6 +1,7 @@
 package com.android.support;
 
 import android.content.Context;
+import android.os.SystemClock;
 import android.util.Base64;
 
 import org.json.JSONObject;
@@ -8,6 +9,7 @@ import org.json.JSONObject;
 import java.security.SecureRandom;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Server-backed authentication and public update access.
@@ -20,6 +22,14 @@ import java.util.Map;
 public final class ModFirebase {
 
     private static final SecureRandom sNonceRandom = new SecureRandom();
+    private static final Object sSessionLock = new Object();
+    private static final long PREWARM_COOLDOWN_MS = 20000L;
+    private static final long UPDATE_CACHE_TTL_MS = 60000L;
+
+    private static final AtomicBoolean sPrewarming = new AtomicBoolean(false);
+    private static volatile long sLastPrewarmAtMs = 0L;
+    private static volatile JSONObject sCachedUpdateJson = null;
+    private static volatile long sCachedUpdateAtMs = 0L;
 
     private ModFirebase() { }
 
@@ -27,6 +37,75 @@ public final class ModFirebase {
         byte[] bytes = new byte[24];
         sNonceRandom.nextBytes(bytes);
         return Base64.encodeToString(bytes, Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
+    }
+
+    /**
+     * Background warm-up on login screen mount:
+     * 1) Pre-initializes TLS factories for Appwrite & Firebase
+     * 2) Ensures an Appwrite anonymous session cookie is ready
+     * 3) Pings verifyLogin so the container, Google OAuth token cache, and Ed25519 keys are hot
+     * 4) Pre-fetches /update.json into short-lived memory cache
+     */
+    public static void prewarm(final Context ctx) {
+        if (ctx == null) return;
+        long now = SystemClock.elapsedRealtime();
+        if (now - sLastPrewarmAtMs < PREWARM_COOLDOWN_MS) return;
+        if (!sPrewarming.compareAndSet(false, true)) return;
+        sLastPrewarmAtMs = now;
+
+        final Context appCtx = ctx.getApplicationContext() != null ? ctx.getApplicationContext() : ctx;
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    long t0 = SystemClock.elapsedRealtime();
+                    final String endpoint = SecurityNative.getAppwriteEndpoint();
+                    final String projectId = SecurityNative.getAppwriteProjectId();
+                    final String functionId = SecurityNative.getVerifyLoginFunctionId();
+                    final String updateUrl = SecurityNative.getUpdateUrl();
+                    PinnedHttp.prewarm(endpoint, updateUrl);
+
+                    Thread updThread = new Thread(new Runnable() {
+                        @Override
+                        public void run() {
+                            fetchUpdate(true);
+                        }
+                    });
+                    updThread.setDaemon(true);
+                    updThread.start();
+
+                    if (!isEmpty(endpoint) && !isEmpty(projectId) && !isEmpty(functionId)) {
+                        String[] errOut = new String[1];
+                        String cookie = getOrCreateSessionCookie(appCtx, endpoint, projectId, false, errOut);
+                        if (!isEmpty(cookie)) {
+                            JSONObject pingPayload = new JSONObject();
+                            pingPayload.put("action", "ping");
+                            pingPayload.put("warmDb", true);
+                            if (BuildConfig.SEC_DIAG) {
+                                pingPayload.put("diag", true);
+                            }
+                            PinnedHttp.HttpResponse resp = executeVerifyLogin(
+                                    endpoint, projectId, functionId, cookie, pingPayload);
+                            if (resp != null && resp.code == 401) {
+                                cookie = getOrCreateSessionCookie(appCtx, endpoint, projectId, true, errOut);
+                                if (!isEmpty(cookie)) {
+                                    executeVerifyLogin(endpoint, projectId, functionId, cookie, pingPayload);
+                                }
+                            }
+                        }
+                    }
+
+                    if (BuildConfig.SEC_DIAG) {
+                        SecurityNative.diag(302, "prewarm done in " + (SystemClock.elapsedRealtime() - t0) + "ms");
+                    }
+                } catch (Exception ignored) {
+                } finally {
+                    sPrewarming.set(false);
+                }
+            }
+        });
+        t.setDaemon(true);
+        t.start();
     }
 
     /**
@@ -45,7 +124,10 @@ public final class ModFirebase {
             innerPayload.put("password", password);
             innerPayload.put("deviceId", deviceId);
             innerPayload.put("nonce", nonce);
-            return callVerifyFunction(ctx, innerPayload);
+            if (BuildConfig.SEC_DIAG) {
+                innerPayload.put("diag", true);
+            }
+            return callVerifyFunction(ctx, "login", innerPayload);
         } catch (Exception e) {
             return errorJson("bad_input");
         }
@@ -64,13 +146,17 @@ public final class ModFirebase {
             innerPayload.put("token", token);
             innerPayload.put("deviceId", deviceId);
             innerPayload.put("nonce", nonce);
-            return callVerifyFunction(ctx, innerPayload);
+            if (BuildConfig.SEC_DIAG) {
+                innerPayload.put("diag", true);
+            }
+            return callVerifyFunction(ctx, "verify_session", innerPayload);
         } catch (Exception e) {
             return errorJson("bad_input");
         }
     }
 
-    private static JSONObject callVerifyFunction(Context ctx, JSONObject innerPayload) {
+    private static JSONObject callVerifyFunction(Context ctx, String actionLabel, JSONObject innerPayload) {
+        long tStart = SystemClock.elapsedRealtime();
         try {
             String endpoint = SecurityNative.getAppwriteEndpoint();
             String projectId = SecurityNative.getAppwriteProjectId();
@@ -79,12 +165,15 @@ public final class ModFirebase {
                 return errorJson("native_config");
             }
 
+            long tCookieStart = SystemClock.elapsedRealtime();
             String[] sessionErr = new String[1];
             String sessionCookie = getOrCreateSessionCookie(ctx, endpoint, projectId, false, sessionErr);
+            long cookieMs = SystemClock.elapsedRealtime() - tCookieStart;
             if (isEmpty(sessionCookie)) {
                 return errorJson(!isEmpty(sessionErr[0]) ? sessionErr[0] : "network");
             }
 
+            long tExecStart = SystemClock.elapsedRealtime();
             PinnedHttp.HttpResponse execResp = executeVerifyLogin(
                     endpoint, projectId, functionId, sessionCookie, innerPayload);
 
@@ -97,6 +186,7 @@ public final class ModFirebase {
                 execResp = executeVerifyLogin(
                         endpoint, projectId, functionId, sessionCookie, innerPayload);
             }
+            long execMs = SystemClock.elapsedRealtime() - tExecStart;
 
             if (execResp == null) {
                 return errorJson(PinnedHttp.getLastError());
@@ -115,7 +205,17 @@ public final class ModFirebase {
             if (isEmpty(responseBody)) {
                 return errorJson("empty_func_body");
             }
-            return new JSONObject(responseBody);
+            JSONObject result = new JSONObject(responseBody);
+
+            if (BuildConfig.SEC_DIAG) {
+                long totalMs = SystemClock.elapsedRealtime() - tStart;
+                JSONObject st = result.optJSONObject("serverTiming");
+                String stStr = (st != null) ? st.toString() : "none";
+                SecurityNative.diag(302, actionLabel + " cookieMs=" + cookieMs
+                        + " execMs=" + execMs + " totalMs=" + totalMs + " server=" + stStr);
+            }
+
+            return result;
         } catch (Exception e) {
             return errorJson("network");
         }
@@ -159,77 +259,95 @@ public final class ModFirebase {
 
     private static String getOrCreateSessionCookie(
             Context ctx, String endpoint, String projectId, boolean forceRefresh, String[] errOut) {
-        if (!forceRefresh) {
-            String cached = SecureTokenStore.loadAppwriteSession(ctx);
-            if (!isEmpty(cached) && !cached.startsWith("a_session_" + projectId + "_legacy=")) {
-                return cached;
-            }
-        } else {
-            SecureTokenStore.clearAppwriteSession(ctx);
-        }
-
-        Map<String, String> headers = new HashMap<>();
-        headers.put("X-Appwrite-Project", projectId);
-
-        String url = endpoint + "/account/sessions/anonymous";
-        PinnedHttp.HttpResponse resp = PinnedHttp.postJson(url, "{}", headers);
-        if (resp == null) {
-            if (errOut != null && errOut.length > 0) errOut[0] = PinnedHttp.getLastError();
-            return null;
-        }
-        if (resp.code < 200 || resp.code >= 300) {
-            if (errOut != null && errOut.length > 0) errOut[0] = "http_" + resp.code;
-            return null;
-        }
-
-        String cookieName = "a_session_" + projectId;
-        String cookieVal = null;
-        String fallbackCookie = null;
-
-        for (String setCookie : resp.setCookies) {
-            if (setCookie == null) continue;
-            String firstPart = setCookie.split(";", 2)[0].trim();
-            if (firstPart.startsWith(cookieName + "=")) {
-                cookieVal = firstPart;
-                break;
-            } else if (fallbackCookie == null && firstPart.startsWith("a_session_")) {
-                fallbackCookie = firstPart;
-            }
-        }
-
-        if (isEmpty(cookieVal) && !isEmpty(resp.body)) {
-            try {
-                JSONObject json = new JSONObject(resp.body);
-                String secret = json.optString("secret", "");
-                if (!isEmpty(secret)) {
-                    cookieVal = cookieName + "=" + secret;
+        synchronized (sSessionLock) {
+            if (!forceRefresh) {
+                String cached = SecureTokenStore.loadAppwriteSession(ctx);
+                if (!isEmpty(cached) && !cached.startsWith("a_session_" + projectId + "_legacy=")) {
+                    return cached;
                 }
-            } catch (Exception ignored) { }
-        }
+            } else {
+                SecureTokenStore.clearAppwriteSession(ctx);
+            }
 
-        if (isEmpty(cookieVal)) {
-            cookieVal = fallbackCookie;
-        }
+            Map<String, String> headers = new HashMap<>();
+            headers.put("X-Appwrite-Project", projectId);
 
-        if (!isEmpty(cookieVal)) {
-            SecureTokenStore.saveAppwriteSession(ctx, cookieVal);
-        } else if (errOut != null && errOut.length > 0) {
-            errOut[0] = "no_session_cookie";
+            String url = endpoint + "/account/sessions/anonymous";
+            PinnedHttp.HttpResponse resp = PinnedHttp.postJson(url, "{}", headers);
+            if (resp == null) {
+                if (errOut != null && errOut.length > 0) errOut[0] = PinnedHttp.getLastError();
+                return null;
+            }
+            if (resp.code < 200 || resp.code >= 300) {
+                if (errOut != null && errOut.length > 0) errOut[0] = "http_" + resp.code;
+                return null;
+            }
+
+            String cookieName = "a_session_" + projectId;
+            String cookieVal = null;
+            String fallbackCookie = null;
+
+            for (String setCookie : resp.setCookies) {
+                if (setCookie == null) continue;
+                String firstPart = setCookie.split(";", 2)[0].trim();
+                if (firstPart.startsWith(cookieName + "=")) {
+                    cookieVal = firstPart;
+                    break;
+                } else if (fallbackCookie == null && firstPart.startsWith("a_session_")) {
+                    fallbackCookie = firstPart;
+                }
+            }
+
+            if (isEmpty(cookieVal) && !isEmpty(resp.body)) {
+                try {
+                    JSONObject json = new JSONObject(resp.body);
+                    String secret = json.optString("secret", "");
+                    if (!isEmpty(secret)) {
+                        cookieVal = cookieName + "=" + secret;
+                    }
+                } catch (Exception ignored) { }
+            }
+
+            if (isEmpty(cookieVal)) {
+                cookieVal = fallbackCookie;
+            }
+
+            if (!isEmpty(cookieVal)) {
+                SecureTokenStore.saveAppwriteSession(ctx, cookieVal);
+            } else if (errOut != null && errOut.length > 0) {
+                errOut[0] = "no_session_cookie";
+            }
+            return cookieVal;
         }
-        return cookieVal;
     }
 
     /**
-     * Fetch public update info from Firebase /update.json.
+     * Fetch public update info from Firebase /update.json (uses short-lived prewarm cache).
      */
     public static JSONObject fetchUpdate() {
+        return fetchUpdate(false);
+    }
+
+    public static JSONObject fetchUpdate(boolean forceNetwork) {
+        long now = SystemClock.elapsedRealtime();
+        JSONObject cached = sCachedUpdateJson;
+        if (!forceNetwork && cached != null && (now - sCachedUpdateAtMs) < UPDATE_CACHE_TTL_MS) {
+            return cached;
+        }
         try {
+            long t0 = SystemClock.elapsedRealtime();
             String urlStr = SecurityNative.getUpdateUrl();
             if (isEmpty(urlStr)) return null;
 
             String raw = PinnedHttp.get(urlStr);
             if (isEmpty(raw) || "null".equals(raw)) return null;
-            return new JSONObject(raw);
+            JSONObject parsed = new JSONObject(raw);
+            sCachedUpdateJson = parsed;
+            sCachedUpdateAtMs = SystemClock.elapsedRealtime();
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diag(302, "fetchUpdate netMs=" + (sCachedUpdateAtMs - t0));
+            }
+            return parsed;
         } catch (Exception e) {
             return null;
         }

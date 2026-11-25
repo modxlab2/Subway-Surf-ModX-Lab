@@ -22,8 +22,12 @@ final class SvgIcon extends Drawable {
 
     private final Path sourcePath = new Path();
     private final Path renderPath = new Path();
+    private final Path fillSourcePath = new Path();
+    private final Path fillRenderPath = new Path();
+    private boolean hasFill = false;
     private final Matrix matrix = new Matrix();
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     private final float viewBoxSize;
     private final float strokeWidthGrid;
@@ -48,6 +52,9 @@ final class SvgIcon extends Drawable {
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeCap(Paint.Cap.ROUND);
         paint.setStrokeJoin(Paint.Join.ROUND);
+
+        fillPaint.setColor(color);
+        fillPaint.setStyle(Paint.Style.FILL);
     }
 
     SvgIcon setIntrinsicSizePx(int sizePx) {
@@ -58,6 +65,15 @@ final class SvgIcon extends Drawable {
     SvgIcon addPath(String d) {
         if (d != null && !d.isEmpty()) {
             parsePathInto(d, sourcePath);
+            invalidateRenderCache();
+        }
+        return this;
+    }
+
+    SvgIcon addFillPath(String d) {
+        if (d != null && !d.isEmpty()) {
+            parsePathInto(d, fillSourcePath);
+            hasFill = true;
             invalidateRenderCache();
         }
         return this;
@@ -88,6 +104,15 @@ final class SvgIcon extends Drawable {
         return this;
     }
 
+    SvgIcon addFillCircle(float cx, float cy, float r) {
+        if (r > 0f) {
+            fillSourcePath.addCircle(cx, cy, r, Path.Direction.CW);
+            hasFill = true;
+            invalidateRenderCache();
+        }
+        return this;
+    }
+
     void setColor(int color) {
         if (colorAnimator != null) {
             colorAnimator.cancel();
@@ -96,6 +121,7 @@ final class SvgIcon extends Drawable {
         if (this.currentColor != color) {
             this.currentColor = color;
             paint.setColor(color);
+            fillPaint.setColor(color);
             invalidateSelf();
         }
     }
@@ -115,6 +141,7 @@ final class SvgIcon extends Drawable {
             public void onAnimationUpdate(ValueAnimator a) {
                 currentColor = (Integer) a.getAnimatedValue();
                 paint.setColor(currentColor);
+                fillPaint.setColor(currentColor);
                 invalidateSelf();
             }
         });
@@ -161,25 +188,35 @@ final class SvgIcon extends Drawable {
             matrix.setScale(cachedScale, cachedScale);
             matrix.postTranslate(dx, dy);
             sourcePath.transform(matrix, renderPath);
+            if (hasFill) {
+                fillSourcePath.transform(matrix, fillRenderPath);
+            }
             cachedW = w;
             cachedH = h;
             cachedL = b.left;
             cachedT = b.top;
         }
 
-        paint.setStrokeWidth(strokeWidthGrid * cachedScale);
-        canvas.drawPath(renderPath, paint);
+        if (hasFill) {
+            canvas.drawPath(fillRenderPath, fillPaint);
+        }
+        if (!sourcePath.isEmpty()) {
+            paint.setStrokeWidth(strokeWidthGrid * cachedScale);
+            canvas.drawPath(renderPath, paint);
+        }
     }
 
     @Override
     public void setAlpha(int alpha) {
         paint.setAlpha(alpha);
+        fillPaint.setAlpha(alpha);
         invalidateSelf();
     }
 
     @Override
     public void setColorFilter(ColorFilter colorFilter) {
         paint.setColorFilter(colorFilter);
+        fillPaint.setColorFilter(colorFilter);
         invalidateSelf();
     }
 

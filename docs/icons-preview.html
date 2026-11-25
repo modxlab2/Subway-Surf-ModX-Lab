@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ModX Lab — Icons Preview (ModxIcons.java)</title>
+  <style>
+    :root {
+      --page: #131312;
+      --surface: #0E0E0D;
+      --card: #222220;
+      --card-hover: #292927;
+      --line: #31302E;
+      --line-strong: #464541;
+      --fg: #FAF9F5;
+      --muted: #BAB8AE;
+      --subtle: #93918A;
+      --accent: #20C997;
+      --telegram: #229ED9;
+      --danger: #F87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 28px 20px 48px;
+      background: var(--page);
+      color: var(--fg);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .wrap { max-width: 1080px; margin: 0 auto; }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 22px;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+    h1 { font-size: 18px; margin: 0; font-weight: 600; }
+    .pill {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent);
+      background: rgba(32, 201, 151, 0.12);
+      border: 1px solid rgba(32, 201, 151, 0.32);
+      border-radius: 6px;
+      padding: 4px 8px;
+    }
+    .sub { color: var(--muted); font-size: 13px; margin: 0; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
+      gap: 12px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      transition: background .15s, border-color .15s;
+    }
+    .card:hover { background: var(--card-hover); border-color: var(--line-strong); }
+    .swatches {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px 14px;
+    }
+    .name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: var(--fg); font-weight: 600; }
+    .meta { font-size: 11px; color: var(--subtle); }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <div class="brand">
+        <span class="dot"></span>
+        <h1>ModX Lab — Vector Icon Set</h1>
+        <span class="pill">ModxIcons.java · 24×24 · stroke 1.75</span>
+      </div>
+      <p class="sub">All icons rendered programmatically in Java via <code>SvgIcon</code> (zero <code>res/</code> or <code>R.*</code>).</p>
+    </div>
+  </header>
+
+  <div class="grid" id="grid"></div>
+</div>
+
+<script>
+const ICONS = [
+  { name: "home", note: "Tab: Main", stroke: ['M3 9 L12 2 L21 9 V20 A2 2 0 0 1 19 22 H5 A2 2 0 0 1 3 20 Z', 'M9 22 V12 H15 V22'] },
+  { name: "shoppingBag", note: "Tab: Shop", stroke: ['M6 2 L3 6 V20 A2 2 0 0 0 5 22 H19 A2 2 0 0 0 21 20 V6 L18 2 Z', 'M3 6 H21', 'M16 10 A4 4 0 0 1 8 10'] },
+  { name: "shieldCheck", note: "Tab: Safety", stroke: ['M12 22 S20 18 20 12 V5 L12 2 L4 5 V12 C4 18 12 22 12 22 Z', 'M9 12 L11 14 L15 10'] },
+  { name: "user", note: "Tab: Player / Login", stroke: ['M19 21 V19 A4 4 0 0 0 15 15 H9 A4 4 0 0 0 5 19 V21'], circles: [[12,7,4]] },
+  { name: "zap", note: "Tab: Power", stroke: ['M13 2 L4 14 H12 L11 22 L20 10 H12 L13 2 Z'] },
+  { name: "target", note: "Tab: Score", circles: [[12,12,10],[12,12,6],[12,12,2]] },
+  { name: "camera", note: "Tab: Camera", stroke: ['M14.5 4 H9.5 L7 7 H4 A2 2 0 0 0 2 9 V18 A2 2 0 0 0 4 20 H20 A2 2 0 0 0 22 18 V9 A2 2 0 0 0 20 7 H17 L14.5 4 Z'], circles: [[12,13,3]] },
+  { name: "globe", note: "Tab: World", stroke: ['M12 2 A14.5 14.5 0 0 0 12 22 A14.5 14.5 0 0 0 12 2', 'M2 12 H22'], circles: [[12,12,10]] },
+  { name: "eye", note: "Tab: Chams", stroke: ['M2 12 S5.5 5 12 5 S22 12 22 12 S18.5 19 12 19 S2 12 2 12 Z'], circles: [[12,12,3]] },
+  { name: "settings", note: "Tab: Settings / Header", stroke: ['M19.4 15 A1.65 1.65 0 0 0 19.73 16.82 L19.79 16.88 A2 2 0 0 1 16.96 19.71 L16.9 19.65 A1.65 1.65 0 0 0 15 19.98 A1.65 1.65 0 0 0 14 21.5 V21.66 A2 2 0 0 1 10 21.66 V21.57 A1.65 1.65 0 0 0 8.92 20.06 A1.65 1.65 0 0 0 7.1 20.39 L7.04 20.45 A2 2 0 0 1 4.21 17.62 L4.27 17.56 A1.65 1.65 0 0 0 4.6 15.74 A1.65 1.65 0 0 0 3.09 14.74 H3 A2 2 0 0 1 3 10.74 H3.09 A1.65 1.65 0 0 0 4.6 9.66 A1.65 1.65 0 0 0 4.27 7.84 L4.21 7.78 A2 2 0 0 1 7.04 4.95 L7.1 5.01 A1.65 1.65 0 0 0 8.92 5.34 H9 A1.65 1.65 0 0 0 10 3.83 V3.66 A2 2 0 0 1 14 3.66 V3.75 A1.65 1.65 0 0 0 15 5.26 A1.65 1.65 0 0 0 16.82 4.93 L16.88 4.87 A2 2 0 0 1 19.71 7.7 L19.65 7.76 A1.65 1.65 0 0 0 19.32 9.58 V9.66 A1.65 1.65 0 0 0 20.83 10.66 H21 A2 2 0 0 1 21 14.66 H20.91 A1.65 1.65 0 0 0 19.4 15 Z'], circles: [[12,12,3]] },
+  { name: "grid", note: "Fallback Tab", rects: [[3,3,7.5,7.5,1.5],[13.5,3,7.5,7.5,1.5],[3,13.5,7.5,7.5,1.5],[13.5,13.5,7.5,7.5,1.5]] },
+  { name: "lock", note: "Password Field", stroke: ['M7 11 V7 A5 5 0 0 1 17 7 V11'], rects: [[3,11,18,11,2]] },
+  { name: "clipboardPaste", note: "Material content_paste", fill: ['M19 2 H14.82 C14.4 0.84 13.3 0 12 0 C10.7 0 9.6 0.84 9.18 2 H5 C3.9 2 3 2.9 3 4 V20 C3 21.1 3.9 22 5 22 H19 C20.1 22 21 21.1 21 20 V4 C21 2.9 20.1 2 19 2 Z M12 2 C12.55 2 13 2.45 13 3 C13 3.55 12.55 4 12 4 C11.45 4 11 3.55 11 3 C11 2.45 11.45 2 12 2 Z M19 20 H5 V4 H7 V7 H17 V4 H19 V20 Z', 'M8 10 H16 V12 H8 Z', 'M8 14 H14 V16 H8 Z'] },
+  { name: "wifiOff", note: "Status: Offline", stroke: ['M8.5 16.43 A5 5 0 0 1 15.5 16.43', 'M5 12.86 A10 10 0 0 1 10.17 10.17', 'M19 12.86 A10 10 0 0 0 17 11.34', 'M2 8.82 A15 15 0 0 1 6.18 6.18', 'M22 8.82 A15 15 0 0 0 10.71 5.06', 'M2 2 L22 22'], fillCircles: [[12,20,1.1]] },
+  { name: "alertCircle", note: "Status: Error", stroke: ['M12 8 V12.5'], circles: [[12,12,10]], fillCircles: [[12,16.2,1.1]] },
+  { name: "checkCircle", note: "Status: Success", stroke: ['M9 12 L11 14 L15 10'], circles: [[12,12,10]] },
+  { name: "circle", note: "Status: Idle", circles: [[12,12,10]] },
+  { name: "loader", note: "Status: Checking", stroke: ['M21 12 A9 9 0 1 1 14.78 3.44'] },
+  { name: "refreshCw", note: "Updates / Retry", stroke: ['M3 12 A9 9 0 0 1 18.74 5.74 L21 8', 'M21 3 V8 H16', 'M21 12 A9 9 0 0 1 5.26 18.26 L3 16', 'M8 16 H3 V21'] },
+  { name: "chevronDown", note: "Accordion / Spinner", stroke: ['M6 9 L12 15 L18 9'] },
+  { name: "download", note: "Update Dialog", stroke: ['M21 15 V19 A2 2 0 0 1 19 21 H5 A2 2 0 0 1 3 19 V15', 'M7 10 L12 15 L17 10', 'M12 15 V3'] },
+  { name: "minimize", note: "Footer Minimize", stroke: ['M4 14 H10 V20', 'M20 10 H14 V4', 'M14 10 L21 3', 'M3 21 L10 14'] },
+  { name: "slidersHorizontal", note: "Preferences", stroke: ['M21 4 H14 M10 4 H3', 'M21 12 H12 M8 12 H3', 'M21 20 H16 M12 20 H3', 'M14 2 V6 M8 10 V14 M16 18 V22'] },
+  { name: "info", note: "Notice Callout", stroke: ['M12 16 V12'], circles: [[12,12,10]], fillCircles: [[12,8,1.1]] },
+  { name: "externalLink", note: "ButtonLink", stroke: ['M15 3 H21 V9', 'M10 14 L21 3', 'M18 13 V19 A2 2 0 0 1 16 21 H5 A2 2 0 0 1 3 19 V8 A2 2 0 0 1 5 6 H11'] },
+  { name: "arrowLeft", note: "ActionMode Back", stroke: ['M12 19 L5 12 L12 5', 'M19 12 H5'] },
+  { name: "moreVertical", note: "ActionMode Overflow", fillCircles: [[12,5,1.45],[12,12,1.45],[12,19,1.45]] },
+  { name: "copy", note: "Copy Logs / Key", stroke: ['M5 15 H4 A2 2 0 0 1 2 13 V4 A2 2 0 0 1 4 2 H13 A2 2 0 0 1 15 4 V5'], rects: [[9,9,13,13,2]] },
+  { name: "close", note: "Dismiss", stroke: ['M18 6 L6 18', 'M6 6 L18 18'] },
+  { name: "telegramPlane", note: "Telegram Pill", accent: "#229ED9", fill: ['M21.8 3.6 L2.4 11.1 C1.1 11.6 1.1 12.3 2.2 12.6 L7.1 14.1 L18.4 7.0 C18.9 6.7 19.4 6.9 19.0 7.2 L9.9 15.5 L9.5 20.6 C10.0 20.6 10.2 20.4 10.5 20.1 L12.9 17.8 L17.8 21.4 C18.7 21.9 19.4 21.6 19.6 20.6 L22.9 5.0 C23.2 3.7 22.4 3.2 21.8 3.6 Z'] }
+];
+
+function svg(ic, color) {
+  let inner = '';
+  (ic.stroke || []).forEach(d => {
+    inner += `<path d="${d}" fill="none" stroke="${color}" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>`;
+  });
+  (ic.circles || []).forEach(([cx,cy,r]) => {
+    inner += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}" stroke-width="1.75"/>`;
+  });
+  (ic.rects || []).forEach(([x,y,w,h,rx]) => {
+    inner += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" fill="none" stroke="${color}" stroke-width="1.75"/>`;
+  });
+  (ic.fill || []).forEach(d => {
+    inner += `<path d="${d}" fill="${color}"/>`;
+  });
+  (ic.fillCircles || []).forEach(([cx,cy,r]) => {
+    inner += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}"/>`;
+  });
+  return `<svg width="24" height="24" viewBox="0 0 24 24">${inner}</svg>`;
+}
+
+const grid = document.getElementById('grid');
+ICONS.forEach(ic => {
+  const accentColor = ic.accent || '#20C997';
+  const el = document.createElement('div');
+  el.className = 'card';
+  el.innerHTML = `
+    <div class="swatches">
+      ${svg(ic, accentColor)}
+      ${svg(ic, '#FAF9F5')}
+      ${svg(ic, '#BAB8AE')}
+    </div>
+    <div>
+      <div class="name">${ic.name}</div>
+      <div class="meta">${ic.note}</div>
+    </div>
+  `;
+  grid.appendChild(el);
+});
+</script>
+</body>
+</html>

@@ -18,6 +18,7 @@ import java.security.KeyStore;
 import java.security.SecureRandom;
 import java.util.Calendar;
 
+import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
@@ -36,7 +37,9 @@ public final class SecureTokenStore {
 
     private static final String KEY_ENC_TOKEN = "enc_tok";
     private static final String KEY_ENC_DEVICE_ID = "enc_did";
+    private static final String KEY_PLAIN_DEVICE_ID = "did_ns";
     private static final String KEY_ENC_AW_SESSION = "enc_aws";
+    private static final String KEY_ENC_LAST_USER = "enc_lusr";
     private static final String KEY_WRAPPED_AES = "enc_wk";
 
     private static final String KEYSTORE_PROVIDER = "AndroidKeyStore";
@@ -54,7 +57,7 @@ public final class SecureTokenStore {
         try {
             SharedPreferences legacySave = app.getSharedPreferences(LEGACY_PREF_SAVE, Context.MODE_PRIVATE);
             if (!legacySave.getAll().isEmpty()) {
-                legacySave.edit().clear().apply();
+                legacySave.edit().clear().commit();
             }
         } catch (Throwable ignored) { }
 
@@ -70,7 +73,7 @@ public final class SecureTokenStore {
                         .remove("expiry")
                         .remove("device_id")
                         .remove("aw_session_cookie")
-                        .apply();
+                        .commit();
             }
         } catch (Throwable ignored) { }
     }
@@ -86,16 +89,42 @@ public final class SecureTokenStore {
 
     public static void clearToken(Context ctx) {
         if (ctx == null) return;
-        prefs(ctx).edit().remove(KEY_ENC_TOKEN).apply();
+        prefs(ctx).edit().remove(KEY_ENC_TOKEN).commit();
+    }
+
+    public static void saveLastUser(Context ctx, String user) {
+        if (ctx == null) return;
+        if (user == null || user.trim().isEmpty()) {
+            clearLastUser(ctx);
+            return;
+        }
+        putEncrypted(ctx, KEY_ENC_LAST_USER, user.trim());
+    }
+
+    public static String loadLastUser(Context ctx) {
+        return getEncrypted(ctx, KEY_ENC_LAST_USER);
+    }
+
+    public static void clearLastUser(Context ctx) {
+        if (ctx == null) return;
+        prefs(ctx).edit().remove(KEY_ENC_LAST_USER).commit();
     }
 
     public static void saveDeviceId(Context ctx, String deviceId) {
         if (ctx == null || deviceId == null || deviceId.isEmpty()) return;
-        putEncrypted(ctx, KEY_ENC_DEVICE_ID, deviceId);
+        if (putEncrypted(ctx, KEY_ENC_DEVICE_ID, deviceId)) {
+            prefs(ctx).edit().remove(KEY_PLAIN_DEVICE_ID).apply();
+        } else {
+            // Non-secret device identifier fallback only if OEM Keystore fails
+            prefs(ctx).edit().putString(KEY_PLAIN_DEVICE_ID, deviceId).commit();
+        }
     }
 
     public static String loadDeviceId(Context ctx) {
-        return getEncrypted(ctx, KEY_ENC_DEVICE_ID);
+        if (ctx == null) return "";
+        String enc = getEncrypted(ctx, KEY_ENC_DEVICE_ID);
+        if (enc != null && !enc.isEmpty()) return enc;
+        return prefs(ctx).getString(KEY_PLAIN_DEVICE_ID, "");
     }
 
     public static void saveAppwriteSession(Context ctx, String cookie) {
@@ -109,7 +138,7 @@ public final class SecureTokenStore {
 
     public static void clearAppwriteSession(Context ctx) {
         if (ctx == null) return;
-        prefs(ctx).edit().remove(KEY_ENC_AW_SESSION).apply();
+        prefs(ctx).edit().remove(KEY_ENC_AW_SESSION).commit();
     }
 
     public static String extractUserFromToken(String token) {
@@ -130,33 +159,81 @@ public final class SecureTokenStore {
         return app.getSharedPreferences(PREF_KEY, Context.MODE_PRIVATE);
     }
 
-    private static synchronized void putEncrypted(Context ctx, String prefKey, String plaintext) {
-        try {
-            SecretKey key = getOrCreateAesKey(ctx);
-            if (key == null) return;
-
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            byte[] iv;
-            byte[] encrypted;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                cipher.init(Cipher.ENCRYPT_MODE, key);
-                iv = cipher.getIV();
-                encrypted = cipher.doFinal(plaintext.getBytes("UTF-8"));
-            } else {
-                iv = new byte[GCM_IV_LEN];
-                new SecureRandom().nextBytes(iv);
-                cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_BITS, iv));
-                encrypted = cipher.doFinal(plaintext.getBytes("UTF-8"));
+    private static boolean isKeystoreRecoverableError(Throwable t) {
+        Throwable cur = t;
+        int depth = 0;
+        while (cur != null && depth++ < 6) {
+            if (cur instanceof AEADBadTagException
+                    || cur instanceof java.security.InvalidKeyException
+                    || cur instanceof java.security.UnrecoverableKeyException
+                    || cur instanceof java.security.KeyStoreException) {
+                return true;
             }
+            String cls = cur.getClass().getName();
+            if (cls.contains("KeyPermanentlyInvalidatedException")
+                    || cls.contains("KeyStoreException")) {
+                return true;
+            }
+            cur = cur.getCause();
+        }
+        return false;
+    }
 
-            if (iv == null || iv.length != GCM_IV_LEN) return;
-            byte[] combined = new byte[iv.length + encrypted.length];
-            System.arraycopy(iv, 0, combined, 0, iv.length);
-            System.arraycopy(encrypted, 0, combined, iv.length, encrypted.length);
-
-            String encoded = PREFIX_GCM + Base64.encodeToString(combined, Base64.NO_WRAP);
-            prefs(ctx).edit().putString(prefKey, encoded).apply();
+    private static void resetCorruptedKeystore(Context ctx) {
+        try {
+            KeyStore ks = KeyStore.getInstance(KEYSTORE_PROVIDER);
+            ks.load(null);
+            if (ks.containsAlias(AES_KEY_ALIAS)) ks.deleteEntry(AES_KEY_ALIAS);
+            if (ks.containsAlias(RSA_KEY_ALIAS)) ks.deleteEntry(RSA_KEY_ALIAS);
         } catch (Throwable ignored) { }
+
+        try {
+            prefs(ctx).edit()
+                    .remove(KEY_ENC_TOKEN)
+                    .remove(KEY_ENC_AW_SESSION)
+                    .remove(KEY_ENC_DEVICE_ID)
+                    .remove(KEY_WRAPPED_AES)
+                    .commit();
+        } catch (Throwable ignored) { }
+    }
+
+    private static synchronized boolean putEncrypted(Context ctx, String prefKey, String plaintext) {
+        for (int attempt = 0; attempt < 2; attempt++) {
+            try {
+                SecretKey key = getOrCreateAesKey(ctx);
+                if (key == null) return false;
+
+                Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+                byte[] iv;
+                byte[] encrypted;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    cipher.init(Cipher.ENCRYPT_MODE, key);
+                    iv = cipher.getIV();
+                    encrypted = cipher.doFinal(plaintext.getBytes("UTF-8"));
+                } else {
+                    iv = new byte[GCM_IV_LEN];
+                    new SecureRandom().nextBytes(iv);
+                    cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_BITS, iv));
+                    encrypted = cipher.doFinal(plaintext.getBytes("UTF-8"));
+                }
+
+                if (iv == null || iv.length != GCM_IV_LEN) return false;
+                byte[] combined = new byte[iv.length + encrypted.length];
+                System.arraycopy(iv, 0, combined, 0, iv.length);
+                System.arraycopy(encrypted, 0, combined, iv.length, encrypted.length);
+
+                String encoded = PREFIX_GCM + Base64.encodeToString(combined, Base64.NO_WRAP);
+                prefs(ctx).edit().putString(prefKey, encoded).commit();
+                return true;
+            } catch (Throwable t) {
+                if (attempt == 0 && isKeystoreRecoverableError(t)) {
+                    resetCorruptedKeystore(ctx);
+                    continue;
+                }
+                return false;
+            }
+        }
+        return false;
     }
 
     private static synchronized String getEncrypted(Context ctx, String prefKey) {
@@ -180,6 +257,9 @@ public final class SecureTokenStore {
             byte[] plain = cipher.doFinal(cipherBytes);
             return new String(plain, "UTF-8");
         } catch (Throwable t) {
+            if (isKeystoreRecoverableError(t)) {
+                resetCorruptedKeystore(ctx);
+            }
             return "";
         }
     }
@@ -246,7 +326,7 @@ public final class SecureTokenStore {
             Cipher rsa = Cipher.getInstance("RSA/ECB/PKCS1Padding");
             rsa.init(Cipher.ENCRYPT_MODE, privEntry.getCertificate().getPublicKey());
             byte[] wrapped = rsa.doFinal(rawAes);
-            p.edit().putString(KEY_WRAPPED_AES, Base64.encodeToString(wrapped, Base64.NO_WRAP)).apply();
+            p.edit().putString(KEY_WRAPPED_AES, Base64.encodeToString(wrapped, Base64.NO_WRAP)).commit();
             return new SecretKeySpec(rawAes, "AES");
         } catch (Throwable t) {
             return null;

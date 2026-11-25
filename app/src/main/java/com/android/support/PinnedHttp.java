@@ -18,17 +18,23 @@ import java.util.Map;
 
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSessionContext;
 import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509TrustManager;
 
 /**
- * PinnedHttp — Certificate-pinned HTTPS client with system trust-chain validation.
+ * PinnedHttp — Certificate-pinned HTTPS client with system trust-chain validation,
+ * strict host allowlist, TLS session reuse, and prewarming.
  */
 public final class PinnedHttp {
 
     private static final boolean ENFORCE_PINS = true;
+    private static final int GET_CONNECT_TIMEOUT_MS = 8000;
+    private static final int GET_READ_TIMEOUT_MS = 8000;
+    private static final int POST_CONNECT_TIMEOUT_MS = 8000;
+    private static final int POST_READ_TIMEOUT_MS = 12000;
 
     // Endpoint-specific SPKI SHA-256 pins (Base64): intermediate CA + leaf backup pin.
     private static final String[] FIREBASE_PINS = {
@@ -51,6 +57,22 @@ public final class PinnedHttp {
     public static String getLastError() {
         String err = sLastError.get();
         return (err != null && !err.isEmpty()) ? err : "network";
+    }
+
+    /**
+     * Eagerly builds TLS factories (and TrustManager CAs) for known hosts off the UI thread.
+     */
+    public static void prewarm(String... urls) {
+        if (urls == null) return;
+        for (String urlStr : urls) {
+            if (urlStr == null || urlStr.isEmpty()) continue;
+            try {
+                URL url = new URL(urlStr);
+                if ("https".equalsIgnoreCase(url.getProtocol())) {
+                    getFactoryForHost(url.getHost());
+                }
+            } catch (Exception ignored) { }
+        }
     }
 
     private static String classifyException(Throwable t) {
@@ -104,6 +126,7 @@ public final class PinnedHttp {
         }
 
         HttpsURLConnection conn = null;
+        boolean keepAliveOk = false;
         try {
             URL url = new URL(urlStr);
             if (!"https".equalsIgnoreCase(url.getProtocol())) {
@@ -120,19 +143,27 @@ public final class PinnedHttp {
             conn = (HttpsURLConnection) url.openConnection();
             conn.setSSLSocketFactory(factory);
             conn.setRequestMethod("GET");
-            conn.setConnectTimeout(10000);
-            conn.setReadTimeout(10000);
+            conn.setUseCaches(false);
+            conn.setConnectTimeout(GET_CONNECT_TIMEOUT_MS);
+            conn.setReadTimeout(GET_READ_TIMEOUT_MS);
             conn.setInstanceFollowRedirects(false);
             conn.setRequestProperty("Accept", "application/json");
+            conn.setRequestProperty("Connection", "keep-alive");
             conn.setRequestProperty("User-Agent", "ModXLab/1.0");
 
             int code = conn.getResponseCode();
             if (code != 200) {
+                InputStream err = conn.getErrorStream();
+                if (err != null) {
+                    try { readStream(err); } catch (Exception ignored) { }
+                }
                 sLastError.set("http_" + code);
                 return null;
             }
 
-            return readStream(conn.getInputStream());
+            String out = readStream(conn.getInputStream());
+            keepAliveOk = true;
+            return out;
         } catch (Exception e) {
             String reason = classifyException(e);
             sLastError.set(reason);
@@ -141,7 +172,9 @@ public final class PinnedHttp {
             }
             return null;
         } finally {
-            if (conn != null) try { conn.disconnect(); } catch (Exception ignored) { }
+            if (!keepAliveOk && conn != null) {
+                try { conn.disconnect(); } catch (Exception ignored) { }
+            }
         }
     }
 
@@ -156,6 +189,7 @@ public final class PinnedHttp {
         }
 
         HttpsURLConnection conn = null;
+        boolean keepAliveOk = false;
         try {
             URL url = new URL(urlStr);
             if (!"https".equalsIgnoreCase(url.getProtocol())) {
@@ -172,12 +206,14 @@ public final class PinnedHttp {
             conn = (HttpsURLConnection) url.openConnection();
             conn.setSSLSocketFactory(factory);
             conn.setRequestMethod("POST");
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(15000);
+            conn.setUseCaches(false);
+            conn.setConnectTimeout(POST_CONNECT_TIMEOUT_MS);
+            conn.setReadTimeout(POST_READ_TIMEOUT_MS);
             conn.setDoOutput(true);
             conn.setInstanceFollowRedirects(false);
             conn.setRequestProperty("Accept", "application/json");
             conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            conn.setRequestProperty("Connection", "keep-alive");
             conn.setRequestProperty("User-Agent", "ModXLab/1.0");
 
             if (headers != null) {
@@ -191,15 +227,19 @@ public final class PinnedHttp {
             byte[] payload = (jsonBody != null ? jsonBody : "{}").getBytes("UTF-8");
             conn.setFixedLengthStreamingMode(payload.length);
             OutputStream os = conn.getOutputStream();
-            os.write(payload);
-            os.flush();
-            os.close();
+            try {
+                os.write(payload);
+                os.flush();
+            } finally {
+                os.close();
+            }
 
             int code = conn.getResponseCode();
             InputStream stream = (code >= 200 && code < 400)
                     ? conn.getInputStream()
                     : conn.getErrorStream();
             String body = stream != null ? readStream(stream) : "";
+            keepAliveOk = true;
 
             List<String> cookies = null;
             Map<String, List<String>> respHeaders = conn.getHeaderFields();
@@ -220,17 +260,22 @@ public final class PinnedHttp {
             }
             return null;
         } finally {
-            if (conn != null) try { conn.disconnect(); } catch (Exception ignored) { }
+            if (!keepAliveOk && conn != null) {
+                try { conn.disconnect(); } catch (Exception ignored) { }
+            }
         }
     }
 
     private static String readStream(InputStream is) throws Exception {
         BufferedReader br = new BufferedReader(new InputStreamReader(is, "UTF-8"));
-        StringBuilder sb = new StringBuilder();
-        String line;
-        while ((line = br.readLine()) != null) sb.append(line);
-        br.close();
-        return sb.toString();
+        try {
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) sb.append(line);
+            return sb.toString();
+        } finally {
+            try { br.close(); } catch (Exception ignored) { }
+        }
     }
 
     private static SSLSocketFactory getFactoryForHost(String host) {
@@ -246,13 +291,17 @@ public final class PinnedHttp {
                 return sAppwriteFactory;
             }
         }
-        if (sFirebaseFactory != null) return sFirebaseFactory;
-        synchronized (sLock) {
-            if (sFirebaseFactory == null) {
-                sFirebaseFactory = buildFactory(FIREBASE_PINS);
+        boolean isFirebase = lower.endsWith(".firebaseio.com") || lower.endsWith(".firebasedatabase.app");
+        if (isFirebase) {
+            if (sFirebaseFactory != null) return sFirebaseFactory;
+            synchronized (sLock) {
+                if (sFirebaseFactory == null) {
+                    sFirebaseFactory = buildFactory(FIREBASE_PINS);
+                }
+                return sFirebaseFactory;
             }
-            return sFirebaseFactory;
         }
+        return null;
     }
 
     private static String describeThrowable(Throwable t) {
@@ -320,6 +369,12 @@ public final class PinnedHttp {
             ctx.init(null,
                     new TrustManager[]{ new PinTrustManager(systemTm, pins) },
                     new SecureRandom());
+            try {
+                SSLSessionContext sessionCtx = ctx.getClientSessionContext();
+                if (sessionCtx != null) {
+                    sessionCtx.setSessionTimeout(3600);
+                }
+            } catch (Exception ignored) { }
             return ctx.getSocketFactory();
         } catch (Exception e) {
             if (BuildConfig.SEC_DIAG) {

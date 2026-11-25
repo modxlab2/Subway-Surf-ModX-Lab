@@ -35,7 +35,7 @@ import java.util.Map;
  */
 public final class FeatureStateStore {
 
-    public static final int DEFAULT_MENU_COLOR = Color.parseColor("#3DDB87");
+    public static final int DEFAULT_MENU_COLOR = ModxTheme.ACCENT;
 
     private static final String KEY_SAVE_ENABLED        = "save_enabled";
     private static final String KEY_MENU_ACCENT         = "menu_accent_color";
