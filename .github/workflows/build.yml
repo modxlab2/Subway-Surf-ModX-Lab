@@ -278,7 +278,7 @@ jobs:
 
           if [ "${IS_DIAG}" != "true" ]; then
             for bin in "${INSPECT_DIR}/classes.dex" "${INSPECT_DIR}"/lib/*/libModXLab.so; do
-              if strings "${bin}" | grep -Eq "MXL_UI|MXL|DiagLogViewer"; then
+              if strings "${bin}" | grep -Eq "MXL_UI|MXL|DiagLogViewer|JNI_OnLoad OK|Environment unsafe: Frida detected"; then
                 echo "::error::Diagnostic string leaked into normal release binary: ${bin}"
                 exit 1
               fi
@@ -289,8 +289,12 @@ jobs:
               exit 1
             fi
             for so in "${INSPECT_DIR}"/lib/*/libModXLab.so; do
-              if ! strings "${so}" | grep -Fq "MXL"; then
-                echo "::error::Expected diagnostic string 'MXL' missing from diagnostic binary: ${so}"
+              if ! strings -n 3 "${so}" | grep -Fq "MXL"; then
+                echo "::error::Expected diagnostic log tag 'MXL' missing from diagnostic binary: ${so}"
+                exit 1
+              fi
+              if ! strings "${so}" | grep -Fq "JNI_OnLoad OK"; then
+                echo "::error::Expected SEC_DIAG log marker missing from diagnostic binary: ${so}"
                 exit 1
               fi
             done
@@ -350,5 +354,6 @@ jobs:
       - name: Cleanup keystore and temp template
         if: always()
         run: |
-          rm -f "${GITHUB_WORKSPACE}/release.keystore" "${RUNNER_TEMP}/Security.cpp.template" "${RUNNER_TEMP}/inspect_apk"
+          rm -f "${GITHUB_WORKSPACE}/release.keystore" "${RUNNER_TEMP}/Security.cpp.template"
+          rm -rf "${RUNNER_TEMP}/inspect_apk"
 
