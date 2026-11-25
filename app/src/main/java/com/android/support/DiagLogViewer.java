@@ -15,6 +15,7 @@ import android.os.Looper;
 import android.os.Process;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
+import android.view.ContextThemeWrapper;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -157,7 +158,13 @@ final class DiagLogViewer {
             }
         });
 
-        AlertDialog.Builder b = new AlertDialog.Builder(ctx);
+        Context dialogCtx = (ctx instanceof Activity)
+                ? ctx
+                : new ContextThemeWrapper(ctx,
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP
+                                ? android.R.style.Theme_Material_Dialog_Alert
+                                : android.R.style.Theme_Holo_Dialog);
+        AlertDialog.Builder b = new AlertDialog.Builder(dialogCtx);
         b.setView(card);
         AlertDialog dialog = b.create();
         dialog.setCanceledOnTouchOutside(true);
@@ -170,6 +177,8 @@ final class DiagLogViewer {
                         : WindowManager.LayoutParams.TYPE_PHONE;
                 w.setType(winType);
             }
+            w.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                    | WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
         }
         dlgRef[0] = dialog;
         try {
@@ -247,6 +256,8 @@ final class DiagLogViewer {
     private static boolean matchesFilter(String line) {
         return line.contains("MXL_UI")
                 || line.contains("MXL")
+                || line.contains("Mod_Main")
+                || line.contains("Mod_Menu")
                 || line.contains("AndroidRuntime");
     }
 

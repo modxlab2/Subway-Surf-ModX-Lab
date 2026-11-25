@@ -462,7 +462,7 @@ public class LoginHelper {
         header.setOrientation(LinearLayout.VERTICAL);
         header.setGravity(Gravity.CENTER_HORIZONTAL);
         LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
-        hLp.setMargins(0, 0, 0, dp(18));
+        hLp.setMargins(0, 0, 0, dp(BuildConfig.SEC_DIAG ? 8 : 18));
         header.setLayoutParams(hLp);
 
         TextView title = new TextView(ctx);
@@ -521,6 +521,33 @@ public class LoginHelper {
         sLp.setMargins(0, dp(3), 0, 0);
         subtitle.setLayoutParams(sLp);
         header.addView(subtitle);
+
+        if (BuildConfig.SEC_DIAG) {
+            TextView diagBtn = new TextView(ctx);
+            diagBtn.setText("DIAG LOGS (TAP)");
+            diagBtn.setTextColor(COLOR_ACCENT);
+            diagBtn.setTextSize(10f);
+            diagBtn.setTypeface(tfBold);
+            diagBtn.setGravity(Gravity.CENTER);
+            diagBtn.setPadding(dp(10), dp(4), dp(10), dp(4));
+            GradientDrawable dbg = new GradientDrawable();
+            dbg.setColor(withAlpha(COLOR_ACCENT, 0x1A));
+            dbg.setCornerRadius(dp(10));
+            dbg.setStroke(dp(1), withAlpha(COLOR_ACCENT, 0x88));
+            diagBtn.setBackground(dbg);
+            LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
+            dLp.setMargins(0, dp(6), 0, 0);
+            diagBtn.setLayoutParams(dLp);
+            diagBtn.setClickable(true);
+            diagBtn.setFocusable(true);
+            diagBtn.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    DiagLogViewer.show(ctx, overlayRequired);
+                }
+            });
+            header.addView(diagBtn);
+        }
 
         return header;
     }

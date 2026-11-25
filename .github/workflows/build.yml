@@ -278,7 +278,7 @@ jobs:
 
           if [ "${IS_DIAG}" != "true" ]; then
             for bin in "${INSPECT_DIR}/classes.dex" "${INSPECT_DIR}"/lib/*/libModXLab.so; do
-              if strings "${bin}" | grep -Eq "MXL_UI|MXL|DiagLogViewer|JNI_OnLoad OK|Environment unsafe: Frida detected"; then
+              if strings "${bin}" | grep -Eq "MXL_UI|MXL|DiagLogViewer|DIAG LOGS|JNI_OnLoad OK|Environment unsafe: Frida detected"; then
                 echo "::error::Diagnostic string leaked into normal release binary: ${bin}"
                 exit 1
               fi

@@ -21,8 +21,10 @@ import android.text.method.PasswordTransformationMethod;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.view.ActionMode;
+import android.view.ContextThemeWrapper;
 import android.view.Gravity;
 import android.view.Menu;
+import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
@@ -32,8 +34,11 @@ import android.view.WindowManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.PopupMenu;
 import android.widget.PopupWindow;
 import android.widget.TextView;
+
+import java.util.ArrayList;
 
 /**
  * Hosts real framework ActionMode (floating text-selection toolbar on API 23+,
@@ -256,6 +261,20 @@ final class TextActionModeHost {
         }
         dismissFallbackToolbar();
 
+        // On Android 14+ (API 34+), overlay windows (Launcher Service), or non-Activity
+        // contexts, a separate FLAG_NOT_TOUCHABLE/FLAG_NOT_FOCUSABLE hostDialog's system
+        // FloatingToolbar can be ordered behind rootFrame or suppressed by WindowManager,
+        // while returning a non-null ActionMode would suppress fallback. Returning a real
+        // ActionMode backed by a PopupWindow anchored directly on owner keeps native
+        // selection handles alive AND guarantees the toolbar renders on top of rootFrame.
+        boolean preferDirectPopup = overlayRequired
+                || !(ctx instanceof Activity)
+                || Build.VERSION.SDK_INT >= 34;
+
+        if (preferDirectPopup) {
+            return startDirectPopupMode(owner, origCallback, type, hasTypeArg, "direct-overlay-or-api34");
+        }
+
         if (!isHostReady()) {
             if (BuildConfig.SEC_DIAG) {
                 boolean showing = false;
@@ -265,14 +284,51 @@ final class TextActionModeHost {
                         + ", token=" + (dummyView != null && dummyView.getWindowToken() != null)
                         + ", shown=" + (dummyView != null && dummyView.isShown())
                         + ", size=" + (dummyView != null ? dummyView.getWidth() + "x" + dummyView.getHeight() : "null")
-                        + ") -> scheduling 1-frame retry");
+                        + ") -> using direct popup ActionMode");
             }
             prepare();
-            scheduleOneFrameRetry(owner, origCallback, type, hasTypeArg, 0);
-            return null;
+            return startDirectPopupMode(owner, origCallback, type, hasTypeArg, "host-not-ready");
         }
 
-        return startFrameworkMode(owner, origCallback, type, hasTypeArg, false);
+        ActionMode fwMode = startFrameworkMode(owner, origCallback, type, hasTypeArg, false);
+        if (fwMode != null) {
+            return fwMode;
+        }
+        return startDirectPopupMode(owner, origCallback, type, hasTypeArg, "framework-null");
+    }
+
+    private ActionMode startDirectPopupMode(final EditText owner,
+                                            final ActionMode.Callback origCallback,
+                                            final int type,
+                                            final boolean hasTypeArg,
+                                            final String reason) {
+        try {
+            HostedPopupActionMode mode = new HostedPopupActionMode(
+                    this, ctx, owner, origCallback, type, hasTypeArg);
+            if (!mode.start()) {
+                if (BuildConfig.SEC_DIAG) {
+                    SecurityNative.diagUi("directPopupMode: onCreateActionMode returned false (reason=" + reason + ")");
+                }
+                return null;
+            }
+            activeMode = mode;
+            activeOwner = owner;
+            attachPositionObserver(owner);
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diagUi("toolbar path used: direct-popup-mode (reason=" + reason
+                        + ", type=" + type
+                        + ", overlay=" + overlayRequired
+                        + ", api=" + Build.VERSION.SDK_INT + ")");
+            }
+            return mode;
+        } catch (Throwable t) {
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diagUi("directPopupMode failed (" + reason + "): "
+                        + SecurityNative.diagException(t));
+            }
+            showFallbackToolbar(owner, "direct-popup-exception");
+            return null;
+        }
     }
 
     private void scheduleOneFrameRetry(final EditText owner,
@@ -464,9 +520,10 @@ final class TextActionModeHost {
     }
 
     void invalidateContentRectIfOwner(EditText owner) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-                && activeMode != null
-                && activeOwner == owner) {
+        if (activeMode == null || activeOwner != owner) return;
+        if (activeMode instanceof HostedPopupActionMode) {
+            ((HostedPopupActionMode) activeMode).updatePopupPosition();
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             Api23Helper.invalidateContentRect(activeMode);
         }
     }
@@ -819,7 +876,11 @@ final class TextActionModeHost {
                     lastOwnerScreenX = etLoc[0];
                     lastOwnerScreenY = etLoc[1];
                     lastOwnerScrollX = sx;
-                    Api23Helper.invalidateContentRect(activeMode);
+                    if (activeMode instanceof HostedPopupActionMode) {
+                        ((HostedPopupActionMode) activeMode).updatePopupPosition();
+                    } else {
+                        Api23Helper.invalidateContentRect(activeMode);
+                    }
                 }
                 return true;
             }
@@ -974,10 +1035,332 @@ final class TextActionModeHost {
         }
 
         static void invalidateContentRect(ActionMode mode) {
+            if (mode instanceof HostedPopupActionMode) {
+                ((HostedPopupActionMode) mode).updatePopupPosition();
+                return;
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && mode != null) {
                 try {
                     mode.invalidateContentRect();
                 } catch (Throwable ignored) { }
+            }
+        }
+    }
+
+    // =========================================================================
+    // Real ActionMode backed by a PopupWindow anchored directly on owner
+    // (guaranteed visible above overlay/rootFrame on Android 14+ & Service ctx)
+    // =========================================================================
+    private static final class HostedPopupActionMode extends ActionMode {
+        private final TextActionModeHost host;
+        private final Context ctx;
+        private final Context themedCtx;
+        private final EditText owner;
+        private final ActionMode.Callback origCallback;
+        private final Menu menu;
+        private final Rect tmpRect = new Rect();
+        private final int[] ownerLoc = new int[2];
+
+        private PopupWindow popup;
+        private CharSequence title;
+        private CharSequence subtitle;
+        private View customView;
+        private boolean finished = false;
+        private int lastPopW = 0;
+        private int lastPopH = 0;
+
+        HostedPopupActionMode(TextActionModeHost host,
+                              Context ctx,
+                              EditText owner,
+                              ActionMode.Callback origCallback,
+                              int type,
+                              boolean hasTypeArg) {
+            this.host = host;
+            this.ctx = ctx;
+            this.themedCtx = (ctx instanceof Activity)
+                    ? ctx
+                    : new ContextThemeWrapper(ctx, android.R.style.Theme_DeviceDefault);
+            this.owner = owner;
+            this.origCallback = origCallback;
+            this.menu = new PopupMenu(this.themedCtx, owner).getMenu();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && hasTypeArg) {
+                try {
+                    setType(type);
+                } catch (Throwable ignored) { }
+            }
+        }
+
+        boolean start() {
+            boolean created = origCallback.onCreateActionMode(this, menu);
+            if (!created) {
+                origCallback.onDestroyActionMode(this);
+                finished = true;
+                return false;
+            }
+            origCallback.onPrepareActionMode(this, menu);
+            refreshPopup();
+            return true;
+        }
+
+        @Override
+        public void invalidate() {
+            if (finished) return;
+            try {
+                origCallback.onPrepareActionMode(this, menu);
+            } catch (Throwable ignored) { }
+            refreshPopup();
+        }
+
+        @Override
+        public void finish() {
+            if (finished) return;
+            finished = true;
+            dismissPopup();
+            if (host.activeMode == this) {
+                host.activeMode = null;
+                host.activeOwner = null;
+                host.detachPositionObserver();
+            }
+            try {
+                origCallback.onDestroyActionMode(this);
+            } catch (Throwable ignored) { }
+        }
+
+        @Override public Menu getMenu() { return menu; }
+        @Override public CharSequence getTitle() { return title; }
+        @Override public void setTitle(CharSequence title) { this.title = title; }
+        @Override public void setTitle(int resId) { this.title = ctx.getString(resId); }
+        @Override public CharSequence getSubtitle() { return subtitle; }
+        @Override public void setSubtitle(CharSequence subtitle) { this.subtitle = subtitle; }
+        @Override public void setSubtitle(int resId) { this.subtitle = ctx.getString(resId); }
+        @Override public View getCustomView() { return customView; }
+        @Override public void setCustomView(View view) { this.customView = view; }
+        @Override public MenuInflater getMenuInflater() { return new MenuInflater(themedCtx); }
+
+        private ArrayList<MenuItem> collectPrioritizedItems() {
+            ArrayList<MenuItem> allVisible = new ArrayList<MenuItem>();
+            int count = menu != null ? menu.size() : 0;
+            for (int i = 0; i < count; i++) {
+                MenuItem mi = menu.getItem(i);
+                if (mi != null && mi.isVisible() && mi.isEnabled()) {
+                    allVisible.add(mi);
+                }
+            }
+            ArrayList<MenuItem> ordered = new ArrayList<MenuItem>(4);
+            int[] priorityIds = new int[]{
+                    android.R.id.cut,
+                    android.R.id.copy,
+                    android.R.id.paste,
+                    android.R.id.selectAll
+            };
+            for (int p = 0; p < priorityIds.length; p++) {
+                int pid = priorityIds[p];
+                for (int i = 0; i < allVisible.size(); i++) {
+                    MenuItem mi = allVisible.get(i);
+                    if (mi.getItemId() == pid && !ordered.contains(mi)) {
+                        ordered.add(mi);
+                    }
+                }
+            }
+            for (int i = 0; i < allVisible.size() && ordered.size() < 4; i++) {
+                MenuItem mi = allVisible.get(i);
+                if (!ordered.contains(mi)) {
+                    ordered.add(mi);
+                }
+            }
+            return ordered;
+        }
+
+        private void refreshPopup() {
+            if (finished || !isViewAttached(owner) || owner.getWindowToken() == null) {
+                dismissPopup();
+                return;
+            }
+            ArrayList<MenuItem> items = collectPrioritizedItems();
+            if (items.isEmpty()) {
+                dismissPopup();
+                return;
+            }
+
+            DisplayMetrics dm = safeMetrics(ctx);
+            float density = dm.density > 0f ? dm.density : 2f;
+
+            LinearLayout bar = new LinearLayout(ctx);
+            bar.setOrientation(LinearLayout.HORIZONTAL);
+            bar.setGravity(Gravity.CENTER_VERTICAL);
+            GradientDrawable bg = new GradientDrawable();
+            bg.setColor(Color.parseColor("#242834"));
+            bg.setCornerRadius(dp(18, density));
+            bg.setStroke(dp(1, density), Color.parseColor("#3DDB87"));
+            bar.setBackground(bg);
+            int hPad = dp(6, density);
+            bar.setPadding(hPad, 0, hPad, 0);
+
+            for (int i = 0; i < items.size(); i++) {
+                final MenuItem item = items.get(i);
+                if (i > 0) {
+                    View div = new View(ctx);
+                    div.setBackgroundColor(Color.parseColor("#3A3F4E"));
+                    bar.addView(div, new LinearLayout.LayoutParams(
+                            Math.max(1, Math.round(density)), dp(18, density)));
+                }
+                CharSequence cs = item.getTitle();
+                String label = (cs != null && cs.length() > 0)
+                        ? cs.toString()
+                        : fallbackLabelForId(item.getItemId());
+
+                TextView tv = new TextView(ctx);
+                tv.setText(label);
+                tv.setTextColor(Color.parseColor("#ECE8DF"));
+                tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+                tv.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+                tv.setGravity(Gravity.CENTER);
+                tv.setSingleLine(true);
+                int pad = dp(12, density);
+                tv.setPadding(pad, 0, pad, 0);
+                tv.setMinHeight(dp(40, density));
+                tv.setClickable(true);
+                tv.setFocusable(false);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    tv.setBackground(new RippleDrawable(
+                            ColorStateList.valueOf(0x333DDB87), null, null));
+                }
+                tv.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        if (BuildConfig.SEC_DIAG) {
+                            SecurityNative.diagUi("HostedPopupActionMode.onClick: itemId=" + item.getItemId());
+                        }
+                        boolean handled = false;
+                        try {
+                            handled = origCallback.onActionItemClicked(HostedPopupActionMode.this, item);
+                        } catch (Throwable ignored) { }
+                        if (!handled) {
+                            try {
+                                owner.onTextContextMenuItem(item.getItemId());
+                            } catch (Throwable ignored) { }
+                        }
+                        if (!finished) {
+                            if (item.getItemId() == android.R.id.selectAll) {
+                                owner.post(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        if (!finished && isViewAttached(owner)) {
+                                            invalidate();
+                                        }
+                                    }
+                                });
+                            } else {
+                                finish();
+                            }
+                        }
+                    }
+                });
+                bar.addView(tv, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, dp(40, density)));
+            }
+
+            bar.measure(View.MeasureSpec.makeMeasureSpec(dm.widthPixels, View.MeasureSpec.AT_MOST),
+                    View.MeasureSpec.makeMeasureSpec(dm.heightPixels, View.MeasureSpec.AT_MOST));
+            lastPopW = bar.getMeasuredWidth();
+            lastPopH = bar.getMeasuredHeight();
+
+            dismissPopup();
+
+            PopupWindow pw = new PopupWindow(bar, lastPopW, lastPopH, false);
+            pw.setTouchable(true);
+            pw.setOutsideTouchable(false);
+            pw.setClippingEnabled(false);
+            pw.setInputMethodMode(PopupWindow.INPUT_METHOD_NOT_NEEDED);
+            pw.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                pw.setElevation(dp(8, density));
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+                pw.setAttachedInDecor(false);
+            }
+
+            int[] pos = computePopupScreenPos(dm, density, lastPopW, lastPopH);
+            try {
+                pw.showAtLocation(owner, Gravity.NO_GRAVITY, pos[0], pos[1]);
+                this.popup = pw;
+            } catch (Throwable t) {
+                if (BuildConfig.SEC_DIAG) {
+                    SecurityNative.diagUi("HostedPopupActionMode.showAtLocation failed: "
+                            + SecurityNative.diagException(t));
+                }
+            }
+        }
+
+        void updatePopupPosition() {
+            if (finished || !isViewAttached(owner)) return;
+            if (popup == null || !popup.isShowing() || lastPopW <= 0 || lastPopH <= 0) {
+                return;
+            }
+            DisplayMetrics dm = safeMetrics(ctx);
+            float density = dm.density > 0f ? dm.density : 2f;
+            int[] pos = computePopupScreenPos(dm, density, lastPopW, lastPopH);
+            try {
+                popup.update(pos[0], pos[1], -1, -1);
+            } catch (Throwable ignored) { }
+        }
+
+        private int[] computePopupScreenPos(DisplayMetrics dm, float density, int popW, int popH) {
+            tmpRect.setEmpty();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                Api23Helper.fillOriginalContentRect(origCallback, this, owner, tmpRect);
+            }
+            owner.getLocationOnScreen(ownerLoc);
+
+            int selCenterX;
+            int selTopY;
+            int selBottomY;
+            if (tmpRect.width() > 0 && tmpRect.height() > 0) {
+                selCenterX = ownerLoc[0] + tmpRect.centerX();
+                selTopY = ownerLoc[1] + tmpRect.top;
+                selBottomY = ownerLoc[1] + tmpRect.bottom;
+            } else {
+                selCenterX = ownerLoc[0] + owner.getWidth() / 2;
+                selTopY = ownerLoc[1];
+                selBottomY = ownerLoc[1] + owner.getHeight();
+                try {
+                    Layout layout = owner.getLayout();
+                    if (layout != null) {
+                        int sMin = Math.max(0, Math.min(owner.getSelectionStart(), owner.getSelectionEnd()));
+                        int sMax = Math.max(0, Math.max(owner.getSelectionStart(), owner.getSelectionEnd()));
+                        float px = (layout.getPrimaryHorizontal(sMin) + layout.getPrimaryHorizontal(sMax)) * 0.5f;
+                        selCenterX = ownerLoc[0] + owner.getTotalPaddingLeft() - owner.getScrollX() + Math.round(px);
+                    }
+                } catch (Throwable ignored) { }
+            }
+
+            int margin = dp(8, density);
+            int topSafe = dp(28, density);
+            int x = Math.max(margin, Math.min(selCenterX - popW / 2, dm.widthPixels - popW - margin));
+            int yAbove = selTopY - popH - dp(10, density);
+            int yBelow = selBottomY + dp(10, density);
+            int y = (yAbove >= topSafe)
+                    ? yAbove
+                    : Math.max(topSafe, Math.min(yBelow, dm.heightPixels - popH - margin));
+            return new int[]{ x, y };
+        }
+
+        private String fallbackLabelForId(int id) {
+            if (id == android.R.id.cut) return ctx.getString(android.R.string.cut);
+            if (id == android.R.id.copy) return ctx.getString(android.R.string.copy);
+            if (id == android.R.id.paste) return ctx.getString(android.R.string.paste);
+            if (id == android.R.id.selectAll) return ctx.getString(android.R.string.selectAll);
+            return "Action";
+        }
+
+        private void dismissPopup() {
+            if (popup != null) {
+                try {
+                    if (popup.isShowing()) {
+                        popup.dismiss();
+                    }
+                } catch (Throwable ignored) { }
+                popup = null;
             }
         }
     }
