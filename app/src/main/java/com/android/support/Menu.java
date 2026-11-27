@@ -229,6 +229,12 @@ public class Menu {
     private int tabDragAutoScrollDir = 0;
     private Runnable tabDragLongPressRunnable = null;
     private Runnable tabDragAutoScrollRunnable = null;
+    private boolean sidebarWinDragActive = false;
+    private float sidebarWinDownRawX = 0f;
+    private float sidebarWinDownRawY = 0f;
+    private int sidebarWinStartX = 0;
+    private int sidebarWinStartY = 0;
+    private Runnable sidebarWinDragLongPressRunnable = null;
 
     // ===== Feature B: Focus mode =====
     private boolean focusMode = false;
@@ -240,6 +246,7 @@ public class Menu {
     private LinearLayout mFocusMiniPill = null;
     private View mFocusPillGripWrap = null;
     private ImageView mFocusPillGripIcon = null;
+    private View.OnTouchListener mFocusPillDragListener = null;
     private FrameLayout mFocusPillExitBtn = null;
     private ImageView mFocusPillExitIcon = null;
     private FrameLayout mFocusPillMinBtn = null;
@@ -839,20 +846,22 @@ Preferences.init(context);
         sbScroll.setBackgroundColor(ModxTheme.SURFACE);
         sbScroll.setSolidBgColor(ModxTheme.SURFACE);
         sbScroll.setAccentColor(COLOR_ACCENT);
+        sbScroll.setClipChildren(false);
+        sbScroll.setClipToPadding(false);
         sbScroll.setVerticalFadingEdgeEnabled(true);
-        sbScroll.setFadingEdgeLength(dp(12));
+        sbScroll.setFadingEdgeLength(dp(6));
         sbScroll.setVisibility(View.GONE);
         sidebarScroll = sbScroll;
 
         sidebarLayout = new LinearLayout(context);
         sidebarLayout.setOrientation(LinearLayout.VERTICAL);
-        sidebarLayout.setPadding(dp(6), dp(6), dp(6), dp(6));
+        sidebarLayout.setPadding(dp(6), dp(6), dp(6), dp(14));
         sidebarLayout.setClipChildren(false);
         sidebarLayout.setClipToPadding(false);
         sidebarScroll.addView(sidebarLayout);
         sidebarFrame.addView(sidebarScroll);
 
-        contentStage = new FrameLayout(context);
+        contentStage = new ContentStageFrameLayout(context);
         contentStage.setLayoutParams(new LinearLayout.LayoutParams(0, MATCH_PARENT, 1f));
 
         SlimScrollView ctScroll = new SlimScrollView(context);
@@ -2436,28 +2445,72 @@ Preferences.init(context);
     private void applyTabMetrics(ModxTheme.MenuScaleTokens tokens) {
         if (tokens == null) return;
         boolean iconOnlyGlobal = SHOW_TAB_ICONS && (tokens.sidebarIconOnly || (isLoggedIn && focusMode));
+        int effSidebarW = effectiveSidebarWidthPx(tokens);
+        int cellSize = Math.max(dp(24), effSidebarW - dp(8));
+
+        if (sidebarLayout != null) {
+            int sidePadH = iconOnlyGlobal ? dp(4) : dp(6);
+            int sidePadTop = dp(6);
+            int sidePadBot = (isLoggedIn && focusMode) ? dp(16) : dp(14);
+            sidebarLayout.setGravity(iconOnlyGlobal ? Gravity.CENTER_HORIZONTAL : Gravity.NO_GRAVITY);
+            if (sidebarLayout.getPaddingLeft() != sidePadH
+                    || sidebarLayout.getPaddingTop() != sidePadTop
+                    || sidebarLayout.getPaddingRight() != sidePadH
+                    || sidebarLayout.getPaddingBottom() != sidePadBot) {
+                sidebarLayout.setPadding(sidePadH, sidePadTop, sidePadH, sidePadBot);
+            }
+        }
+
         for (TabHolder h : tabHolders) {
             boolean iconOnly = iconOnlyGlobal && h.icon != null;
-            h.root.setMinimumHeight(tokens.tabMinHeightPx);
+            ViewGroup.LayoutParams rlpRaw = h.root.getLayoutParams();
+            if (rlpRaw instanceof LinearLayout.LayoutParams) {
+                LinearLayout.LayoutParams rlp = (LinearLayout.LayoutParams) rlpRaw;
+                int targetW = iconOnly ? cellSize : MATCH_PARENT;
+                int targetH = iconOnly ? cellSize : WRAP_CONTENT;
+                int targetGravity = iconOnly ? Gravity.CENTER_HORIZONTAL : Gravity.NO_GRAVITY;
+                if (rlp.width != targetW || rlp.height != targetH || rlp.gravity != targetGravity) {
+                    rlp.width = targetW;
+                    rlp.height = targetH;
+                    rlp.gravity = targetGravity;
+                    rlp.setMargins(0, dp(2), 0, dp(2));
+                    h.root.setLayoutParams(rlp);
+                }
+            }
+            h.root.setClipChildren(false);
+            h.root.setClipToPadding(false);
+            h.root.setMinimumHeight(iconOnly ? cellSize : tokens.tabMinHeightPx);
             h.root.setGravity(iconOnly ? Gravity.CENTER : Gravity.CENTER_VERTICAL);
-            h.root.setPadding(tokens.tabPadHPx, tokens.tabPadVPx, tokens.tabPadHPx, tokens.tabPadVPx);
+            if (iconOnly) {
+                h.root.setPadding(0, 0, 0, 0);
+            } else {
+                h.root.setPadding(tokens.tabPadHPx, tokens.tabPadVPx, tokens.tabPadHPx, tokens.tabPadVPx);
+            }
 
             if (h.indicator != null) {
-                ViewGroup.LayoutParams indLp = h.indicator.getLayoutParams();
-                if (indLp instanceof LinearLayout.LayoutParams) {
-                    LinearLayout.LayoutParams l = (LinearLayout.LayoutParams) indLp;
-                    l.width = tokens.tabIndicatorWpx;
-                    l.height = tokens.tabIndicatorHpx;
-                    l.setMargins(0, 0, iconOnly ? dp(3) : dp(6), 0);
-                    h.indicator.setLayoutParams(l);
-                    h.indicator.setPivotY(tokens.tabIndicatorHpx * 0.5f);
+                if (iconOnly) {
+                    h.indicator.setVisibility(View.GONE);
+                } else {
+                    h.indicator.setVisibility(View.VISIBLE);
+                    ViewGroup.LayoutParams indLp = h.indicator.getLayoutParams();
+                    if (indLp instanceof LinearLayout.LayoutParams) {
+                        LinearLayout.LayoutParams l = (LinearLayout.LayoutParams) indLp;
+                        l.width = tokens.tabIndicatorWpx;
+                        l.height = tokens.tabIndicatorHpx;
+                        l.setMargins(0, 0, dp(6), 0);
+                        h.indicator.setLayoutParams(l);
+                        h.indicator.setPivotY(tokens.tabIndicatorHpx * 0.5f);
+                    }
                 }
             }
             if (h.icon != null) {
+                int iconSizePx = iconOnly
+                        ? Math.min(tokens.tabIconPx, Math.max(dp(12), cellSize - dp(10)))
+                        : tokens.tabIconPx;
                 ViewGroup.LayoutParams ilp = h.icon.getLayoutParams();
-                if (ilp != null && (ilp.width != tokens.tabIconPx || ilp.height != tokens.tabIconPx)) {
-                    ilp.width = tokens.tabIconPx;
-                    ilp.height = tokens.tabIconPx;
+                if (ilp != null && (ilp.width != iconSizePx || ilp.height != iconSizePx)) {
+                    ilp.width = iconSizePx;
+                    ilp.height = iconSizePx;
                     h.icon.setLayoutParams(ilp);
                 }
             }
@@ -2466,6 +2519,45 @@ Preferences.init(context);
                 h.label.setTextSize(TypedValue.COMPLEX_UNIT_SP, tokens.tabFontSp);
             }
         }
+    }
+
+    private void ensureSelectedTabVisible(final boolean smooth) {
+        if (sidebarScroll == null || sidebarLayout == null) return;
+        TabHolder found = null;
+        for (int i = 0; i < tabHolders.size(); i++) {
+            TabHolder t = tabHolders.get(i);
+            if (isTabSelected(t)) {
+                found = t;
+                break;
+            }
+        }
+        final TabHolder sel = found;
+        if (sel == null || sel.root == null) return;
+        sidebarScroll.post(new Runnable() {
+            @Override
+            public void run() {
+                if (sidebarScroll == null || sel.root == null || sel.root.getParent() == null) return;
+                int viewH = sidebarScroll.getHeight();
+                if (viewH <= 0) return;
+                int top = sel.root.getTop();
+                int bottom = sel.root.getBottom();
+                int curY = sidebarScroll.getScrollY();
+                int margin = dp(6);
+                int targetY = curY;
+                if (top - margin < curY) {
+                    targetY = Math.max(0, top - margin);
+                } else if (bottom + margin > curY + viewH) {
+                    targetY = Math.max(0, bottom + margin - viewH);
+                }
+                if (targetY != curY) {
+                    if (smooth) {
+                        sidebarScroll.smoothScrollTo(0, targetY);
+                    } else {
+                        sidebarScroll.scrollTo(0, targetY);
+                    }
+                }
+            }
+        });
     }
 
     // ================================================================
@@ -2478,12 +2570,22 @@ Preferences.init(context);
             private boolean moved;
             private final int slop = ViewConfiguration.get(getContext).getScaledTouchSlop();
 
+            private void setAncestorsDisallowIntercept(View v, boolean disallow) {
+                if (v == null) return;
+                ViewParent p = v.getParent();
+                while (p != null) {
+                    p.requestDisallowInterceptTouchEvent(disallow);
+                    p = p.getParent();
+                }
+            }
+
             @Override
             public boolean onTouch(View view, MotionEvent motionEvent) {
                 if (vmParams == null) return true;
                 switch (motionEvent.getActionMasked()) {
                     case MotionEvent.ACTION_DOWN:
                         cancelTabDrag();
+                        setAncestorsDisallowIntercept(view, true);
                         initialX = vmParams.x;
                         initialY = vmParams.y;
                         initialTouchX = motionEvent.getRawX();
@@ -2492,6 +2594,7 @@ Preferences.init(context);
                         return true;
 
                     case MotionEvent.ACTION_MOVE: {
+                            setAncestorsDisallowIntercept(view, true);
                             float dx = motionEvent.getRawX() - initialTouchX;
                             float dy = motionEvent.getRawY() - initialTouchY;
                             if (!moved && (Math.abs(dx) > slop || Math.abs(dy) > slop)) {
@@ -2512,6 +2615,7 @@ Preferences.init(context);
                     case MotionEvent.ACTION_CANCEL:
                         menuFrame.setAlpha(1f);
                         mCollapsed.setAlpha(1f);
+                        setAncestorsDisallowIntercept(view, false);
                         if (moved && !isLoggedIn && activeLoginHelper != null) {
                             activeLoginHelper.setMenuWindowDragging(false);
                         }
@@ -2534,8 +2638,91 @@ Preferences.init(context);
     }
 
     // ================================================================
+    // Focus mini-pill expanded grip touch container (>= 40dp x 40dp hit rect)
+    // ================================================================
+    private final class ContentStageFrameLayout extends FrameLayout {
+        private final Rect tmpRect = new Rect();
+        private final Rect hitRect = new Rect();
+        private boolean gripDragActive = false;
+
+        ContentStageFrameLayout(Context ctx) {
+            super(ctx);
+        }
+
+        private boolean isPointInChild(View child, int fx, int fy) {
+            if (child == null || child.getVisibility() != View.VISIBLE || child.getWidth() <= 0) {
+                return false;
+            }
+            try {
+                tmpRect.set(0, 0, child.getWidth(), child.getHeight());
+                offsetDescendantRectToMyCoords(child, tmpRect);
+                return tmpRect.contains(fx, fy);
+            } catch (IllegalArgumentException ignored) {
+                return false;
+            }
+        }
+
+        @Override
+        public boolean dispatchTouchEvent(MotionEvent ev) {
+            int action = ev.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                gripDragActive = false;
+                if (isLoggedIn && focusMode
+                        && mFocusMiniPill != null && mFocusMiniPill.getVisibility() == View.VISIBLE
+                        && mFocusPillGripWrap != null && mFocusPillGripWrap.getVisibility() == View.VISIBLE
+                        && mFocusPillDragListener != null) {
+                    int fx = Math.round(ev.getX());
+                    int fy = Math.round(ev.getY());
+                    boolean onActionBtn = isPointInChild(mFocusPillExitBtn, fx, fy)
+                            || isPointInChild(mFocusPillMinBtn, fx, fy)
+                            || isPointInChild(mFocusPillHideBtn, fx, fy);
+                    if (!onActionBtn && mFocusPillGripWrap.getWidth() > 0 && mFocusPillGripWrap.getHeight() > 0) {
+                        try {
+                            tmpRect.set(0, 0, mFocusPillGripWrap.getWidth(), mFocusPillGripWrap.getHeight());
+                            offsetDescendantRectToMyCoords(mFocusPillGripWrap, tmpRect);
+                            int minHit = dp(40);
+                            int cx = tmpRect.centerX();
+                            int cy = tmpRect.centerY();
+                            int halfW = Math.max(minHit / 2, tmpRect.width() / 2);
+                            int halfH = Math.max(minHit / 2, tmpRect.height() / 2);
+                            hitRect.set(cx - halfW, cy - halfH, cx + halfW, cy + halfH);
+                            if (hitRect.contains(fx, fy)) {
+                                gripDragActive = true;
+                                if (contentScrollView != null) {
+                                    contentScrollView.requestDisallowInterceptTouchEvent(true);
+                                }
+                                requestDisallowInterceptTouchEvent(true);
+                                return mFocusPillDragListener.onTouch(mFocusPillGripWrap, ev);
+                            }
+                        } catch (IllegalArgumentException ignored) { }
+                    }
+                }
+                return super.dispatchTouchEvent(ev);
+            }
+
+            if (gripDragActive && mFocusPillGripWrap != null && mFocusPillDragListener != null) {
+                if (contentScrollView != null) {
+                    contentScrollView.requestDisallowInterceptTouchEvent(true);
+                }
+                requestDisallowInterceptTouchEvent(true);
+                boolean handled = mFocusPillDragListener.onTouch(mFocusPillGripWrap, ev);
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    gripDragActive = false;
+                    if (contentScrollView != null) {
+                        contentScrollView.requestDisallowInterceptTouchEvent(false);
+                    }
+                    requestDisallowInterceptTouchEvent(false);
+                }
+                return handled;
+            }
+            return super.dispatchTouchEvent(ev);
+        }
+    }
+
+    // ================================================================
     // Feature A: Sidebar drag-and-drop container (long-press ~350ms + drag)
-    // Normal vertical drag continues scrolling sidebarScroll; long-press lifts tab.
+    // Normal vertical drag continues scrolling sidebarScroll; long-press lifts tab,
+    // or long-press on top dead zone / empty area below last tab drags window.
     // ================================================================
     private final class SidebarDragFrameLayout extends FrameLayout {
         private final int touchSlop;
@@ -2546,6 +2733,24 @@ Preferences.init(context);
             this.touchSlop = ViewConfiguration.get(ctx).getScaledTouchSlop();
         }
 
+        private void startSidebarWindowDrag() {
+            if (!isLoggedIn || tabDragActive || vmParams == null) return;
+            sidebarWinDragActive = true;
+            sidebarWinStartX = vmParams.x;
+            sidebarWinStartY = vmParams.y;
+            ModxTheme.hapticTick(this);
+            if (sidebarScroll != null) {
+                long now = android.os.SystemClock.uptimeMillis();
+                MotionEvent cancelEv = MotionEvent.obtain(now, now, MotionEvent.ACTION_CANCEL, 0f, 0f, 0);
+                sidebarScroll.dispatchTouchEvent(cancelEv);
+                cancelEv.recycle();
+                sidebarScroll.requestDisallowInterceptTouchEvent(true);
+            }
+            if (menuFrame != null) {
+                menuFrame.setAlpha(0.7f);
+            }
+        }
+
         @Override
         public boolean dispatchTouchEvent(MotionEvent ev) {
             int action = ev.getActionMasked();
@@ -2553,28 +2758,50 @@ Preferences.init(context);
             switch (action) {
                 case MotionEvent.ACTION_DOWN: {
                     cancelPendingTabLongPress();
-                    if (isLoggedIn && !tabDragActive && countDraggableTabs() >= 2) {
+                    cancelPendingSidebarWindowDrag();
+                    if (isLoggedIn && !tabDragActive && !sidebarWinDragActive) {
                         final TabHolder cand = findTabAtFramePoint(ev.getX(), ev.getY());
-                        if (cand != null && !"Settings".equals(cand.name)) {
-                            tabDragDownRawX = ev.getRawX();
-                            tabDragDownRawY = ev.getRawY();
-                            tabDragCandidate = cand;
-                            tabDragLongPressRunnable = new Runnable() {
+                        if (cand != null) {
+                            if (countDraggableTabs() >= 2 && !"Settings".equals(cand.name)) {
+                                tabDragDownRawX = ev.getRawX();
+                                tabDragDownRawY = ev.getRawY();
+                                tabDragCandidate = cand;
+                                tabDragLongPressRunnable = new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        tabDragLongPressRunnable = null;
+                                        if (tabDragCandidate == cand && !tabDragActive && !sidebarWinDragActive) {
+                                            startTabDrag(cand);
+                                        }
+                                    }
+                                };
+                                mainHandler.postDelayed(tabDragLongPressRunnable, 350L);
+                            }
+                        } else if (isPointInSidebarWindowDragZone(ev.getY())) {
+                            sidebarWinDownRawX = ev.getRawX();
+                            sidebarWinDownRawY = ev.getRawY();
+                            sidebarWinDragLongPressRunnable = new Runnable() {
                                 @Override
                                 public void run() {
-                                    tabDragLongPressRunnable = null;
-                                    if (tabDragCandidate == cand && !tabDragActive) {
-                                        startTabDrag(cand);
+                                    sidebarWinDragLongPressRunnable = null;
+                                    if (!tabDragActive && !sidebarWinDragActive) {
+                                        startSidebarWindowDrag();
                                     }
                                 }
                             };
-                            mainHandler.postDelayed(tabDragLongPressRunnable, 350L);
+                            mainHandler.postDelayed(sidebarWinDragLongPressRunnable, 350L);
                         }
                     }
                     return super.dispatchTouchEvent(ev);
                 }
 
                 case MotionEvent.ACTION_MOVE: {
+                    if (sidebarWinDragActive) {
+                        float dx = ev.getRawX() - sidebarWinDownRawX;
+                        float dy = ev.getRawY() - sidebarWinDownRawY;
+                        moveWindow(sidebarWinStartX + (int) dx, sidebarWinStartY + (int) dy);
+                        return true;
+                    }
                     if (tabDragActive) {
                         float dy = ev.getRawY() - tabDragDownRawY;
                         if (tabDragProxy != null) {
@@ -2602,11 +2829,27 @@ Preferences.init(context);
                             cancelPendingTabLongPress();
                         }
                     }
+                    if (sidebarWinDragLongPressRunnable != null) {
+                        float dx = ev.getRawX() - sidebarWinDownRawX;
+                        float dy = ev.getRawY() - sidebarWinDownRawY;
+                        if (Math.hypot(dx, dy) > touchSlop) {
+                            cancelPendingSidebarWindowDrag();
+                        }
+                    }
                     return super.dispatchTouchEvent(ev);
                 }
 
                 case MotionEvent.ACTION_UP: {
                     cancelPendingTabLongPress();
+                    cancelPendingSidebarWindowDrag();
+                    if (sidebarWinDragActive) {
+                        sidebarWinDragActive = false;
+                        if (menuFrame != null) menuFrame.setAlpha(1f);
+                        if (sidebarScroll != null) {
+                            sidebarScroll.requestDisallowInterceptTouchEvent(false);
+                        }
+                        return true;
+                    }
                     if (tabDragActive) {
                         finishTabDrag();
                         return true;
@@ -2616,6 +2859,15 @@ Preferences.init(context);
 
                 case MotionEvent.ACTION_CANCEL: {
                     cancelPendingTabLongPress();
+                    cancelPendingSidebarWindowDrag();
+                    if (sidebarWinDragActive) {
+                        sidebarWinDragActive = false;
+                        if (menuFrame != null) menuFrame.setAlpha(1f);
+                        if (sidebarScroll != null) {
+                            sidebarScroll.requestDisallowInterceptTouchEvent(false);
+                        }
+                        return true;
+                    }
                     if (tabDragActive) {
                         cancelTabDrag();
                         return true;
@@ -2786,11 +3038,12 @@ Preferences.init(context);
         }
 
         // 1. Drag Grip
+        mFocusPillDragListener = onTouchListener();
         FrameLayout gripWrap = new FrameLayout(ctx);
-        gripWrap.setLayoutParams(new LinearLayout.LayoutParams(dp(26), dp(28)));
+        gripWrap.setLayoutParams(new LinearLayout.LayoutParams(dp(26), dp(30)));
         gripWrap.setClickable(true);
         gripWrap.setContentDescription("Drag menu");
-        gripWrap.setOnTouchListener(onTouchListener());
+        gripWrap.setOnTouchListener(mFocusPillDragListener);
         ImageView gripIcon = new ImageView(ctx);
         gripIcon.setImageDrawable(ModxIcons.gripVertical(ModxTheme.MUTED, dp(14)));
         gripIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -2933,8 +3186,8 @@ Preferences.init(context);
         int toggleBoxPx = mini ? dp(24) : (compact ? dp(28) : dp(32));
         int toggleIconPx = mini ? dp(13) : (compact ? dp(14) : dp(16));
         int pillBtnW = mini ? dp(22) : (compact ? dp(25) : dp(28));
-        int pillBtnH = mini ? dp(24) : (compact ? dp(26) : dp(28));
-        int pillGripW = mini ? dp(18) : (compact ? dp(22) : dp(24));
+        int pillBtnH = mini ? dp(26) : (compact ? dp(28) : dp(30));
+        int pillGripW = mini ? dp(22) : (compact ? dp(24) : dp(26));
         int pillIconPx = mini ? dp(12) : (compact ? dp(13) : dp(14));
 
         if (mFocusToggleBtn != null) {
@@ -3325,6 +3578,7 @@ Preferences.init(context);
         applyContentStagePadding(tokens);
         applyFirstCardSafeZone(tokens);
         updateHeaderWaveState();
+        ensureSelectedTabVisible(false);
 
         if (contentScrollView != null) {
             contentScrollView.post(new Runnable() {
@@ -3765,6 +4019,36 @@ Preferences.init(context);
         tabDragCandidate = null;
     }
 
+    private void cancelPendingSidebarWindowDrag() {
+        if (sidebarWinDragLongPressRunnable != null) {
+            mainHandler.removeCallbacks(sidebarWinDragLongPressRunnable);
+            sidebarWinDragLongPressRunnable = null;
+        }
+    }
+
+    private boolean isPointInSidebarWindowDragZone(float frameY) {
+        if (sidebarFrame == null) return false;
+        int minTop = Integer.MAX_VALUE;
+        int maxBottom = Integer.MIN_VALUE;
+        Rect r = new Rect();
+        for (int i = 0; i < tabHolders.size(); i++) {
+            TabHolder t = tabHolders.get(i);
+            if (t.root == null || t.root.getParent() == null || t.root.getVisibility() != View.VISIBLE) {
+                continue;
+            }
+            try {
+                r.set(0, 0, t.root.getWidth(), t.root.getHeight());
+                sidebarFrame.offsetDescendantRectToMyCoords(t.root, r);
+                if (r.top < minTop) minTop = r.top;
+                if (r.bottom > maxBottom) maxBottom = r.bottom;
+            } catch (IllegalArgumentException ignored) { }
+        }
+        if (minTop == Integer.MAX_VALUE) {
+            return true;
+        }
+        return frameY < minTop || frameY > maxBottom;
+    }
+
     private void setTabDragAutoScrollDir(int dir) {
         if (tabDragAutoScrollDir == dir) return;
         tabDragAutoScrollDir = dir;
@@ -3830,8 +4114,15 @@ Preferences.init(context);
         cand.root.setScaleY(1f);
 
         // Replace actual tab in sidebarLayout with tinted placeholder
+        ModxTheme.MenuScaleTokens tokens = ensureScaleTokens();
+        boolean iconOnly = SHOW_TAB_ICONS && (tokens.sidebarIconOnly || (isLoggedIn && focusMode)) && cand.icon != null;
+        boolean selected = isTabSelected(cand);
+
         View placeholder = new View(getContext);
-        LinearLayout.LayoutParams phLp = new LinearLayout.LayoutParams(MATCH_PARENT, r.height());
+        LinearLayout.LayoutParams phLp = new LinearLayout.LayoutParams(iconOnly ? r.width() : MATCH_PARENT, r.height());
+        if (iconOnly) {
+            phLp.gravity = Gravity.CENTER_HORIZONTAL;
+        }
         phLp.setMargins(0, dp(2), 0, dp(2));
         placeholder.setLayoutParams(phLp);
         placeholder.setBackground(ModxTheme.roundRect(
@@ -3843,37 +4134,40 @@ Preferences.init(context);
         sidebarLayout.addView(placeholder, origIdx);
 
         // Floating proxy card inside sidebarFrame
-        ModxTheme.MenuScaleTokens tokens = ensureScaleTokens();
-        boolean iconOnly = SHOW_TAB_ICONS && (tokens.sidebarIconOnly || (isLoggedIn && focusMode)) && cand.icon != null;
-        boolean selected = isTabSelected(cand);
-
         LinearLayout proxy = new LinearLayout(getContext);
         proxy.setOrientation(LinearLayout.HORIZONTAL);
         proxy.setGravity(iconOnly ? Gravity.CENTER : Gravity.CENTER_VERTICAL);
-        proxy.setPadding(tokens.tabPadHPx, tokens.tabPadVPx, tokens.tabPadHPx, tokens.tabPadVPx);
+        if (iconOnly) {
+            proxy.setPadding(0, 0, 0, 0);
+        } else {
+            proxy.setPadding(tokens.tabPadHPx, tokens.tabPadVPx, tokens.tabPadHPx, tokens.tabPadVPx);
+        }
         proxy.setBackground(ModxTheme.roundRect(
                 getContext, ModxTheme.CARD_HOVER, COLOR_ACCENT, 1.5f, ModxTheme.RADIUS_DP));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             proxy.setElevation(dp(8));
         }
 
-        if (cand.indicator != null) {
+        if (cand.indicator != null && !iconOnly) {
             View pInd = new View(getContext);
             LinearLayout.LayoutParams indLp = new LinearLayout.LayoutParams(
                     tokens.tabIndicatorWpx, tokens.tabIndicatorHpx);
-            indLp.setMargins(0, 0, iconOnly ? dp(3) : dp(6), 0);
+            indLp.setMargins(0, 0, dp(6), 0);
             pInd.setLayoutParams(indLp);
             pInd.setBackground(ModxTheme.roundRect(getContext, COLOR_ACCENT, 0, 0f, 2f));
             pInd.setAlpha(selected ? 1f : 0f);
             proxy.addView(pInd);
         }
         if (SHOW_TAB_ICONS && cand.icon != null) {
+            int iconSizePx = iconOnly
+                    ? Math.min(tokens.tabIconPx, Math.max(dp(12), r.width() - dp(10)))
+                    : tokens.tabIconPx;
             ImageView pIcon = new ImageView(getContext);
-            pIcon.setLayoutParams(new LinearLayout.LayoutParams(tokens.tabIconPx, tokens.tabIconPx));
+            pIcon.setLayoutParams(new LinearLayout.LayoutParams(iconSizePx, iconSizePx));
             pIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
             pIcon.setImageDrawable(ModxIcons.tabIconFor(
                     getContext, cand.name, selected ? COLOR_ACCENT : ModxTheme.FG,
-                    Math.max(12, Math.round(tokens.tabIconPx / Math.max(1f, safeDisplayMetrics(getContext).density)))));
+                    Math.max(12, Math.round(iconSizePx / Math.max(1f, safeDisplayMetrics(getContext).density)))));
             proxy.addView(pIcon);
         }
         if (!iconOnly) {
@@ -4022,6 +4316,14 @@ Preferences.init(context);
     private void cancelTabDrag() {
         setTabDragAutoScrollDir(0);
         cancelPendingTabLongPress();
+        cancelPendingSidebarWindowDrag();
+        if (sidebarWinDragActive) {
+            sidebarWinDragActive = false;
+            if (menuFrame != null) menuFrame.setAlpha(1f);
+            if (sidebarScroll != null) {
+                sidebarScroll.requestDisallowInterceptTouchEvent(false);
+            }
+        }
         if (!tabDragActive) return;
 
         TabHolder dragged = tabDragTarget;
@@ -4584,6 +4886,7 @@ Preferences.init(context);
         }
         applyFirstCardSafeZone(ensureScaleTokens());
         contentScrollView.scrollTo(0, 0);
+        ensureSelectedTabVisible(animate);
 
         contentLayout.animate().cancel();
         if (animate) {
