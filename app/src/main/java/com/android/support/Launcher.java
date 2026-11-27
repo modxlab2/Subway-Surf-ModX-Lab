@@ -42,11 +42,14 @@ public class Launcher extends Service {
         return runningAppProcessInfo.importance != 100;
     }
 
+    private int lastMenuVisibility = -1;
+
     private void Thread() {
-        if (isNotInGame()) {
-            menu.setVisibility(View.INVISIBLE);
-        } else {
-            menu.setVisibility(View.VISIBLE);
+        if (menu == null) return;
+        int desired = isNotInGame() ? View.INVISIBLE : View.VISIBLE;
+        if (desired != lastMenuVisibility) {
+            lastMenuVisibility = desired;
+            menu.setVisibility(desired);
         }
     }
 

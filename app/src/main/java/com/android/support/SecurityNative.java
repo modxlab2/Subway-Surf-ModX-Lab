@@ -91,7 +91,21 @@ public final class SecurityNative {
         }
     }
 
+    public static boolean verifyBeforeLogin(Context ctx) {
+        if (ctx == null || sLoadError != null) return false;
+        try {
+            Context appCtx = ctx.getApplicationContext();
+            return verifyPreLoginNative(appCtx != null ? appCtx : ctx);
+        } catch (Throwable t) {
+            if (BuildConfig.SEC_DIAG) {
+                diag(201, "verifyBeforeLogin threw " + t.getClass().getSimpleName() + ": " + t.getMessage());
+            }
+            return false;
+        }
+    }
+
     private static native boolean verifyNative(Context ctx);
+    private static native boolean verifyPreLoginNative(Context ctx);
 
     // =================================================================
     // Ed25519 Session Token & Obfuscated Config APIs

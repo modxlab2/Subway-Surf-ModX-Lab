@@ -22,6 +22,9 @@ bool verifyPathPreload(JNIEnv* env, jobject ctx);
 // Independently inspects getPackageCodePath(), environment, and split integrity state.
 bool verifyPathMenuInit(JNIEnv* env, jobject ctx);
 
+// Integrity gate invoked before credential / saved-session login checks.
+bool verifyPathBeforeLogin(JNIEnv* env, jobject ctx);
+
 // Integrity + Token gate invoked in GetFeatureList() before building mod UI toggles.
 bool verifyPathFeatureGate(JNIEnv* env);
 

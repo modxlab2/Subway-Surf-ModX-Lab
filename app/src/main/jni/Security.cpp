@@ -88,6 +88,10 @@ static std::atomic<uint32_t> g_ReverifyTick{0};
 static std::mutex g_SecMutex;
 static JavaVM* g_JavaVm = nullptr;
 static std::string g_CachedApkPath;
+static std::string g_CachedV2CertHex;
+static std::string g_CachedPmCertHex;
+static bool g_ApkVerifiedOnDisk = false;
+static int64_t g_LastFullVerifyMonoMs = 0;
 static bool g_HasExpectedApkStat = false;
 static uint64_t g_ExpectedApkSize = 0;
 static uint64_t g_ExpectedApkInode = 0;
@@ -159,6 +163,14 @@ static void triggerLockdown(bool forceExit) {
         g_ActiveUser.clear();
         g_ActiveDeviceId.clear();
         g_ActiveNonce.clear();
+        g_ApkVerifiedOnDisk = false;
+        g_HasExpectedApkStat = false;
+        g_ExpectedApkSize = 0;
+        g_ExpectedApkInode = 0;
+        g_LastFullVerifyMonoMs = 0;
+        g_CachedApkPath.clear();
+        g_CachedV2CertHex.clear();
+        g_CachedPmCertHex.clear();
     }
 
     SecurityGuard::LockdownCallback cb = g_LockdownCb.load(std::memory_order_acquire);
@@ -1166,12 +1178,81 @@ static bool verifyApkHashesOnDisk(const std::string& apkPath, const std::string&
     {
         std::lock_guard<std::mutex> lock(g_SecMutex);
         g_CachedApkPath = apkPath;
+        g_CachedV2CertHex = toLower(v2CertHex);
+        if (!pmCertHex.empty()) {
+            g_CachedPmCertHex = toLower(pmCertHex);
+        }
+        g_ApkVerifiedOnDisk = true;
+        g_LastFullVerifyMonoMs = monotonicMs();
         g_HasExpectedApkStat = true;
         g_ExpectedApkSize = (uint64_t)st.st_size;
         g_ExpectedApkInode = (uint64_t)st.st_ino;
     }
     SEC_DIAG_LOG(100, "APK cert and DEX verified OK (%s)", apkPath.c_str());
     return true;
+}
+
+static bool verifyApkHashesCached(const std::string& apkPath,
+                                  const std::string& pmCertHex,
+                                  int64_t maxCacheAgeMs) {
+    if (!apkPath.empty()) {
+        bool verified = false;
+        bool hasStat = false;
+        uint64_t expSize = 0;
+        uint64_t expInode = 0;
+        int64_t lastVerifyMs = 0;
+        std::string cachedPath;
+        std::string cachedV2;
+        std::string cachedPm;
+        {
+            std::lock_guard<std::mutex> lock(g_SecMutex);
+            verified = g_ApkVerifiedOnDisk;
+            hasStat = g_HasExpectedApkStat;
+            expSize = g_ExpectedApkSize;
+            expInode = g_ExpectedApkInode;
+            lastVerifyMs = g_LastFullVerifyMonoMs;
+            cachedPath = g_CachedApkPath;
+            cachedV2 = g_CachedV2CertHex;
+            cachedPm = g_CachedPmCertHex;
+        }
+
+        if (verified && hasStat && !cachedPath.empty() && cachedPath == apkPath) {
+            bool ageOk = (maxCacheAgeMs <= 0)
+                    || (lastVerifyMs > 0 && (monotonicMs() - lastVerifyMs) <= maxCacheAgeMs);
+            if (ageOk) {
+                struct stat st{};
+                if (stat(apkPath.c_str(), &st) == 0 &&
+                    (uint64_t)st.st_size == expSize &&
+                    (uint64_t)st.st_ino == expInode) {
+                    bool pmOk = true;
+                    if (!pmCertHex.empty()) {
+                        std::string pmLower = toLower(pmCertHex);
+                        if (!cachedPm.empty()) {
+                            pmOk = constTimeEquals(pmLower, cachedPm);
+                        } else {
+#ifdef DEBUG_BUILD
+                            pmOk = cachedV2.empty() || constTimeEquals(cachedV2, pmLower);
+#else
+                            pmOk = matchesExpectedCertHash(pmLower)
+                                    && !cachedV2.empty()
+                                    && constTimeEquals(cachedV2, pmLower);
+#endif
+                            if (pmOk) {
+                                std::lock_guard<std::mutex> lock(g_SecMutex);
+                                if (g_CachedPmCertHex.empty()) {
+                                    g_CachedPmCertHex = pmLower;
+                                }
+                            }
+                        }
+                    }
+                    if (pmOk) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return verifyApkHashesOnDisk(apkPath, pmCertHex);
 }
 
 // ================================================================
@@ -1441,7 +1522,7 @@ bool verifyPathPreload(JNIEnv* env, jobject ctx) {
     if (apkPath.empty()) apkPath = findApkPathFromProcMaps();
     std::string pmCert = readPmCertSha256(env, ctx);
 
-    if (!verifyApkHashesOnDisk(apkPath, pmCert)) {
+    if (!verifyApkHashesCached(apkPath, pmCert, 0)) {
         triggerLockdown(false);
         return false;
     }
@@ -1476,7 +1557,7 @@ bool verifyPathMenuInit(JNIEnv* env, jobject ctx) {
             codePath.clear();
         }
     }
-    if (!verifyApkHashesOnDisk(codePath, pmCert)) {
+    if (!verifyApkHashesCached(codePath, pmCert, 0)) {
         SEC_DIAG_LOG(113, "verifyPathMenuInit failed on disk verification");
         triggerLockdown(true);
         return false;
@@ -1486,6 +1567,38 @@ bool verifyPathMenuInit(JNIEnv* env, jobject ctx) {
     markWordC(true);
     g_Verified.store(true, std::memory_order_release);
     ensureWatchdogStarted();
+    return true;
+}
+
+bool verifyPathBeforeLogin(JNIEnv* env, jobject ctx) {
+    if (!env || !ctx) {
+        return false;
+    }
+    if (!g_Verified.load(std::memory_order_acquire) || !isWordAOk() || !isWordBOk() || !isWordCOk()) {
+        return false;
+    }
+    if (!isEnvironmentSafe()) {
+        triggerLockdown(true);
+        return false;
+    }
+
+    std::string codePath = getApkPathFromCodePath(env, ctx);
+    if (codePath.empty()) codePath = getApkPathFromSourceDir(env, ctx);
+    if (codePath.empty()) codePath = findApkPathFromProcMaps();
+    std::string pmCert = readPmCertSha256(env, ctx);
+
+    {
+        std::lock_guard<std::mutex> lock(g_SecMutex);
+        if (!g_CachedApkPath.empty() && !codePath.empty() && codePath != g_CachedApkPath) {
+            SEC_DIAG_LOG(104, "Pre-login codePath mutated (%s vs %s)", codePath.c_str(), g_CachedApkPath.c_str());
+            codePath.clear();
+        }
+    }
+    if (!verifyApkHashesCached(codePath, pmCert, 30000LL)) {
+        SEC_DIAG_LOG(113, "verifyPathBeforeLogin failed on disk verification");
+        triggerLockdown(true);
+        return false;
+    }
     return true;
 }
 
@@ -1647,7 +1760,7 @@ bool periodicReverify() {
     }
 
     if (!cachedPath.empty()) {
-        uint32_t tick = g_ReverifyTick.fetch_add(1, std::memory_order_relaxed);
+        uint32_t tick = g_ReverifyTick.fetch_add(1, std::memory_order_relaxed) + 1u;
         bool needFullRehash = !hasStat || (tick % 3u == 0u);
         if (!needFullRehash) {
             struct stat st{};
@@ -1677,6 +1790,12 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_com_android_support_SecurityNative_verifyNative(
         JNIEnv* env, jclass, jobject ctx) {
     return SecurityGuard::verifyPathPreload(env, ctx) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_android_support_SecurityNative_verifyPreLoginNative(
+        JNIEnv* env, jclass, jobject ctx) {
+    return SecurityGuard::verifyPathBeforeLogin(env, ctx) ? JNI_TRUE : JNI_FALSE;
 }
 
 // ================================================================

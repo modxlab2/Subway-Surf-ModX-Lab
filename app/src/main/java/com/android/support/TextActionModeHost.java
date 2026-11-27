@@ -3,6 +3,7 @@ package com.android.support;
 import android.app.Activity;
 import android.app.Dialog;
 import android.content.ClipData;
+import android.content.ClipDescription;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.res.ColorStateList;
@@ -25,8 +26,6 @@ import android.os.Build;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.text.Layout;
-import android.text.Selection;
-import android.text.Spannable;
 import android.text.method.PasswordTransformationMethod;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
@@ -50,7 +49,6 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
-import android.widget.PopupWindow;
 import android.widget.TextView;
 
 import java.util.ArrayList;
@@ -60,25 +58,23 @@ import java.util.ArrayList;
  * WindowManager.addView() windows (both Activity and Service overlay modes).
  *
  * Strategy:
- *  1) Always tries the real framework ActionMode path first (via a transparent
- *     non-touchable/non-focusable host Dialog matching the Menu's window type).
- *  2) Falls back automatically at runtime to HostedPopupActionMode (a system-
- *     faithful themed PopupWindow implementing ActionMode) only when the
- *     framework path fails (null, exception, premature destroy, 0 items, or
- *     content rect never requested within 180ms).
- *  3) In SEC_DIAG builds only, supports cycling AUTO -> FW -> POPUP for testing.
+ *  - Default everywhere (AUTO): displays a system-faithful ToolbarWindow via
+ *    WindowManager.addView() in the exact same window type/token family as
+ *    the Menu window, with no helper Dialog overhead and absolute screen coords.
+ *  - SEC_DIAG-only "FW" mode (force framework): keeps the legacy Dialog-hosted
+ *    framework ActionMode path strictly for diagnostic comparison.
  */
 final class TextActionModeHost {
 
     static final int DIAG_MODE_AUTO            = 0;
     static final int DIAG_MODE_FORCE_FRAMEWORK = 1;
-    static final int DIAG_MODE_FORCE_POPUP     = 2;
 
     private static volatile int diagMode = DIAG_MODE_AUTO;
 
     private final Context ctx;
     private final boolean overlayRequired;
 
+    // Only created in SEC_DIAG builds when DIAG_MODE_FORCE_FRAMEWORK is explicitly enabled
     private Dialog hostDialog;
     private View dummyView;
     private boolean hostAttached = false;
@@ -86,8 +82,6 @@ final class TextActionModeHost {
     private ActionMode activeMode;
     private EditText activeOwner;
     private ActionMode.Callback activeOrigCallback;
-    private int activeType = 0;
-    private boolean activeHasTypeArg = false;
     private boolean destroyed = false;
 
     private boolean finishingByHost = false;
@@ -97,7 +91,6 @@ final class TextActionModeHost {
     private int frameworkContentRectCalls = 0;
     private long modeCreatedAtMs = 0L;
     private boolean suppressedForDrag = false;
-    private Runnable healthCheckRunnable = null;
 
     private final int[] etScreenLoc = new int[2];
     private final int[] etWinLoc = new int[2];
@@ -111,6 +104,7 @@ final class TextActionModeHost {
     private int lastObsWinX = Integer.MIN_VALUE;
     private int lastObsWinY = Integer.MIN_VALUE;
     private int lastObsScrollX = Integer.MIN_VALUE;
+    private int lastObsScrollY = Integer.MIN_VALUE;
     private int lastObsSelStart = Integer.MIN_VALUE;
     private int lastObsSelEnd = Integer.MIN_VALUE;
     private int lastObsVisBottom = Integer.MIN_VALUE;
@@ -127,27 +121,26 @@ final class TextActionModeHost {
 
     static int cycleDiagMode() {
         if (!BuildConfig.SEC_DIAG) return DIAG_MODE_AUTO;
-        diagMode = (diagMode + 1) % 3;
+        diagMode = (diagMode + 1) % 2;
         return diagMode;
     }
 
     static String getDiagModeLabel() {
         if (!BuildConfig.SEC_DIAG) return "";
-        switch (diagMode) {
-            case DIAG_MODE_FORCE_FRAMEWORK: return "FW";
-            case DIAG_MODE_FORCE_POPUP:     return "POPUP";
-            default:                        return "AUTO";
-        }
+        return (diagMode == DIAG_MODE_FORCE_FRAMEWORK) ? "FW" : "AUTO";
     }
 
     void prepare() {
         if (destroyed || ctx == null) {
-            if (BuildConfig.SEC_DIAG) {
-                SecurityNative.diagUi("prepare skipped: destroyed=" + destroyed + " ctxNull=" + (ctx == null));
-            }
             return;
         }
         if (Looper.myLooper() != Looper.getMainLooper()) {
+            return;
+        }
+
+        // Remove helper Dialog entirely from automatic path
+        if (!BuildConfig.SEC_DIAG || getDiagMode() != DIAG_MODE_FORCE_FRAMEWORK) {
+            dismissDialogOnly();
             return;
         }
 
@@ -157,11 +150,6 @@ final class TextActionModeHost {
             boolean tokenMissing = dummyView == null || (hostAttached && dummyView.getWindowToken() == null);
             if (showing && dummyView != null && !tokenMissing) {
                 return;
-            }
-            if (BuildConfig.SEC_DIAG) {
-                SecurityNative.diagUi("prepare: recreating host dialog (showing=" + showing
-                        + " attached=" + hostAttached
-                        + " token=" + (dummyView != null && dummyView.getWindowToken() != null) + ")");
             }
             dismissDialogOnly();
         }
@@ -192,9 +180,7 @@ final class TextActionModeHost {
                     hostAttached = true;
                     if (BuildConfig.SEC_DIAG) {
                         SecurityNative.diagUi("host dummyView attached (token="
-                                + (v.getWindowToken() != null)
-                                + ", winFocus=" + v.hasWindowFocus()
-                                + ", size=" + v.getWidth() + "x" + v.getHeight() + ")");
+                                + (v.getWindowToken() != null) + ")");
                     }
                 }
 
@@ -206,22 +192,6 @@ final class TextActionModeHost {
                     }
                 }
             });
-            if (BuildConfig.SEC_DIAG) {
-                dummy.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
-                    private int prevW = -1, prevH = -1;
-                    @Override
-                    public void onLayoutChange(View v, int l, int t, int r, int b,
-                                               int ol, int ot, int or, int ob) {
-                        int w = r - l;
-                        int h = b - t;
-                        if (w != prevW || h != prevH) {
-                            prevW = w;
-                            prevH = h;
-                            SecurityNative.diagUi("host dummyView layout: size=" + w + "x" + h);
-                        }
-                    }
-                });
-            }
             container.addView(dummy, new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT));
@@ -268,15 +238,13 @@ final class TextActionModeHost {
             this.hostDialog = dialog;
             this.dummyView = dummy;
             if (BuildConfig.SEC_DIAG) {
-                SecurityNative.diagUi("prepare: host dialog shown (ctx="
-                        + ctx.getClass().getSimpleName()
-                        + ", isActivity=" + (ctx instanceof Activity)
-                        + ", overlay=" + overlayRequired
-                        + ", winType=" + resolvedWinType + ")");
+                SecurityNative.diagUi("prepare(force-framework): host dialog shown (winType="
+                        + resolvedWinType + ")");
             }
         } catch (Throwable t) {
             if (BuildConfig.SEC_DIAG) {
-                SecurityNative.diagUi("prepare failed: " + SecurityNative.diagException(t));
+                SecurityNative.diagUi("prepare(force-framework) failed: "
+                        + SecurityNative.diagException(t));
             }
             dismissDialogOnly();
         }
@@ -328,52 +296,32 @@ final class TextActionModeHost {
         if (activeMode != null) {
             finishActiveMode(activeOwner != owner ? "switch-owner" : "restart-mode", false);
         }
-        cancelHealthCheck(owner);
         suppressedForDrag = false;
 
-        final int modePref = getDiagMode();
-
-        if (modePref == DIAG_MODE_FORCE_POPUP) {
-            return startPopupCloneMode(owner, origCallback, type, hasTypeArg, "diag-force-popup");
-        }
-
-        if (!isHostReady()) {
-            prepare();
-        }
-
-        boolean ready = isHostReady();
-        boolean tokenPresent = dummyView != null && dummyView.getWindowToken() != null;
-        if (!ready && !(modePref == DIAG_MODE_FORCE_FRAMEWORK && tokenPresent)) {
-            if (BuildConfig.SEC_DIAG) {
-                boolean showing = false;
-                try { showing = hostDialog != null && hostDialog.isShowing(); } catch (Throwable ignored) { }
-                SecurityNative.diagUi("framework-host skipped (mode=" + getDiagModeLabel()
-                        + "): host not ready (showing=" + showing
-                        + ", attached=" + hostAttached
-                        + ", token=" + tokenPresent
-                        + ", shown=" + (dummyView != null && dummyView.isShown())
-                        + ", size=" + (dummyView != null ? dummyView.getWidth() + "x" + dummyView.getHeight() : "null")
-                        + ")");
+        if (BuildConfig.SEC_DIAG && getDiagMode() == DIAG_MODE_FORCE_FRAMEWORK) {
+            if (!isHostReady()) {
+                prepare();
             }
-            if (modePref == DIAG_MODE_FORCE_FRAMEWORK) {
+            boolean ready = isHostReady();
+            boolean tokenPresent = dummyView != null && dummyView.getWindowToken() != null;
+            if (!ready && !tokenPresent) {
+                SecurityNative.diagUi("toolbar path failed (force-framework, host not ready)");
                 return null;
             }
-            return startPopupCloneMode(owner, origCallback, type, hasTypeArg, "framework-host-not-ready");
-        }
-
-        FrameworkAttempt attempt = tryStartFrameworkMode(owner, origCallback, type, hasTypeArg);
-        if (attempt.mode != null) {
-            return attempt.mode;
-        }
-
-        if (modePref == DIAG_MODE_FORCE_FRAMEWORK) {
-            if (BuildConfig.SEC_DIAG) {
-                SecurityNative.diagUi("toolbar path failed (force-framework, no fallback): reason=" + attempt.failReason);
+            FrameworkAttempt attempt = tryStartFrameworkMode(owner, origCallback, type, hasTypeArg);
+            if (attempt.mode != null) {
+                return attempt.mode;
             }
+            SecurityNative.diagUi("toolbar path failed (force-framework, no fallback): reason="
+                    + attempt.failReason);
             return null;
         }
 
-        return startPopupCloneMode(owner, origCallback, type, hasTypeArg, attempt.failReason);
+        dismissDialogOnly();
+        String reason = overlayRequired
+                ? "overlay-required"
+                : (Build.VERSION.SDK_INT >= 31 ? "api31+" : "activity-default");
+        return startOverlayWindowMode(owner, origCallback, type, hasTypeArg, reason);
     }
 
     private static final class FrameworkAttempt {
@@ -438,18 +386,13 @@ final class TextActionModeHost {
 
             if (mode == null) {
                 if (BuildConfig.SEC_DIAG) {
-                    SecurityNative.diagUi("framework-host returned null (type=" + type
-                            + ", mode=" + getDiagModeLabel() + ")");
+                    SecurityNative.diagUi("framework-host returned null (type=" + type + ")");
                 }
                 return new FrameworkAttempt(null, "framework-returned-null");
             }
 
             if (!frameworkCreatedOk || frameworkPreparedVisibleCount <= 0) {
                 String why = !frameworkCreatedOk ? "framework-create-false" : "framework-0-items";
-                if (BuildConfig.SEC_DIAG) {
-                    SecurityNative.diagUi("framework-host unusable synchronously (" + why
-                            + ", visibleItems=" + frameworkPreparedVisibleCount + ")");
-                }
                 finishingByHost = true;
                 try { mode.finish(); } catch (Throwable ignored) { }
                 finishingByHost = false;
@@ -459,8 +402,6 @@ final class TextActionModeHost {
             activeMode = mode;
             activeOwner = owner;
             activeOrigCallback = origCallback;
-            activeType = type;
-            activeHasTypeArg = hasTypeArg;
             attachPositionObserver(owner);
 
             if (BuildConfig.SEC_DIAG) {
@@ -469,12 +410,6 @@ final class TextActionModeHost {
                         + ", overlay=" + overlayRequired
                         + ", api=" + Build.VERSION.SDK_INT
                         + ", items=" + frameworkPreparedVisibleCount + ")");
-            }
-
-            if (getDiagMode() == DIAG_MODE_AUTO
-                    && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-                    && type == ActionMode.TYPE_FLOATING) {
-                scheduleFrameworkHealthCheck(owner, mode, origCallback, type, hasTypeArg);
             }
             return new FrameworkAttempt(mode, null);
         } catch (Throwable t) {
@@ -485,103 +420,35 @@ final class TextActionModeHost {
         }
     }
 
-    private void scheduleFrameworkHealthCheck(final EditText owner,
-                                              final ActionMode fwMode,
+    private ActionMode startOverlayWindowMode(final EditText owner,
                                               final ActionMode.Callback origCallback,
                                               final int type,
-                                              final boolean hasTypeArg) {
-        cancelHealthCheck(owner);
-        healthCheckRunnable = new Runnable() {
-            @Override
-            public void run() {
-                healthCheckRunnable = null;
-                if (destroyed || activeMode != fwMode || activeOwner != owner) {
-                    return;
-                }
-                if (!isViewAttached(owner) || !owner.hasFocus() || suppressedForDrag) {
-                    return;
-                }
-                if (frameworkContentRectCalls == 0) {
-                    if (BuildConfig.SEC_DIAG) {
-                        SecurityNative.diagUi("framework-host toolbar not shown (onGetContentRect=0 after 180ms) -> falling back to popup-clone");
-                    }
-                    fallbackFromBrokenFramework(owner, origCallback, type, hasTypeArg, "framework-not-shown-timeout");
-                }
-            }
-        };
-        owner.postDelayed(healthCheckRunnable, 180L);
-    }
-
-    private void cancelHealthCheck(EditText owner) {
-        if (healthCheckRunnable != null && owner != null) {
-            owner.removeCallbacks(healthCheckRunnable);
-        }
-        healthCheckRunnable = null;
-    }
-
-    private void fallbackFromBrokenFramework(final EditText owner,
-                                             final ActionMode.Callback origCallback,
-                                             final int type,
-                                             final boolean hasTypeArg,
-                                             final String reason) {
-        if (destroyed || owner == null || !isViewAttached(owner) || !owner.hasFocus()) return;
-        if (getDiagMode() == DIAG_MODE_FORCE_FRAMEWORK) return;
-
-        final int s = Math.max(0, owner.getSelectionStart());
-        final int e = Math.max(0, owner.getSelectionEnd());
-
-        finishActiveMode(reason, false);
-
-        owner.post(new Runnable() {
-            @Override
-            public void run() {
-                if (destroyed || !isViewAttached(owner) || !owner.hasFocus() || activeMode != null) {
-                    return;
-                }
-                try {
-                    if (owner.getText() instanceof Spannable) {
-                        int len = owner.getText().length();
-                        int cs = Math.min(s, len);
-                        int ce = Math.min(e, len);
-                        Selection.setSelection(owner.getText(), cs, ce);
-                    }
-                } catch (Throwable ignored) { }
-                startPopupCloneMode(owner, origCallback, type, hasTypeArg, reason);
-            }
-        });
-    }
-
-    private ActionMode startPopupCloneMode(final EditText owner,
-                                           final ActionMode.Callback origCallback,
-                                           final int type,
-                                           final boolean hasTypeArg,
-                                           final String reason) {
+                                              final boolean hasTypeArg,
+                                              final String reason) {
         try {
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diagUi("toolbar path: overlay-window (reason=" + reason
+                        + ", mode=" + getDiagModeLabel()
+                        + ", type=" + type
+                        + ", overlay=" + overlayRequired
+                        + ", api=" + Build.VERSION.SDK_INT + ")");
+            }
             HostedPopupActionMode mode = new HostedPopupActionMode(
                     this, ctx, owner, origCallback, type, hasTypeArg);
             if (!mode.start()) {
                 if (BuildConfig.SEC_DIAG) {
-                    SecurityNative.diagUi("popup-clone aborted: 0 usable items (reason=" + reason + ")");
+                    SecurityNative.diagUi("overlay-window aborted: 0 usable items (reason=" + reason + ")");
                 }
                 return null;
             }
             activeMode = mode;
             activeOwner = owner;
             activeOrigCallback = origCallback;
-            activeType = type;
-            activeHasTypeArg = hasTypeArg;
             attachPositionObserver(owner);
-            if (BuildConfig.SEC_DIAG) {
-                SecurityNative.diagUi("toolbar path chosen: popup-clone (reason=" + reason
-                        + ", mode=" + getDiagModeLabel()
-                        + ", type=" + type
-                        + ", overlay=" + overlayRequired
-                        + ", api=" + Build.VERSION.SDK_INT + ")");
-            }
             return mode;
         } catch (Throwable t) {
             if (BuildConfig.SEC_DIAG) {
-                SecurityNative.diagUi("popup-clone failed (" + reason + "): "
+                SecurityNative.diagUi("overlay-window failed (" + reason + "): "
                         + SecurityNative.diagException(t));
             }
             return null;
@@ -610,46 +477,16 @@ final class TextActionModeHost {
 
     private void onHostModeDestroyed(final EditText owner, ActionMode mode) {
         long ageMs = SystemClock.uptimeMillis() - modeCreatedAtMs;
-        cancelHealthCheck(owner);
         if (BuildConfig.SEC_DIAG) {
             SecurityNative.diagUi("framework.onDestroy: ageMs=" + ageMs
                     + " byHost=" + finishingByHost
                     + " clicked=" + modeItemClicked);
         }
-        boolean wasActive = (activeMode == mode);
-        final ActionMode.Callback savedCb = activeOrigCallback;
-        final int savedType = activeType;
-        final boolean savedHasType = activeHasTypeArg;
-        if (wasActive) {
+        if (activeMode == mode) {
             activeMode = null;
             activeOwner = null;
             activeOrigCallback = null;
             detachPositionObserver();
-        }
-        if (!finishingByHost && !modeItemClicked && ageMs < 200L && !destroyed
-                && getDiagMode() == DIAG_MODE_AUTO
-                && owner != null && isViewAttached(owner) && owner.hasFocus()
-                && savedCb != null) {
-            if (BuildConfig.SEC_DIAG) {
-                SecurityNative.diagUi("framework destroyed prematurely (" + ageMs + "ms) -> fallback to popup-clone");
-            }
-            final int s = Math.max(0, owner.getSelectionStart());
-            final int e = Math.max(0, owner.getSelectionEnd());
-            owner.post(new Runnable() {
-                @Override
-                public void run() {
-                    if (!destroyed && isViewAttached(owner) && owner.hasFocus() && activeMode == null) {
-                        try {
-                            if (owner.getText() instanceof Spannable) {
-                                int len = owner.getText().length();
-                                Selection.setSelection(owner.getText(), Math.min(s, len), Math.min(e, len));
-                            }
-                        } catch (Throwable ignored) { }
-                        startPopupCloneMode(owner, savedCb, savedType, savedHasType,
-                                "premature-destroy-" + ageMs + "ms");
-                    }
-                }
-            });
         }
         finishingByHost = false;
     }
@@ -657,7 +494,7 @@ final class TextActionModeHost {
     void invalidateContentRectIfOwner(EditText owner) {
         if (activeMode == null || activeOwner != owner || suppressedForDrag) return;
         if (activeMode instanceof HostedPopupActionMode) {
-            ((HostedPopupActionMode) activeMode).updatePopupPosition();
+            ((HostedPopupActionMode) activeMode).updateWindowPosition();
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             Api23Helper.invalidateContentRect(activeMode);
         }
@@ -674,7 +511,7 @@ final class TextActionModeHost {
     void repositionActiveMode() {
         if (activeMode == null || activeOwner == null || suppressedForDrag) return;
         if (activeMode instanceof HostedPopupActionMode) {
-            ((HostedPopupActionMode) activeMode).updatePopupPosition();
+            ((HostedPopupActionMode) activeMode).updateWindowPosition();
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             Api23Helper.invalidateContentRect(activeMode);
         }
@@ -768,7 +605,6 @@ final class TextActionModeHost {
     }
 
     void finishActiveMode(String reason, boolean animateOut) {
-        cancelHealthCheck(activeOwner);
         detachPositionObserver();
         suppressedForDrag = false;
         if (activeMode != null) {
@@ -794,8 +630,13 @@ final class TextActionModeHost {
         }
     }
 
+    private int lastHostVisible = -1;
+
     void onVisibilityChanged(boolean visible) {
         if (destroyed) return;
+        int next = visible ? 1 : 0;
+        if (lastHostVisible == next) return;
+        lastHostVisible = next;
         if (BuildConfig.SEC_DIAG) {
             SecurityNative.diagUi("onVisibilityChanged: visible=" + visible);
         }
@@ -811,6 +652,7 @@ final class TextActionModeHost {
         if (BuildConfig.SEC_DIAG) {
             SecurityNative.diagUi("destroy() called");
         }
+        lastHostVisible = -1;
         destroyed = true;
         finishActiveMode("destroy", false);
         dismissDialogOnly();
@@ -839,16 +681,10 @@ final class TextActionModeHost {
             outRect.offset(etScreenLoc[0] - dummyLoc[0], etScreenLoc[1] - dummyLoc[1]);
             if (BuildConfig.SEC_DIAG) {
                 Rect vis = computeVisibleDisplayFrame(ctx, owner, safeMetrics(ctx));
-                boolean offScreen = outRect.right <= 0 || outRect.bottom <= 0
-                        || outRect.left >= dummyView.getWidth()
-                        || outRect.top >= dummyView.getHeight();
                 SecurityNative.diagUi("framework.onGetContentRect: contentRect=[" + bL + "," + bT + "," + bR + "," + bB
                         + "] winOffset=[" + winOffX + "," + winOffY
-                        + "] dummyLoc=[" + dummyLoc[0] + "," + dummyLoc[1]
                         + "] mapped=[" + outRect.left + "," + outRect.top + "," + outRect.right + "," + outRect.bottom
-                        + "] visFrame=[" + vis.left + "," + vis.top + "," + vis.right + "," + vis.bottom
-                        + "] dummySize=" + dummyView.getWidth() + "x" + dummyView.getHeight()
-                        + (offScreen ? " OFF_SCREEN" : ""));
+                        + "] visFrame=[" + vis.left + "," + vis.top + "," + vis.right + "," + vis.bottom + "]");
             }
         }
     }
@@ -864,6 +700,7 @@ final class TextActionModeHost {
         lastObsWinX = etWinLoc[0];
         lastObsWinY = etWinLoc[1];
         lastObsScrollX = owner.getScrollX();
+        lastObsScrollY = owner.getScrollY();
         lastObsSelStart = owner.getSelectionStart();
         lastObsSelEnd = owner.getSelectionEnd();
         lastObsVisTop = tmpVisRect.top;
@@ -880,6 +717,7 @@ final class TextActionModeHost {
                 owner.getLocationInWindow(etWinLoc);
                 computeVisibleDisplayFrame(ctx, owner, safeMetrics(ctx), tmpVisRect);
                 int sx = owner.getScrollX();
+                int sy = owner.getScrollY();
                 int ss = owner.getSelectionStart();
                 int se = owner.getSelectionEnd();
                 if (etScreenLoc[0] != lastObsScreenX
@@ -887,6 +725,7 @@ final class TextActionModeHost {
                         || etWinLoc[0] != lastObsWinX
                         || etWinLoc[1] != lastObsWinY
                         || sx != lastObsScrollX
+                        || sy != lastObsScrollY
                         || ss != lastObsSelStart
                         || se != lastObsSelEnd
                         || tmpVisRect.top != lastObsVisTop
@@ -896,6 +735,7 @@ final class TextActionModeHost {
                     lastObsWinX = etWinLoc[0];
                     lastObsWinY = etWinLoc[1];
                     lastObsScrollX = sx;
+                    lastObsScrollY = sy;
                     lastObsSelStart = ss;
                     lastObsSelEnd = se;
                     lastObsVisTop = tmpVisRect.top;
@@ -962,7 +802,7 @@ final class TextActionModeHost {
                     || id == android.R.id.selectAll);
             if (!allowed) {
                 mi.setVisible(false);
-                menu.removeItem(id);
+                mi.setEnabled(false);
             }
         }
     }
@@ -983,6 +823,22 @@ final class TextActionModeHost {
         try {
             ClipboardManager cm = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);
             if (cm == null || !cm.hasPrimaryClip()) return false;
+            // Prefer ClipDescription so Android 12+ does not fire "pasted from clipboard" banner on caret tap
+            ClipDescription desc = cm.getPrimaryClipDescription();
+            if (desc != null) {
+                if (desc.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN)
+                        || desc.hasMimeType(ClipDescription.MIMETYPE_TEXT_HTML)) {
+                    return true;
+                }
+                int mimeCount = desc.getMimeTypeCount();
+                for (int i = 0; i < mimeCount; i++) {
+                    String mime = desc.getMimeType(i);
+                    if (mime != null && mime.startsWith("text/")) {
+                        return true;
+                    }
+                }
+                return false;
+            }
             ClipData clip = cm.getPrimaryClip();
             if (clip == null || clip.getItemCount() == 0) return false;
             CharSequence txt = clip.getItemAt(0).coerceToText(ctx);
@@ -1016,11 +872,14 @@ final class TextActionModeHost {
         return android.content.res.Resources.getSystem().getDisplayMetrics();
     }
 
-    private static Context createDeviceFloatingThemeContext(Context baseCtx) {
+    private static boolean isNightMode(Context baseCtx) {
         int nightMask = baseCtx.getResources().getConfiguration().uiMode
                 & Configuration.UI_MODE_NIGHT_MASK;
-        boolean isNight = (nightMask == Configuration.UI_MODE_NIGHT_YES);
-        int themeRes = isNight
+        return (nightMask == Configuration.UI_MODE_NIGHT_YES);
+    }
+
+    private static Context createDeviceFloatingThemeContext(Context baseCtx) {
+        int themeRes = isNightMode(baseCtx)
                 ? android.R.style.Theme_DeviceDefault
                 : android.R.style.Theme_DeviceDefault_Light;
         return new ContextThemeWrapper(baseCtx, themeRes);
@@ -1159,7 +1018,7 @@ final class TextActionModeHost {
 
         static void invalidateContentRect(ActionMode mode) {
             if (mode instanceof HostedPopupActionMode) {
-                ((HostedPopupActionMode) mode).updatePopupPosition();
+                ((HostedPopupActionMode) mode).updateWindowPosition();
                 return;
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && mode != null) {
@@ -1171,7 +1030,272 @@ final class TextActionModeHost {
     }
 
     // =========================================================================
-    // System-faithful ActionMode backed by a themed PopupWindow anchored on owner
+    // Tiny dedicated overlay window added with WindowManager.addView()
+    // Uses the exact same window type/token family as Menu and screen coordinates.
+    // =========================================================================
+    private static final class ToolbarWindow {
+        private final TextActionModeHost host;
+        private final Context ctx;
+        private final Context themedCtx;
+
+        private WindowManager windowManager;
+        private WindowManager.LayoutParams windowParams;
+        private FrameLayout rootContainer;
+        private View panelCard;
+        private boolean windowAdded = false;
+
+        // Track closing view during 100ms fade-out so rapid re-open/destroy never leaks
+        private WindowManager closingWm;
+        private View closingRoot;
+
+        ToolbarWindow(TextActionModeHost host, Context ctx, Context themedCtx) {
+            this.host = host;
+            this.ctx = ctx;
+            this.themedCtx = themedCtx;
+        }
+
+        boolean isShowing() {
+            return windowAdded && rootContainer != null && windowManager != null;
+        }
+
+        void showOrUpdate(View card,
+                          int cardW,
+                          int cardH,
+                          int padSides,
+                          int padTop,
+                          int padBottom,
+                          int screenX,
+                          int screenY,
+                          boolean animateIn) {
+            if (!host.canShowHostWindow()) {
+                dismissImmediate();
+                return;
+            }
+
+            if (windowAdded && rootContainer != null && windowManager != null && windowParams != null) {
+                if (panelCard != null) {
+                    panelCard.animate().cancel();
+                }
+                rootContainer.setPadding(padSides, padTop, padSides, padBottom);
+                rootContainer.removeAllViews();
+                rootContainer.addView(card, new FrameLayout.LayoutParams(cardW, cardH));
+                panelCard = card;
+                windowParams.x = screenX;
+                windowParams.y = screenY;
+                try {
+                    windowManager.updateViewLayout(rootContainer, windowParams);
+                    if (BuildConfig.SEC_DIAG) {
+                        SecurityNative.diagUi("ToolbarWindow.update: pos=[" + screenX + "," + screenY
+                                + "] cardSize=" + cardW + "x" + cardH);
+                    }
+                    return;
+                } catch (Throwable t) {
+                    if (BuildConfig.SEC_DIAG) {
+                        SecurityNative.diagUi("ToolbarWindow.update failed: "
+                                + SecurityNative.diagException(t));
+                    }
+                    dismissImmediate();
+                }
+            }
+
+            dismissPendingClosingWindow();
+            dismissImmediate();
+
+            WindowManager wm = resolveWindowManager();
+            if (wm == null) return;
+
+            FrameLayout container = new FrameLayout(themedCtx);
+            container.setBackgroundColor(Color.TRANSPARENT);
+            container.setPadding(padSides, padTop, padSides, padBottom);
+            container.setClipToPadding(false);
+            container.setClipChildren(false);
+            container.addView(card, new FrameLayout.LayoutParams(cardW, cardH));
+
+            int winType = resolveWindowType();
+            int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                    | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                    | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
+            WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    winType,
+                    flags,
+                    PixelFormat.TRANSLUCENT);
+            lp.gravity = Gravity.TOP | Gravity.LEFT;
+            lp.x = screenX;
+            lp.y = screenY;
+            lp.dimAmount = 0f;
+            lp.windowAnimations = 0;
+
+            try {
+                wm.addView(container, lp);
+                this.windowManager = wm;
+                this.windowParams = lp;
+                this.rootContainer = container;
+                this.panelCard = card;
+                this.windowAdded = true;
+                if (BuildConfig.SEC_DIAG) {
+                    SecurityNative.diagUi("ToolbarWindow.add: type=" + winType
+                            + " flags=0x" + Integer.toHexString(flags)
+                            + " pos=[" + screenX + "," + screenY
+                            + "] cardSize=" + cardW + "x" + cardH
+                            + " overlay=" + host.overlayRequired);
+                }
+            } catch (Throwable t) {
+                this.windowAdded = false;
+                this.rootContainer = null;
+                this.panelCard = null;
+                this.windowParams = null;
+                this.windowManager = null;
+                if (BuildConfig.SEC_DIAG) {
+                    SecurityNative.diagUi("ToolbarWindow.add failed (type=" + winType + "): "
+                            + SecurityNative.diagException(t));
+                }
+                return;
+            }
+
+            if (animateIn) {
+                card.setPivotX(cardW / 2f);
+                card.setPivotY(cardH / 2f);
+                card.setAlpha(0f);
+                card.setScaleX(0.92f);
+                card.setScaleY(0.92f);
+                card.animate()
+                        .alpha(1f)
+                        .scaleX(1f)
+                        .scaleY(1f)
+                        .setDuration(150L)
+                        .setInterpolator(new DecelerateInterpolator())
+                        .start();
+            }
+        }
+
+        void updatePosition(int screenX, int screenY) {
+            if (!windowAdded || rootContainer == null || windowManager == null || windowParams == null) {
+                return;
+            }
+            if (windowParams.x == screenX && windowParams.y == screenY) {
+                return;
+            }
+            windowParams.x = screenX;
+            windowParams.y = screenY;
+            try {
+                windowManager.updateViewLayout(rootContainer, windowParams);
+            } catch (Throwable t) {
+                if (BuildConfig.SEC_DIAG) {
+                    SecurityNative.diagUi("ToolbarWindow.updatePosition failed: "
+                            + SecurityNative.diagException(t));
+                }
+            }
+        }
+
+        void dismissImmediate() {
+            if (panelCard != null) {
+                panelCard.animate().cancel();
+            }
+            if (windowAdded && rootContainer != null && windowManager != null) {
+                removeViewSafely(windowManager, rootContainer, "immediate");
+            }
+            windowAdded = false;
+            rootContainer = null;
+            panelCard = null;
+            windowParams = null;
+            windowManager = null;
+            dismissPendingClosingWindow();
+        }
+
+        void dismissAnimated(EditText owner) {
+            if (!windowAdded || rootContainer == null || windowManager == null) {
+                dismissPendingClosingWindow();
+                windowAdded = false;
+                rootContainer = null;
+                panelCard = null;
+                windowParams = null;
+                windowManager = null;
+                return;
+            }
+            dismissPendingClosingWindow();
+
+            final WindowManager wm = windowManager;
+            final View closingContainer = rootContainer;
+            final View animatingCard = panelCard;
+            windowAdded = false;
+            rootContainer = null;
+            panelCard = null;
+            windowParams = null;
+            windowManager = null;
+
+            if (animatingCard == null || host.destroyed || !isViewAttached(owner)) {
+                removeViewSafely(wm, closingContainer, "animated-fallback");
+                return;
+            }
+
+            closingWm = wm;
+            closingRoot = closingContainer;
+
+            animatingCard.animate().cancel();
+            animatingCard.animate()
+                    .alpha(0f)
+                    .setDuration(100L)
+                    .withEndAction(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (closingRoot == closingContainer) {
+                                closingWm = null;
+                                closingRoot = null;
+                            }
+                            removeViewSafely(wm, closingContainer, "animated");
+                        }
+                    })
+                    .start();
+        }
+
+        private void dismissPendingClosingWindow() {
+            if (closingRoot != null && closingWm != null) {
+                closingRoot.animate().cancel();
+                removeViewSafely(closingWm, closingRoot, "pending-cleanup");
+            }
+            closingWm = null;
+            closingRoot = null;
+        }
+
+        private static void removeViewSafely(WindowManager wm, View view, String tag) {
+            if (wm == null || view == null) return;
+            try {
+                wm.removeViewImmediate(view);
+                if (BuildConfig.SEC_DIAG) {
+                    SecurityNative.diagUi("ToolbarWindow.remove: mode=" + tag);
+                }
+            } catch (Throwable t1) {
+                try {
+                    wm.removeView(view);
+                    if (BuildConfig.SEC_DIAG) {
+                        SecurityNative.diagUi("ToolbarWindow.remove(fallback): mode=" + tag);
+                    }
+                } catch (Throwable ignored) { }
+            }
+        }
+
+        private WindowManager resolveWindowManager() {
+            if (!host.overlayRequired && ctx instanceof Activity) {
+                return ((Activity) ctx).getWindowManager();
+            }
+            return (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
+        }
+
+        private int resolveWindowType() {
+            if (host.overlayRequired || !(ctx instanceof Activity)) {
+                return (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                        ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                        : WindowManager.LayoutParams.TYPE_PHONE;
+            }
+            return WindowManager.LayoutParams.TYPE_APPLICATION;
+        }
+    }
+
+    // =========================================================================
+    // System-faithful ActionMode backed by a real Menu & ToolbarWindow overlay
     // =========================================================================
     private static final class HostedPopupActionMode extends ActionMode {
         private final TextActionModeHost host;
@@ -1180,18 +1304,15 @@ final class TextActionModeHost {
         private final EditText owner;
         private final ActionMode.Callback origCallback;
         private final Menu menu;
+        private final ToolbarWindow toolbarWindow;
         private final Rect tmpCallbackRect = new Rect();
         private final Rect tmpVisFrame = new Rect();
         private final int[] ownerScreen = new int[2];
-        private final int[] ownerWin = new int[2];
 
         private final int themeBgColor;
         private final int themeTextColor;
         private final int themeHighlightColor;
 
-        private PopupWindow popup;
-        private FrameLayout rootContainer;
-        private LinearLayout panelCard;
         private boolean overflowOpen = false;
         private final ArrayList<MenuItem> lastItems = new ArrayList<MenuItem>();
 
@@ -1222,10 +1343,33 @@ final class TextActionModeHost {
             this.owner = owner;
             this.origCallback = origCallback;
             this.menu = new PopupMenu(this.themedCtx, owner).getMenu();
+            this.toolbarWindow = new ToolbarWindow(host, ctx, this.themedCtx);
 
-            this.themeBgColor = ModxTheme.CARD;
-            this.themeTextColor = ModxTheme.FG;
-            this.themeHighlightColor = ModxTheme.accentSoft(ModxTheme.ACCENT);
+            boolean night = isNightMode(ctx);
+            int bgFallback = night ? ModxTheme.TOOLBAR_DARK_BG : ModxTheme.TOOLBAR_LIGHT_BG;
+            int bg = resolveThemeColor(this.themedCtx, android.R.attr.colorBackgroundFloating,
+                    resolveThemeColor(this.themedCtx, android.R.attr.colorBackground, bgFallback));
+            if (Color.alpha(bg) < 0xF0) {
+                bg = bgFallback;
+            }
+            this.themeBgColor = bg;
+
+            boolean bgIsLight = ModxTheme.isLight(this.themeBgColor);
+            int fgFallback = bgIsLight ? ModxTheme.TOOLBAR_LIGHT_FG : ModxTheme.TOOLBAR_DARK_FG;
+            int fg = resolveThemeColor(this.themedCtx, android.R.attr.textColorPrimary, fgFallback);
+            if (Color.alpha(fg) < 0xB0 || ModxTheme.contrastRatio(fg, this.themeBgColor) < 3.0) {
+                fg = fgFallback;
+            }
+            this.themeTextColor = fg;
+
+            int hlFallback = bgIsLight
+                    ? ModxTheme.TOOLBAR_LIGHT_HIGHLIGHT
+                    : ModxTheme.TOOLBAR_DARK_HIGHLIGHT;
+            int hl = resolveThemeColor(this.themedCtx, android.R.attr.colorControlHighlight, hlFallback);
+            if (Color.alpha(hl) == 0) {
+                hl = hlFallback;
+            }
+            this.themeHighlightColor = hl;
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && hasTypeArg) {
                 try {
@@ -1264,7 +1408,7 @@ final class TextActionModeHost {
                 return false;
             }
             overflowOpen = false;
-            buildAndShowPopup(items, true);
+            buildAndShowWindow(items, true);
             return true;
         }
 
@@ -1282,8 +1426,13 @@ final class TextActionModeHost {
                 return;
             }
             overflowOpen = false;
-            boolean animate = (popup == null || !popup.isShowing());
-            buildAndShowPopup(items, animate);
+            boolean animate = !toolbarWindow.isShowing();
+            buildAndShowWindow(items, animate);
+        }
+
+        @Override
+        public void invalidateContentRect() {
+            updateWindowPosition();
         }
 
         @Override
@@ -1295,9 +1444,9 @@ final class TextActionModeHost {
             if (finished) return;
             finished = true;
             if (animateOut) {
-                dismissPopupAnimated();
+                toolbarWindow.dismissAnimated(owner);
             } else {
-                dismissPopupImmediate();
+                toolbarWindow.dismissImmediate();
             }
             if (host.activeMode == this) {
                 host.activeMode = null;
@@ -1312,7 +1461,7 @@ final class TextActionModeHost {
 
         void hideForDrag() {
             hiddenForDrag = true;
-            dismissPopupImmediate();
+            toolbarWindow.dismissImmediate();
         }
 
         void showAfterDrag() {
@@ -1324,7 +1473,7 @@ final class TextActionModeHost {
                 return;
             }
             overflowOpen = false;
-            buildAndShowPopup(items, true);
+            buildAndShowWindow(items, true);
         }
 
         @Override public Menu getMenu() { return menu; }
@@ -1425,13 +1574,15 @@ final class TextActionModeHost {
             tv.setFocusable(false);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 tv.setBackground(new RippleDrawable(
-                        ColorStateList.valueOf(themeHighlightColor), null, new ColorDrawable(Color.WHITE)));
+                        ColorStateList.valueOf(themeHighlightColor),
+                        null,
+                        new ColorDrawable(ModxTheme.TOOLBAR_RIPPLE_MASK)));
             }
             tv.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     if (BuildConfig.SEC_DIAG) {
-                        SecurityNative.diagUi("popup-clone.onClick: itemId=" + item.getItemId()
+                        SecurityNative.diagUi("ToolbarWindow.onClick: itemId=" + item.getItemId()
                                 + " title=" + resolveRealLabel(item));
                     }
                     boolean handled = false;
@@ -1474,29 +1625,28 @@ final class TextActionModeHost {
             btn.setContentDescription(isBackButton ? "Back" : "More options");
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 btn.setBackground(new RippleDrawable(
-                        ColorStateList.valueOf(themeHighlightColor), null, new ColorDrawable(Color.WHITE)));
+                        ColorStateList.valueOf(themeHighlightColor),
+                        null,
+                        new ColorDrawable(ModxTheme.TOOLBAR_RIPPLE_MASK)));
             }
             ImageView icon = new ImageView(themedCtx);
             icon.setScaleType(ImageView.ScaleType.CENTER);
-            int iconPx = dp(20, density);
-            icon.setImageDrawable(isBackButton
-                    ? ModxIcons.arrowLeft(themeTextColor, iconPx)
-                    : ModxIcons.moreVertical(themeTextColor, iconPx));
+            icon.setImageDrawable(new ToolbarGlyphDrawable(themeTextColor, density, isBackButton));
             btn.addView(icon, new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
             btn.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     overflowOpen = !isBackButton;
-                    buildAndShowPopup(allItems, false);
+                    buildAndShowWindow(allItems, false);
                 }
             });
             return btn;
         }
 
-        private void buildAndShowPopup(ArrayList<MenuItem> items, boolean animateIn) {
+        private void buildAndShowWindow(ArrayList<MenuItem> items, boolean animateIn) {
             if (finished || hiddenForDrag || !isViewAttached(owner) || owner.getWindowToken() == null) {
-                dismissPopupImmediate();
+                toolbarWindow.dismissImmediate();
                 return;
             }
             lastItems.clear();
@@ -1506,8 +1656,8 @@ final class TextActionModeHost {
             float density = dm.density > 0f ? dm.density : 2f;
             computeVisibleDisplayFrame(ctx, owner, dm, tmpVisFrame);
 
-            shadowPadSides = dp(10, density);
-            shadowPadTop = dp(6, density);
+            shadowPadSides = dp(12, density);
+            shadowPadTop = dp(8, density);
             shadowPadBottom = dp(14, density);
 
             int maxCardW = Math.min(
@@ -1559,11 +1709,11 @@ final class TextActionModeHost {
             LinearLayout card = new LinearLayout(themedCtx);
             GradientDrawable cardBg = new GradientDrawable();
             cardBg.setColor(themeBgColor);
-            cardBg.setCornerRadius(ModxTheme.RADIUS_DP * density);
-            cardBg.setStroke(Math.max(1, dp(1, density)), ModxTheme.LINE);
+            // 48dp pill -> 24dp radius; matches Android FloatingToolbar with zero stroke/dividers
+            cardBg.setCornerRadius(dp(24, density));
             card.setBackground(cardBg);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                card.setElevation(dp(4, density));
+                card.setElevation(dp(8, density));
                 card.setOutlineProvider(ViewOutlineProvider.BACKGROUND);
                 card.setClipToOutline(true);
             }
@@ -1582,7 +1732,7 @@ final class TextActionModeHost {
             } else {
                 card.setOrientation(LinearLayout.VERTICAL);
                 card.addView(makeOverflowIconButton(items, density, true),
-                        new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, rowH));
+                        new LinearLayout.LayoutParams(dp(48, density), rowH));
                 for (int i = 0; i < overflowItems.size(); i++) {
                     MenuItem mi = overflowItems.get(i);
                     TextView tv = makeMenuItemView(mi, resolveRealLabel(mi), density, true);
@@ -1597,109 +1747,36 @@ final class TextActionModeHost {
             lastCardW = Math.max(dp(48, density), card.getMeasuredWidth());
             lastCardH = Math.max(rowH, card.getMeasuredHeight());
 
-            FrameLayout container = new FrameLayout(themedCtx);
-            container.setBackgroundColor(Color.TRANSPARENT);
-            container.setPadding(shadowPadSides, shadowPadTop, shadowPadSides, shadowPadBottom);
-            container.setClipToPadding(false);
-            container.setClipChildren(false);
-            container.addView(card, new FrameLayout.LayoutParams(lastCardW, lastCardH));
-
-            int pwTotalW = lastCardW + shadowPadSides * 2;
-            int pwTotalH = lastCardH + shadowPadTop + shadowPadBottom;
-
-            int[] winPos = computePopupWindowPos(dm, density, lastCardW, lastCardH, items.size(), true);
-
-            if (popup != null && popup.isShowing()) {
-                rootContainer = container;
-                panelCard = card;
-                popup.setContentView(container);
-                try {
-                    popup.update(safeUpdateCoord(winPos[0]), safeUpdateCoord(winPos[1]), pwTotalW, pwTotalH);
-                    return;
-                } catch (Throwable ignored) {
-                    dismissPopupImmediate();
-                }
-            }
-
-            dismissPopupImmediate();
-            rootContainer = container;
-            panelCard = card;
-
-            PopupWindow pw = new PopupWindow(container, pwTotalW, pwTotalH, false);
-            pw.setTouchable(true);
-            pw.setOutsideTouchable(false);
-            pw.setClippingEnabled(false);
-            pw.setAnimationStyle(0);
-            pw.setInputMethodMode(PopupWindow.INPUT_METHOD_NOT_NEEDED);
-            pw.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                pw.setElevation(0f);
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
-                pw.setAttachedInDecor(false);
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                pw.setWindowLayoutType(WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL);
-            }
-
-            try {
-                pw.showAtLocation(owner, Gravity.TOP | Gravity.LEFT, winPos[0], winPos[1]);
-                this.popup = pw;
-            } catch (Throwable t) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    try {
-                        pw.setWindowLayoutType(WindowManager.LayoutParams.TYPE_APPLICATION_PANEL);
-                        pw.showAtLocation(owner, Gravity.TOP | Gravity.LEFT, winPos[0], winPos[1]);
-                        this.popup = pw;
-                    } catch (Throwable t2) {
-                        if (BuildConfig.SEC_DIAG) {
-                            SecurityNative.diagUi("popup-clone.showAtLocation failed: "
-                                    + SecurityNative.diagException(t2));
-                        }
-                    }
-                } else if (BuildConfig.SEC_DIAG) {
-                    SecurityNative.diagUi("popup-clone.showAtLocation failed: "
-                            + SecurityNative.diagException(t));
-                }
-            }
-
-            if (this.popup != null && animateIn && panelCard != null) {
-                panelCard.setAlpha(0f);
-                panelCard.setScaleX(0.92f);
-                panelCard.setScaleY(0.92f);
-                panelCard.animate()
-                        .alpha(1f)
-                        .scaleX(1f)
-                        .scaleY(1f)
-                        .setDuration(150L)
-                        .setInterpolator(new DecelerateInterpolator())
-                        .start();
-            }
+            int[] winPos = computeToolbarWindowPos(dm, density, lastCardW, lastCardH, items.size(), true);
+            toolbarWindow.showOrUpdate(
+                    card,
+                    lastCardW,
+                    lastCardH,
+                    shadowPadSides,
+                    shadowPadTop,
+                    shadowPadBottom,
+                    winPos[0],
+                    winPos[1],
+                    animateIn);
         }
 
-        void updatePopupPosition() {
+        void updateWindowPosition() {
             if (finished || hiddenForDrag || !isViewAttached(owner)) return;
-            if (popup == null || !popup.isShowing() || lastCardW <= 0 || lastCardH <= 0) {
+            if (!toolbarWindow.isShowing() || lastCardW <= 0 || lastCardH <= 0) {
                 return;
             }
             DisplayMetrics dm = safeMetrics(ctx);
             float density = dm.density > 0f ? dm.density : 2f;
-            int[] winPos = computePopupWindowPos(dm, density, lastCardW, lastCardH, lastItems.size(), false);
-            try {
-                popup.update(safeUpdateCoord(winPos[0]), safeUpdateCoord(winPos[1]), -1, -1);
-            } catch (Throwable ignored) { }
+            int[] winPos = computeToolbarWindowPos(dm, density, lastCardW, lastCardH, lastItems.size(), false);
+            toolbarWindow.updatePosition(winPos[0], winPos[1]);
         }
 
-        private static int safeUpdateCoord(int c) {
-            return (c == -1) ? -2 : c;
-        }
-
-        private int[] computePopupWindowPos(DisplayMetrics dm,
-                                            float density,
-                                            int cardW,
-                                            int cardH,
-                                            int itemCount,
-                                            boolean forceLog) {
+        private int[] computeToolbarWindowPos(DisplayMetrics dm,
+                                                float density,
+                                                int cardW,
+                                                int cardH,
+                                                int itemCount,
+                                                boolean forceLog) {
             computeVisibleDisplayFrame(ctx, owner, dm, tmpVisFrame);
 
             tmpCallbackRect.setEmpty();
@@ -1707,17 +1784,19 @@ final class TextActionModeHost {
                 Api23Helper.fillOriginalContentRect(origCallback, this, owner, tmpCallbackRect);
             }
             owner.getLocationOnScreen(ownerScreen);
-            owner.getLocationInWindow(ownerWin);
-            int winOffX = ownerScreen[0] - ownerWin[0];
-            int winOffY = ownerScreen[1] - ownerWin[1];
 
             int sA = Math.max(0, owner.getSelectionStart());
             int sB = Math.max(0, owner.getSelectionEnd());
             int sMin = Math.min(sA, sB);
             int sMax = Math.max(sA, sB);
 
-            int localLeft = 0;
-            int localRight = Math.max(1, owner.getWidth());
+            int padLeft = owner.getTotalPaddingLeft();
+            int padRight = owner.getTotalPaddingRight();
+            int innerLeft = padLeft;
+            int innerRight = Math.max(innerLeft + 1, owner.getWidth() - padRight);
+
+            int localLeft = innerLeft;
+            int localRight = innerRight;
             int localTextTop = Math.max(0, owner.getTotalPaddingTop());
             int localTextBottom = Math.max(localTextTop + 1, owner.getHeight() - owner.getTotalPaddingBottom());
             int selCenterX = ownerScreen[0] + owner.getWidth() / 2;
@@ -1731,14 +1810,21 @@ final class TextActionModeHost {
                     int contentLeftOff = owner.getTotalPaddingLeft() - owner.getScrollX();
                     localTextTop = contentTopOff + layout.getLineTop(line);
                     localTextBottom = contentTopOff + layout.getLineBottom(lineEnd);
-                    float px1 = layout.getPrimaryHorizontal(sMin);
-                    float px2 = (sMax != sMin) ? layout.getPrimaryHorizontal(sMax) : px1;
-                    int x1 = Math.round(contentLeftOff + Math.min(px1, px2));
-                    int x2 = Math.round(contentLeftOff + Math.max(px1, px2));
-                    localLeft = x1;
-                    localRight = Math.max(x1 + 1, x2);
-                    int centerLocalX = Math.max(0, Math.min(owner.getWidth(), (x1 + x2) / 2));
-                    selCenterX = ownerScreen[0] + centerLocalX;
+                    if (line == lineEnd) {
+                        float px1 = layout.getPrimaryHorizontal(sMin);
+                        float px2 = (sMax != sMin) ? layout.getPrimaryHorizontal(sMax) : px1;
+                        int x1 = Math.round(contentLeftOff + Math.min(px1, px2));
+                        int x2 = Math.round(contentLeftOff + Math.max(px1, px2));
+                        int visX1 = Math.max(innerLeft, Math.min(innerRight, x1));
+                        int visX2 = Math.max(innerLeft, Math.min(innerRight, x2));
+                        localLeft = visX1;
+                        localRight = Math.max(visX1 + 1, visX2);
+                        selCenterX = ownerScreen[0] + (visX1 + visX2) / 2;
+                    } else {
+                        localLeft = innerLeft;
+                        localRight = innerRight;
+                        selCenterX = ownerScreen[0] + (innerLeft + innerRight) / 2;
+                    }
                 } catch (Throwable ignored) { }
             } else if (tmpCallbackRect.width() > 0 && tmpCallbackRect.height() > 0) {
                 localLeft = tmpCallbackRect.left;
@@ -1749,8 +1835,10 @@ final class TextActionModeHost {
                 selCenterX = ownerScreen[0] + centerLocalX;
             }
 
-            int selScreenTop = ownerScreen[1] + localTextTop;
-            int selScreenBottom = ownerScreen[1] + localTextBottom;
+            int selScreenLeft = ownerScreen[0] + localLeft;
+            int selScreenRight = ownerScreen[0] + localRight;
+            int selScreenTop = ownerScreen[1] + Math.max(0, Math.min(owner.getHeight(), localTextTop));
+            int selScreenBottom = ownerScreen[1] + Math.max(1, Math.min(owner.getHeight(), localTextBottom));
             int cbScreenBottom = (tmpCallbackRect.height() > 0)
                     ? (ownerScreen[1] + tmpCallbackRect.bottom)
                     : selScreenBottom;
@@ -1761,12 +1849,12 @@ final class TextActionModeHost {
             int cardScreenX = Math.max(minScreenX, Math.min(selCenterX - cardW / 2, maxScreenX));
 
             int gap = dp(8, density);
-            int handleClearance = dp(24, density);
+            int handleClearance = dp(28, density);
             int yAbove = selScreenTop - cardH - gap;
             int yBelow = Math.max(selScreenBottom + handleClearance + gap, cbScreenBottom + gap);
 
-            int minTop = tmpVisFrame.top + dp(4, density);
-            int maxBottomTop = Math.max(minTop, tmpVisFrame.bottom - cardH - dp(4, density));
+            int minTop = tmpVisFrame.top + margin;
+            int maxBottomTop = Math.max(minTop, tmpVisFrame.bottom - cardH - margin);
 
             int cardScreenY;
             String flipDecision;
@@ -1788,83 +1876,33 @@ final class TextActionModeHost {
                 }
             }
 
-            int pwScreenX = cardScreenX - shadowPadSides;
-            int pwScreenY = cardScreenY - shadowPadTop;
-            int winX = pwScreenX - winOffX;
-            int winY = pwScreenY - winOffY;
+            // Absolute SCREEN coordinates directly for WindowManager.addView(TOP | LEFT)
+            int winScreenX = cardScreenX - shadowPadSides;
+            int winScreenY = cardScreenY - shadowPadTop;
 
             if (BuildConfig.SEC_DIAG) {
                 boolean changed = forceLog
-                        || Math.abs(winX - lastLoggedWinX) > 2
-                        || Math.abs(winY - lastLoggedWinY) > 2
+                        || Math.abs(winScreenX - lastLoggedWinX) > 2
+                        || Math.abs(winScreenY - lastLoggedWinY) > 2
                         || !flipDecision.equals(lastLoggedFlip);
                 if (changed) {
-                    lastLoggedWinX = winX;
-                    lastLoggedWinY = winY;
+                    lastLoggedWinX = winScreenX;
+                    lastLoggedWinY = winScreenY;
                     lastLoggedFlip = flipDecision;
-                    SecurityNative.diagUi("popup-clone.layout: contentRect=[" + localLeft + "," + localTextTop
-                            + "," + localRight + "," + localTextBottom
-                            + "] cbRect=[" + tmpCallbackRect.left + "," + tmpCallbackRect.top
-                            + "," + tmpCallbackRect.right + "," + tmpCallbackRect.bottom
-                            + "] winOffset=[" + winOffX + "," + winOffY
+                    SecurityNative.diagUi("overlay-window.layout: selScreenRect=[" + selScreenLeft + "," + selScreenTop
+                            + "," + selScreenRight + "," + selScreenBottom
                             + "] visFrame=[" + tmpVisFrame.left + "," + tmpVisFrame.top
                             + "," + tmpVisFrame.right + "," + tmpVisFrame.bottom
                             + "] flip=" + flipDecision
                             + " yAbove=" + yAbove + " yBelow=" + yBelow
                             + " finalCardScreen=[" + cardScreenX + "," + cardScreenY
-                            + "] finalWinLocal=[" + winX + "," + winY
+                            + "] finalWinScreen=[" + winScreenX + "," + winScreenY
                             + "] cardSize=" + cardW + "x" + cardH
                             + " items=" + itemCount + " overflow=" + overflowOpen);
                 }
             }
 
-            return new int[]{ winX, winY };
-        }
-
-        private void dismissPopupImmediate() {
-            if (panelCard != null) {
-                panelCard.animate().cancel();
-            }
-            if (popup != null) {
-                try {
-                    if (popup.isShowing()) {
-                        popup.dismiss();
-                    }
-                } catch (Throwable ignored) { }
-                popup = null;
-            }
-            rootContainer = null;
-            panelCard = null;
-        }
-
-        private void dismissPopupAnimated() {
-            final PopupWindow closingPw = popup;
-            final View animatingCard = panelCard;
-            popup = null;
-            rootContainer = null;
-            panelCard = null;
-            if (closingPw == null) return;
-
-            if (animatingCard == null || host.destroyed || !isViewAttached(owner)) {
-                try {
-                    if (closingPw.isShowing()) closingPw.dismiss();
-                } catch (Throwable ignored) { }
-                return;
-            }
-
-            animatingCard.animate().cancel();
-            animatingCard.animate()
-                    .alpha(0f)
-                    .setDuration(100L)
-                    .withEndAction(new Runnable() {
-                        @Override
-                        public void run() {
-                            try {
-                                if (closingPw.isShowing()) closingPw.dismiss();
-                            } catch (Throwable ignored) { }
-                        }
-                    })
-                    .start();
+            return new int[]{ winScreenX, winScreenY };
         }
     }
 
@@ -1904,7 +1942,7 @@ final class TextActionModeHost {
                 path.lineTo(cx - s, cy);
                 path.moveTo(cx - s * 0.25f, cy - s * 0.75f);
                 path.lineTo(cx - s, cy);
-                path.lineTo(cx - s * 0.25f, cy + s * 0.75f);
+                path.moveTo(cx - s * 0.25f, cy + s * 0.75f);
                 canvas.drawPath(path, paint);
             }
         }

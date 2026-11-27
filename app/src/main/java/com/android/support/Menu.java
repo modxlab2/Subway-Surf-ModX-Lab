@@ -162,7 +162,7 @@ public class Menu {
     private static final int   MIN_MENU_WIDTH_DP  = 172;
     private static final int   MIN_MENU_HEIGHT_DP = 196;
     private static final int   COMPACT_TABS_BELOW_DP = 205;  // below this width tabs become icon-only
-    private static final float MIN_SCALE_FACTOR = 0.70f;
+    private static final float MIN_SCALE_FACTOR = 0.80f;
     private static final float MAX_SCALE_FACTOR = 1.50f;
 
     private View resizeHandle;
@@ -455,6 +455,7 @@ public class Menu {
     private View mMenuColorDot = null;
     private TextView mMenuColorHex = null;
     private View mBottomDivider = null;
+    private LinearLayout mBottomBar = null;
     private TeleportPadView mMenuTeleportPad = null;
     private AlertDialog activeColorPickerDialog = null;
     private final ArrayList<AlertDialog> activeDialogs = new ArrayList<AlertDialog>();
@@ -467,6 +468,9 @@ private boolean windowIsFocusable = false;
 private boolean isLoggedIn = false;
 private boolean loginOverflowActive = false;
 private boolean loginResizingNow = false;
+private boolean loginUserResized = false;
+private float lastLoginAppliedScale = -1f;
+private int lastMenuVisibility = -1;
 private int lastLoginViewportH = -1;
 private int lastLoginContentH = -1;
 private int lastLoginScreenW = -1;
@@ -922,6 +926,7 @@ Preferences.init(context);
         mProBadgeText = proTitle;
         mHeaderView   = header;
         mShimmerView  = headerLine;
+        mBottomBar    = bottomBar;
         mExpanded.addView(header);
         mExpanded.addView(headerLine);
         mExpanded.addView(mainContainer);
@@ -1241,8 +1246,11 @@ Preferences.init(context);
         menuFrame.post(new Runnable() {
             @Override
             public void run() {
-                keepInsideScreen();
                 applyResponsiveScale(menuFrame.getWidth());
+                if (!isLoggedIn && !loginUserResized) {
+                    applyComputedLoginDefaultHeight(false);
+                }
+                keepInsideScreen();
                 if (!isLoggedIn && !windowIsFocusable) {
                     setWindowFocusable(true);
                 }
@@ -1773,6 +1781,10 @@ Preferences.init(context);
     private View.OnTouchListener resizeTouchListener = new View.OnTouchListener() {
         private int startW, startH;
         private float startX, startY;
+        private boolean hasDraggedResize = false;
+        private long lastTapUpTime = 0L;
+        private final int resizeSlop = ViewConfiguration.get(getContext).getScaledTouchSlop();
+
         @Override
         public boolean onTouch(View v, MotionEvent event) {
             switch (event.getActionMasked()) {
@@ -1783,6 +1795,7 @@ Preferences.init(context);
                         if (startH <= 0) startH = Menu.this.dp(MENU_HEIGHT);
                         startX = event.getRawX();
                         startY = event.getRawY();
+                        hasDraggedResize = false;
                         if (!isLoggedIn) {
                             loginResizingNow = true;
                             if (activeLoginHelper != null) {
@@ -1793,8 +1806,16 @@ Preferences.init(context);
                         return true;
                     }
                 case MotionEvent.ACTION_MOVE: {
-                        int dx = (int)(event.getRawX() - startX);
-                        int dy = (int)(event.getRawY() - startY);
+                        float fdx = event.getRawX() - startX;
+                        float fdy = event.getRawY() - startY;
+                        if (!hasDraggedResize && (Math.abs(fdx) > resizeSlop || Math.abs(fdy) > resizeSlop)) {
+                            hasDraggedResize = true;
+                            if (!isLoggedIn) {
+                                loginUserResized = true;
+                            }
+                        }
+                        int dx = (int) fdx;
+                        int dy = (int) fdy;
                         int newW = startW + dx;
                         int newH = startH + dy;
 
@@ -1838,6 +1859,27 @@ Preferences.init(context);
                                 }
                             }
                         }
+                        boolean doubleTapReset = false;
+                        if (event.getActionMasked() == MotionEvent.ACTION_UP && !hasDraggedResize) {
+                            long now = android.os.SystemClock.uptimeMillis();
+                            if (lastTapUpTime > 0L && (now - lastTapUpTime) <= 320L) {
+                                lastTapUpTime = 0L;
+                                doubleTapReset = true;
+                            } else {
+                                lastTapUpTime = now;
+                            }
+                        } else {
+                            lastTapUpTime = 0L;
+                        }
+                        if (doubleTapReset) {
+                            loginResizingNow = false;
+                            if (!isLoggedIn && activeLoginHelper != null) {
+                                activeLoginHelper.setMenuWindowDragging(false);
+                            }
+                            resetWindowSizeToDefault();
+                            showMenuToast("Window size reset");
+                            return true;
+                        }
                         if (!isLoggedIn && contentScrollView != null) {
                             contentScrollView.post(new Runnable() {
                                 @Override
@@ -1851,6 +1893,9 @@ Preferences.init(context);
                             });
                         } else {
                             loginResizingNow = false;
+                            if (!isLoggedIn && activeLoginHelper != null) {
+                                activeLoginHelper.setMenuWindowDragging(false);
+                            }
                         }
                         return true;
                     }
@@ -1879,9 +1924,12 @@ Preferences.init(context);
             ? dp(48)
             : Math.max(dp(84), Math.min(dp(140), Math.round(innerW * 0.37f)));
 
+        boolean loginNeedsScale = !isLoggedIn && activeLoginHelper != null
+                && Math.abs(scale - lastLoginAppliedScale) >= 0.01f;
         boolean changed = Math.abs(scale - currentScale) >= 0.01f
             || compact != compactMode
-            || sidebarW != lastSidebarW;
+            || sidebarW != lastSidebarW
+            || loginNeedsScale;
         if (!changed) return;
 
         currentScale = scale;
@@ -1899,6 +1947,25 @@ Preferences.init(context);
     }
 
     private void rescaleAll() {
+        if (!isLoggedIn && activeLoginHelper != null) {
+            scaleTextViewsIn(mBottomBar);
+            lastLoginAppliedScale = currentScale;
+            activeLoginHelper.applyScale(currentScale);
+            if (contentScrollView != null) {
+                contentScrollView.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (isLoggedIn) return;
+                        if (!loginUserResized) {
+                            applyComputedLoginDefaultHeight(loginResizingNow);
+                        } else {
+                            updateLoginOverflowScroll(loginResizingNow);
+                        }
+                    }
+                });
+            }
+            return;
+        }
         scaleTextViewsIn(mExpanded);
         // category pages that are not currently attached
         for (LinearLayout cat : categoryViewsMap.values()) {
@@ -2009,10 +2076,14 @@ Preferences.init(context);
                         if (moved && !isLoggedIn && activeLoginHelper != null) {
                             activeLoginHelper.setMenuWindowDragging(false);
                         }
-                        if (!moved && motionEvent.getActionMasked() == MotionEvent.ACTION_UP && isViewCollapsed()) {
-                            try {
-                                expandMenu();
-                            } catch (NullPointerException e) {}
+                        if (!moved && motionEvent.getActionMasked() == MotionEvent.ACTION_UP) {
+                            if (isViewCollapsed()) {
+                                try {
+                                    expandMenu();
+                                } catch (NullPointerException e) {}
+                            } else if (!isLoggedIn && activeLoginHelper != null) {
+                                activeLoginHelper.dismissTextActionMode();
+                            }
                         }
                         return true;
 
@@ -2151,6 +2222,9 @@ Preferences.init(context);
                     COLOR_ACCENT, "Menu Color", -29));
             settingsLay.addView(makeMenuColorButton(
                     FeatureStateStore.DEFAULT_MENU_COLOR, "Reset to Default", -28));
+
+            Category(settingsLay, "Window");
+            settingsLay.addView(makeResetSizeButton());
 
             if (BuildConfig.SEC_DIAG) {
                 Category(settingsLay, "Diagnostics");
@@ -2431,20 +2505,50 @@ private void hideWaitingTexts(View root) {
         }
     }
 }
-private void updateLoginOverflowScroll(boolean flashIfOverflow) {
-    if (isLoggedIn || !(contentScrollView instanceof SlimScrollView) || contentLayout == null) {
-        return;
+private int getLoginChromeHeightPx(int menuWidthPx) {
+    int framePadV = (menuFrame != null)
+            ? (menuFrame.getPaddingTop() + menuFrame.getPaddingBottom())
+            : dp(BORDER_DP * 2);
+    int dividerH = 0;
+    if (mBottomDivider != null && mBottomDivider.getVisibility() != View.GONE) {
+        dividerH = mBottomDivider.getHeight() > 0 ? mBottomDivider.getHeight() : dp(1);
     }
-    SlimScrollView ssv = (SlimScrollView) contentScrollView;
-    int viewportH = ssv.getHeight() - ssv.getPaddingTop() - ssv.getPaddingBottom();
-    if (viewportH <= 0) return;
+    int barH = 0;
+    if (mBottomBar != null && mBottomBar.getVisibility() != View.GONE) {
+        barH = mBottomBar.getHeight();
+        if (barH <= 0) {
+            int framePadH = (menuFrame != null)
+                    ? (menuFrame.getPaddingLeft() + menuFrame.getPaddingRight())
+                    : dp(BORDER_DP * 2);
+            int innerW = Math.max(1, menuWidthPx - framePadH);
+            mBottomBar.measure(
+                    View.MeasureSpec.makeMeasureSpec(innerW, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+            barH = mBottomBar.getMeasuredHeight();
+            if (barH <= 0) barH = dp(52);
+        }
+    }
+    return framePadV + dividerH + barH;
+}
 
+private int measureLoginContentHeightPx(int menuWidthPx) {
+    if (contentLayout == null) return 0;
     int availW = contentLayout.getWidth() - contentLayout.getPaddingLeft() - contentLayout.getPaddingRight();
-    if (availW <= 0) {
-        availW = ssv.getWidth() - ssv.getPaddingLeft() - ssv.getPaddingRight()
+    if (availW <= 0 && contentScrollView != null) {
+        availW = contentScrollView.getWidth() - contentScrollView.getPaddingLeft() - contentScrollView.getPaddingRight()
                 - contentLayout.getPaddingLeft() - contentLayout.getPaddingRight();
     }
-    if (availW <= 0) return;
+    if (availW <= 0) {
+        int framePadH = (menuFrame != null)
+                ? (menuFrame.getPaddingLeft() + menuFrame.getPaddingRight())
+                : dp(BORDER_DP * 2);
+        int ssvPadH = (contentScrollView != null)
+                ? (contentScrollView.getPaddingLeft() + contentScrollView.getPaddingRight())
+                : 0;
+        availW = Math.max(1, menuWidthPx - framePadH - ssvPadH
+                - contentLayout.getPaddingLeft() - contentLayout.getPaddingRight());
+    }
+    if (availW <= 0) return 0;
 
     int measuredContentH = contentLayout.getPaddingTop() + contentLayout.getPaddingBottom();
     int unspecH = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED);
@@ -2483,6 +2587,93 @@ private void updateLoginOverflowScroll(boolean flashIfOverflow) {
         measureTarget.measure(wSpec, unspecH);
         measuredContentH += extraH + measureTarget.getMeasuredHeight();
     }
+    return measuredContentH;
+}
+
+private int computeDesiredLoginWindowHeightPx(int menuWidthPx) {
+    int contentH = measureLoginContentHeightPx(menuWidthPx);
+    int chromeH = getLoginChromeHeightPx(menuWidthPx);
+    int airPx = dp(12);
+    int desiredH = contentH + chromeH + airPx;
+    int minH = dp(MIN_MENU_HEIGHT_DP);
+    int maxH = Math.max(minH, Math.round(screenH() * 0.85f));
+    return Math.max(minH, Math.min(desiredH, maxH));
+}
+
+private void applyComputedLoginDefaultHeight(boolean flashIfOverflow) {
+    if (isLoggedIn || loginUserResized || menuFrame == null) return;
+    ViewGroup.LayoutParams lp = menuFrame.getLayoutParams();
+    if (lp == null) return;
+    int targetW = (menuFrame.getWidth() > 0) ? menuFrame.getWidth()
+            : (lp.width > 0 ? lp.width : dp(MENU_WIDTH));
+    int targetH = computeDesiredLoginWindowHeightPx(targetW);
+    if (lp.height != targetH) {
+        lp.height = targetH;
+        menuFrame.setLayoutParams(lp);
+        keepInsideScreen();
+        if (mWindowManager != null && rootFrame != null && vmParams != null) {
+            try {
+                mWindowManager.updateViewLayout(rootFrame, vmParams);
+            } catch (Exception ignored) { }
+        }
+    }
+    updateLoginOverflowScroll(flashIfOverflow);
+}
+
+private void resetWindowSizeToDefault() {
+    if (menuFrame == null) return;
+    ViewGroup.LayoutParams lp = menuFrame.getLayoutParams();
+    if (lp == null) return;
+    loginUserResized = false;
+    int minW = dp(MIN_MENU_WIDTH_DP);
+    int minH = dp(MIN_MENU_HEIGHT_DP);
+    int targetW = Math.min(dp(MENU_WIDTH), Math.max(minW, screenW() - dp(10)));
+    int targetH;
+    if (!isLoggedIn) {
+        lastLoginAppliedScale = -1f;
+        if (activeLoginHelper != null) {
+            float rawScale = Math.max(MIN_SCALE_FACTOR, Math.min(MAX_SCALE_FACTOR,
+                    (float) targetW / (float) Math.max(1, dp(MENU_WIDTH))));
+            activeLoginHelper.applyScale(rawScale);
+        }
+        targetH = computeDesiredLoginWindowHeightPx(targetW);
+    } else {
+        int maxMenuH = Math.max(minH, Math.round(screenH() * 0.85f));
+        targetH = Math.min(dp(MENU_HEIGHT), maxMenuH);
+    }
+    lp.width = targetW;
+    lp.height = targetH;
+    menuFrame.setLayoutParams(lp);
+    applyResponsiveScale(targetW);
+    keepInsideScreen();
+    if (mWindowManager != null && rootFrame != null && vmParams != null) {
+        try {
+            mWindowManager.updateViewLayout(rootFrame, vmParams);
+        } catch (Exception ignored) { }
+    }
+    if (!isLoggedIn && contentScrollView != null) {
+        contentScrollView.post(new Runnable() {
+            @Override
+            public void run() {
+                applyComputedLoginDefaultHeight(false);
+            }
+        });
+    }
+}
+
+private void updateLoginOverflowScroll(boolean flashIfOverflow) {
+    if (isLoggedIn || !(contentScrollView instanceof SlimScrollView) || contentLayout == null) {
+        return;
+    }
+    SlimScrollView ssv = (SlimScrollView) contentScrollView;
+    int viewportH = ssv.getHeight() - ssv.getPaddingTop() - ssv.getPaddingBottom();
+    if (viewportH <= 0) return;
+
+    int targetW = (menuFrame != null && menuFrame.getWidth() > 0)
+            ? menuFrame.getWidth()
+            : dp(MENU_WIDTH);
+    int measuredContentH = measureLoginContentHeightPx(targetW);
+    if (measuredContentH <= 0) return;
 
     int enableTolPx = dp(6);
     int disableTolPx = dp(2);
@@ -2689,6 +2880,8 @@ private void showLoginScreen(final String forcedLogoutReason) {
     if (isLoggedIn) return;
 
     detachLoginScrollListeners();
+    loginUserResized = false;
+    lastLoginAppliedScale = -1f;
 
     if (mHeaderView  != null) mHeaderView.setVisibility(View.GONE);
     if (mShimmerView != null) mShimmerView.setVisibility(View.GONE);
@@ -2722,6 +2915,20 @@ private void showLoginScreen(final String forcedLogoutReason) {
             setWindowFocusable(false);
             isLoggedIn = true;
 
+            if (!loginUserResized && menuFrame != null) {
+                ViewGroup.LayoutParams mlp = menuFrame.getLayoutParams();
+                if (mlp != null) {
+                    int minH = dp(MIN_MENU_HEIGHT_DP);
+                    int maxH = Math.max(minH, Math.round(screenH() * 0.85f));
+                    int defH = Math.min(dp(MENU_HEIGHT), maxH);
+                    if (mlp.height != defH) {
+                        mlp.height = defH;
+                        menuFrame.setLayoutParams(mlp);
+                        keepInsideScreen();
+                    }
+                }
+            }
+
             if (accentReset) {
                 int defAccent = ensureReadableAccent(FeatureStateStore.DEFAULT_MENU_COLOR);
                 mCurrentHueF = getHueFromColor(defAccent);
@@ -2741,6 +2948,17 @@ private void showLoginScreen(final String forcedLogoutReason) {
             contentLayout.removeAllViews();
             buildFeaturesAndCategories(GetFeatureList());
             startPeriodicSessionCheck();
+        }
+    });
+    loginHelper.setOnContentMetricsChanged(new Runnable() {
+        @Override
+        public void run() {
+            if (isLoggedIn) return;
+            if (!loginUserResized) {
+                applyComputedLoginDefaultHeight(false);
+            } else {
+                updateLoginOverflowScroll(false);
+            }
         }
     });
     activeLoginHelper = loginHelper;
@@ -2897,6 +3115,7 @@ private void showLoginScreen(final String forcedLogoutReason) {
         });
     }
     loginHelper.prepareActionModeHost();
+    applyComputedLoginDefaultHeight(false);
 
     loginLayoutChangeListener = new View.OnLayoutChangeListener() {
         @Override
@@ -2904,7 +3123,11 @@ private void showLoginScreen(final String forcedLogoutReason) {
                                    int oldLeft, int oldTop, int oldRight, int oldBottom) {
             if (isLoggedIn) return;
             if (left != oldLeft || top != oldTop || right != oldRight || bottom != oldBottom) {
-                updateLoginOverflowScroll(loginResizingNow);
+                if (!loginUserResized) {
+                    applyComputedLoginDefaultHeight(loginResizingNow);
+                } else {
+                    updateLoginOverflowScroll(loginResizingNow);
+                }
             }
         }
     };
@@ -2925,6 +3148,9 @@ private void showLoginScreen(final String forcedLogoutReason) {
                 lastLoginScreenW = sw;
                 lastLoginScreenH = sh;
                 screenChanged = true;
+                if (!loginUserResized) {
+                    applyComputedLoginDefaultHeight(false);
+                }
                 keepInsideScreen();
             }
             int vh = contentScrollView.getHeight();
@@ -2938,10 +3164,15 @@ private void showLoginScreen(final String forcedLogoutReason) {
             }
             if (vh != lastLoginViewportH || ch != lastLoginContentH || visBottom != lastLoginVisBottom || screenChanged) {
                 boolean kbChanged = (visBottom != lastLoginVisBottom);
+                boolean contentChanged = (ch != lastLoginContentH);
                 lastLoginViewportH = vh;
                 lastLoginContentH = ch;
                 lastLoginVisBottom = visBottom;
-                updateLoginOverflowScroll(loginResizingNow);
+                if (!loginUserResized && (contentChanged || screenChanged)) {
+                    applyComputedLoginDefaultHeight(loginResizingNow);
+                } else {
+                    updateLoginOverflowScroll(loginResizingNow);
+                }
                 if (kbChanged && loginOverflowActive && rootFrame != null) {
                     View focused = rootFrame.findFocus();
                     if (focused instanceof EditText && focused.getHeight() > 0) {
@@ -2974,46 +3205,16 @@ for (final long delay : new long[]{ 50, 200, 500, 1000, 2000, 4000 }) {
                 try { expandMenu(); } catch (Exception ignored) { }
             }
         });
-    }
-
-    menuFrame.postDelayed(new Runnable() {
-        @Override
-        public void run() {
-            if (isLoggedIn) return;
-            try {
-                ViewGroup.LayoutParams lp = menuFrame.getLayoutParams();
-                int orientation = (screenW() > screenH())
-                        ? Configuration.ORIENTATION_LANDSCAPE
-                        : Configuration.ORIENTATION_PORTRAIT;
-                int targetH;
-                if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
-                    targetH = screenH() - dp(15);
-                } else {
-                    targetH = dp(352);
-                    if (targetH > screenH() - vmParams.y - dp(10)) {
-                        targetH = screenH() - vmParams.y - dp(10);
-                    }
-                }
-                if (lp.height != targetH) {
-                    lp.height = targetH;
-                    menuFrame.setLayoutParams(lp);
-                    if (mWindowManager != null) {
-                        mWindowManager.updateViewLayout(rootFrame, vmParams);
-                    }
-                }
-                contentScrollView.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        updateLoginOverflowScroll(false);
-                    }
-                });
-            } catch (Exception e) {
-                if (BuildConfig.SEC_DIAG) {
-                    SecurityNative.diagUi("showLoginScreen layout post failed: " + SecurityNative.diagException(e));
+    } else {
+        menuFrame.post(new Runnable() {
+            @Override
+            public void run() {
+                if (!isLoggedIn && !loginUserResized) {
+                    applyComputedLoginDefaultHeight(false);
                 }
             }
-        }
-    }, 250);
+        });
+    }
 }
     @SuppressLint("WrongConstant")
     public void SetWindowManagerWindowService() {
@@ -3055,6 +3256,10 @@ for (final long delay : new long[]{ 50, 200, 500, 1000, 2000, 4000 }) {
     private int dp(int i) { return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, (float) i, safeDisplayMetrics(getContext)); }
     private float dpf(float v) { return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, safeDisplayMetrics(getContext)); }
     public void setVisibility(int view) {
+        if (lastMenuVisibility == view && rootFrame != null && rootFrame.getVisibility() == view) {
+            return;
+        }
+        lastMenuVisibility = view;
         if (rootFrame != null) rootFrame.setVisibility(view);
         if (activeLoginHelper != null) {
             activeLoginHelper.onHostVisibilityChanged(view == View.VISIBLE && !isLoggedIn);
@@ -3998,6 +4203,60 @@ private void setWindowFocusable(boolean focusable) {
         if (hexTv != null) {
             hexTv.setText(hex(color));
         }
+    }
+
+    private LinearLayout makeResetSizeButton() {
+        LinearLayout row = new LinearLayout(getContext);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinimumHeight(dp(44));
+        row.setLayoutParams(rowLp(6, 4, 6, 4));
+        row.setPadding(dp(12), dp(9), dp(12), dp(9));
+        row.setBackground(ModxTheme.withInteractiveRipple(
+                getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                ModxTheme.withAlpha(COLOR_ACCENT, 0x1F), ModxTheme.RADIUS_DP));
+
+        TextView labelTv = new TextView(getContext);
+        labelTv.setText("Reset size");
+        labelTv.setTextColor(ModxTheme.FG);
+        labelTv.setTypeface(fontMedium);
+        labelTv.setTextSize(12.5f);
+        labelTv.setIncludeFontPadding(false);
+        labelTv.setMaxLines(1);
+        labelTv.setEllipsize(TextUtils.TruncateAt.END);
+        labelTv.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
+
+        TextView badgeTv = new TextView(getContext);
+        badgeTv.setText("Default");
+        badgeTv.setTypeface(fontMedium);
+        badgeTv.setTextSize(11f);
+        badgeTv.setTextColor(ModxTheme.MUTED);
+        badgeTv.setIncludeFontPadding(false);
+        badgeTv.setPadding(dp(7), dp(3), dp(7), dp(3));
+        badgeTv.setBackground(ModxTheme.pillBadgeBg(getContext, ModxTheme.SURFACE, ModxTheme.LINE));
+        LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
+        bLp.setMargins(dp(8), 0, dp(8), 0);
+        badgeTv.setLayoutParams(bLp);
+
+        ImageView icon = new ImageView(getContext);
+        icon.setImageDrawable(ModxIcons.refreshCw(COLOR_ACCENT, dp(16)));
+        icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        icon.setLayoutParams(new LinearLayout.LayoutParams(dp(16), dp(16)));
+
+        row.addView(labelTv);
+        row.addView(badgeTv);
+        row.addView(icon);
+
+        addPressAnim(row);
+        row.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                ModxTheme.hapticTap(v);
+                resetWindowSizeToDefault();
+                showMenuToast("Window size reset");
+            }
+        });
+        return row;
     }
 
     private void ButtonLink(LinearLayout linLayout, final String featName, final String url) {

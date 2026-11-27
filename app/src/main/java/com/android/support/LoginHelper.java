@@ -1,6 +1,7 @@
 package com.android.support;
 
 import android.animation.ArgbEvaluator;
+import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.annotation.TargetApi;
 import android.content.ClipData;
@@ -46,6 +47,7 @@ import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
 import android.view.WindowManager;
 import android.view.animation.DecelerateInterpolator;
+import android.view.animation.LinearInterpolator;
 import android.view.animation.OvershootInterpolator;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
@@ -105,14 +107,23 @@ public class LoginHelper {
     private final TextActionModeHost actionModeHost;
 
     private EditText editUser, editPass;
+    private LinearLayout cardView, headerView, diagRowView, cbRowView;
     private LinearLayout userBox, passBox;
-    private ImageView userIconView, passIconView;
+    private ImageView userIconView, passIconView, userPasteBtn, passPasteBtn;
     private FrameLayout userChip, passChip;
+    private TextView headerTitleView, headerSubtitleView, diagBadgeBtn, selfTestBadgeBtn;
     private CustomCheck rememberCb, showCb;
-    private Button loginBtn;
+    private FrameLayout loginBtn;
+    private LinearLayout loginBtnContent;
+    private ImageView loginBtnSpinner;
+    private TextView loginBtnLabel;
+    private ObjectAnimator loginSpinnerAnimator;
+    private volatile boolean loginButtonBusy = false;
     private LinearLayout statusRow;
     private ImageView statusIcon;
     private TextView statusTxt;
+    private float uiScale = 1.0f;
+    private Runnable onContentMetricsChanged;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private volatile boolean destroyed = false;
     private volatile boolean loginInProgress = false;
@@ -181,6 +192,16 @@ public class LoginHelper {
                 && rawY >= loc[1] && rawY <= loc[1] + showCb.getHeight();
     }
 
+    public void setOnContentMetricsChanged(Runnable listener) {
+        this.onContentMetricsChanged = listener;
+    }
+
+    private void notifyContentMetricsChanged() {
+        if (onContentMetricsChanged != null) {
+            onContentMetricsChanged.run();
+        }
+    }
+
     public void showExternalStatus(final String message, final boolean showExpiredDialog) {
         if (destroyed) return;
         mainHandler.post(new Runnable() {
@@ -189,7 +210,7 @@ public class LoginHelper {
                 if (destroyed) return;
                 if (!TextUtils.isEmpty(message)) {
                     setStatus(message, COLOR_DANGER,
-                            ModxIcons.alertCircle(COLOR_DANGER, dp(14)));
+                            ModxIcons.alertCircle(COLOR_DANGER, sdp(15)));
                 }
                 if (showExpiredDialog) {
                     showKeyExpiredDialog();
@@ -200,6 +221,11 @@ public class LoginHelper {
 
     public void cleanup() {
         destroyed = true;
+        onContentMetricsChanged = null;
+        if (loginSpinnerAnimator != null) {
+            loginSpinnerAnimator.cancel();
+            loginSpinnerAnimator = null;
+        }
         cancelSavedSessionRetry();
         if (actionModeHost != null) {
             actionModeHost.destroy();
@@ -223,8 +249,13 @@ public class LoginHelper {
     }
 
     private int dp(float v) {
-        return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v,
-                safeDisplayMetrics(ctx));
+        return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v,
+                safeDisplayMetrics(ctx)));
+    }
+
+    private int sdp(float v) {
+        return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v * uiScale,
+                safeDisplayMetrics(ctx)));
     }
 
     public View buildView() {
@@ -237,10 +268,12 @@ public class LoginHelper {
         root.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL);
 
         final LinearLayout card = new LinearLayout(ctx);
+        cardView = card;
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(16), dp(12), dp(16), dp(12));
         card.setGravity(Gravity.CENTER_HORIZONTAL);
         card.setBackgroundColor(Color.TRANSPARENT);
+        card.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
         root.addView(card);
 
         card.addView(makeSimpleHeader());
@@ -260,7 +293,7 @@ public class LoginHelper {
         editUser.setLayoutParams(ueLp);
         enableRichTextInteraction(editUser);
         userBox.addView(editUser);
-        final ImageView userPasteBtn = makePasteButton(editUser);
+        userPasteBtn = makePasteButton(editUser);
         userBox.addView(userPasteBtn);
 
         LinearLayout.LayoutParams uLp = new LinearLayout.LayoutParams(MATCH_PARENT, dp(48));
@@ -287,7 +320,7 @@ public class LoginHelper {
         editPass.setLayoutParams(peLp);
         enableRichTextInteraction(editPass);
         passBox.addView(editPass);
-        final ImageView passPasteBtn = makePasteButton(editPass);
+        passPasteBtn = makePasteButton(editPass);
         passBox.addView(passPasteBtn);
 
         LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(MATCH_PARENT, dp(48));
@@ -327,6 +360,7 @@ public class LoginHelper {
         });
 
         LinearLayout cbRow = new LinearLayout(ctx);
+        cbRowView = cbRow;
         cbRow.setOrientation(LinearLayout.HORIZONTAL);
         cbRow.setGravity(Gravity.CENTER_VERTICAL);
         cbRow.setPadding(0, dp(2), 0, dp(2));
@@ -379,31 +413,57 @@ public class LoginHelper {
         cbRow.addView(showCb);
         card.addView(cbRow);
 
-        loginBtn = new Button(ctx);
-        loginBtn.setText("SIGN IN");
-        loginBtn.setAllCaps(false);
-        loginBtn.setTextColor(COLOR_ON_ACCENT);
-        loginBtn.setTextSize(13f);
-        loginBtn.setTypeface(tfBold);
+        loginBtn = new FrameLayout(ctx);
+        loginBtn.setClickable(true);
+        loginBtn.setFocusable(true);
+        loginBtn.setContentDescription("Sign in");
+        loginBtn.setBackground(ModxTheme.loginPrimaryButtonBg(ctx, COLOR_ACCENT));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            loginBtn.setLetterSpacing(0.04f);
-            loginBtn.setStateListAnimator(null);
             loginBtn.setElevation(0f);
         }
-        loginBtn.setBackground(ModxTheme.primaryButtonBg(ctx, COLOR_ACCENT));
-        loginBtn.setMinHeight(0); loginBtn.setMinimumHeight(0);
-        loginBtn.setMinWidth(0);  loginBtn.setMinimumWidth(0);
-        loginBtn.setPadding(dp(12), 0, dp(12), 0);
         LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(MATCH_PARENT, dp(44));
         bLp.setMargins(0, dp(8), 0, 0);
         loginBtn.setLayoutParams(bLp);
+
+        loginBtnContent = new LinearLayout(ctx);
+        loginBtnContent.setOrientation(LinearLayout.HORIZONTAL);
+        loginBtnContent.setGravity(Gravity.CENTER);
+        loginBtnContent.setDuplicateParentStateEnabled(true);
+
+        loginBtnSpinner = new ImageView(ctx);
+        loginBtnSpinner.setImageDrawable(ModxIcons.loader(COLOR_ON_ACCENT, dp(15)));
+        loginBtnSpinner.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        LinearLayout.LayoutParams lspLp = new LinearLayout.LayoutParams(dp(15), dp(15));
+        lspLp.setMargins(0, 0, dp(7), 0);
+        loginBtnSpinner.setLayoutParams(lspLp);
+        loginBtnSpinner.setVisibility(View.GONE);
+        loginBtnContent.addView(loginBtnSpinner);
+
+        loginBtnLabel = new TextView(ctx);
+        loginBtnLabel.setText("SIGN IN");
+        loginBtnLabel.setTextColor(COLOR_ON_ACCENT);
+        loginBtnLabel.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 13f);
+        loginBtnLabel.setTypeface(tfBold);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            loginBtnLabel.setLetterSpacing(0.04f);
+        }
+        loginBtnLabel.setIncludeFontPadding(false);
+        loginBtnLabel.setGravity(Gravity.CENTER);
+        loginBtnLabel.setSingleLine(true);
+        loginBtnLabel.setLayoutParams(new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT));
+        loginBtnContent.addView(loginBtnLabel);
+
+        loginBtn.addView(loginBtnContent,
+                new FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT, Gravity.CENTER));
         card.addView(loginBtn);
 
         statusRow = new LinearLayout(ctx);
         statusRow.setOrientation(LinearLayout.HORIZONTAL);
         statusRow.setGravity(Gravity.CENTER);
+        statusRow.setBackgroundColor(Color.TRANSPARENT);
+        statusRow.setMinimumHeight(dp(34));
         statusRow.setAlpha(0f);
-        statusRow.setVisibility(View.GONE);
+        statusRow.setVisibility(View.INVISIBLE);
         LinearLayout.LayoutParams srLp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
         srLp.setMargins(0, dp(8), 0, 0);
         statusRow.setLayoutParams(srLp);
@@ -411,6 +471,7 @@ public class LoginHelper {
         statusIcon = new ImageView(ctx);
         statusIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
         LinearLayout.LayoutParams siLp = new LinearLayout.LayoutParams(dp(15), dp(15));
+        siLp.gravity = Gravity.CENTER_VERTICAL;
         siLp.setMargins(0, 0, dp(6), 0);
         statusIcon.setLayoutParams(siLp);
         statusIcon.setVisibility(View.GONE);
@@ -419,7 +480,7 @@ public class LoginHelper {
         statusTxt = new TextView(ctx);
         statusTxt.setText("");
         statusTxt.setTextColor(COLOR_TEXT_MUTED);
-        statusTxt.setTextSize(11f);
+        statusTxt.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 11f);
         statusTxt.setTypeface(tfMedium);
         statusTxt.setGravity(Gravity.CENTER);
         statusTxt.setMaxLines(2);
@@ -432,15 +493,18 @@ public class LoginHelper {
         loginBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                if (loginButtonBusy || loginInProgress || savedCheckInProgress) return;
                 ModxTheme.hapticTap(v);
                 v.animate().scaleX(0.985f).scaleY(0.985f).setDuration(90)
                         .withEndAction(new Runnable() {
                             @Override
                             public void run() {
-                                loginBtn.animate().scaleX(1f).scaleY(1f)
-                                        .setDuration(220)
-                                        .setInterpolator(new OvershootInterpolator(1.2f))
-                                        .start();
+                                if (loginBtn != null) {
+                                    loginBtn.animate().scaleX(1f).scaleY(1f)
+                                            .setDuration(220)
+                                            .setInterpolator(new OvershootInterpolator(1.2f))
+                                            .start();
+                                }
                             }
                         }).start();
                 dismissTextActionMode();
@@ -498,19 +562,25 @@ public class LoginHelper {
 
     private View makeSimpleHeader() {
         LinearLayout header = new LinearLayout(ctx);
+        headerView = header;
         header.setOrientation(LinearLayout.VERTICAL);
         header.setGravity(Gravity.CENTER_HORIZONTAL);
-        LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
+        LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
         hLp.setMargins(0, 0, 0, dp(BuildConfig.SEC_DIAG ? 10 : 16));
         header.setLayoutParams(hLp);
 
         TextView title = new TextView(ctx);
+        headerTitleView = title;
         title.setText("Welcome Back");
         title.setTextColor(COLOR_TEXT);
-        title.setTextSize(20f);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 20f);
         title.setTypeface(tfBold);
         title.setGravity(Gravity.CENTER);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+            title.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
+        }
         title.setIncludeFontPadding(false);
+        title.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
         if (BuildConfig.SEC_DIAG) {
             final Handler holdHandler = new Handler(Looper.getMainLooper());
             final int touchSlop = android.view.ViewConfiguration.get(ctx).getScaledTouchSlop();
@@ -552,29 +622,35 @@ public class LoginHelper {
         header.addView(title);
 
         TextView subtitle = new TextView(ctx);
+        headerSubtitleView = subtitle;
         subtitle.setText("Sign in to continue to your account");
         subtitle.setTextColor(COLOR_TEXT_MUTED);
-        subtitle.setTextSize(12f);
+        subtitle.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 12f);
         subtitle.setTypeface(tfRegular);
         subtitle.setGravity(Gravity.CENTER);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+            subtitle.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
+        }
         subtitle.setIncludeFontPadding(false);
-        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
         sLp.setMargins(0, dp(4), 0, 0);
         subtitle.setLayoutParams(sLp);
         header.addView(subtitle);
 
         if (BuildConfig.SEC_DIAG) {
             LinearLayout diagRow = new LinearLayout(ctx);
+            diagRowView = diagRow;
             diagRow.setOrientation(LinearLayout.HORIZONTAL);
             diagRow.setGravity(Gravity.CENTER);
-            LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
+            LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
             rLp.setMargins(0, dp(8), 0, 0);
             diagRow.setLayoutParams(rLp);
 
             final TextView diagBtn = new TextView(ctx);
+            diagBadgeBtn = diagBtn;
             diagBtn.setText("DIAG LOGS [" + TextActionModeHost.getDiagModeLabel() + "]");
             diagBtn.setTextColor(COLOR_ACCENT);
-            diagBtn.setTextSize(10f);
+            diagBtn.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 10f);
             diagBtn.setTypeface(tfBold);
             diagBtn.setGravity(Gravity.CENTER);
             diagBtn.setPadding(dp(10), dp(4), dp(10), dp(4));
@@ -599,9 +675,14 @@ public class LoginHelper {
                     if (tapCount[0] >= 3) {
                         tapCount[0] = 0;
                         TextActionModeHost.cycleDiagMode();
+                        if (actionModeHost != null) {
+                            actionModeHost.finishActiveMode("diag-mode-switch", false);
+                            actionModeHost.prepare();
+                        }
                         String modeLabel = TextActionModeHost.getDiagModeLabel();
                         diagBtn.setText("DIAG LOGS [" + modeLabel + "]");
-                        setStatus("Toolbar mode: " + modeLabel, COLOR_ACCENT_HI);
+                        setStatus("Toolbar mode: " + modeLabel, COLOR_TEXT_MUTED,
+                                ModxIcons.info(COLOR_TEXT_MUTED, sdp(15)));
                         SecurityNative.diagUi("diag toolbar mode switched -> " + modeLabel);
                     } else {
                         tapHandler.postDelayed(openLogsRunnable, 340L);
@@ -611,9 +692,10 @@ public class LoginHelper {
             diagRow.addView(diagBtn);
 
             TextView selfTestBtn = new TextView(ctx);
+            selfTestBadgeBtn = selfTestBtn;
             selfTestBtn.setText("SELF TEST");
             selfTestBtn.setTextColor(ModxTheme.INFO);
-            selfTestBtn.setTextSize(10f);
+            selfTestBtn.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 10f);
             selfTestBtn.setTypeface(tfBold);
             selfTestBtn.setGravity(Gravity.CENTER);
             selfTestBtn.setPadding(dp(10), dp(4), dp(10), dp(4));
@@ -896,7 +978,7 @@ public class LoginHelper {
                                 || id == android.R.id.selectAll);
                         if (!allowed) {
                             mi.setVisible(false);
-                            menu.removeItem(id);
+                            mi.setEnabled(false);
                         }
                     }
                 }
@@ -974,7 +1056,7 @@ public class LoginHelper {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             GradientDrawable mask = new GradientDrawable();
             mask.setCornerRadius(ModxTheme.dpf(ctx, ModxTheme.RADIUS_DP));
-            mask.setColor(Color.WHITE);
+            mask.setColor(ModxTheme.TOOLBAR_RIPPLE_MASK);
             RippleDrawable ripple = new RippleDrawable(
                     ColorStateList.valueOf(withAlpha(COLOR_ACCENT, 0x1F)), null, mask);
             btn.setBackground(ripple);
@@ -1113,41 +1195,232 @@ public class LoginHelper {
         }
     }
 
+    public void applyScale(float rawScale) {
+        if (destroyed || cardView == null) return;
+        float s = Math.max(0.80f, Math.min(1.35f, rawScale));
+        if (Math.abs(s - uiScale) < 0.005f) return;
+        uiScale = s;
+
+        cardView.setPadding(sdp(16), sdp(12), sdp(16), sdp(12));
+
+        if (headerView != null && headerView.getLayoutParams() instanceof LinearLayout.LayoutParams) {
+            LinearLayout.LayoutParams hLp = (LinearLayout.LayoutParams) headerView.getLayoutParams();
+            hLp.bottomMargin = sdp(BuildConfig.SEC_DIAG ? 10 : 16);
+            headerView.setLayoutParams(hLp);
+        }
+        if (headerTitleView != null) {
+            headerTitleView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 20f * s);
+        }
+        if (headerSubtitleView != null) {
+            headerSubtitleView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 12f * s);
+            if (headerSubtitleView.getLayoutParams() instanceof LinearLayout.LayoutParams) {
+                LinearLayout.LayoutParams sLp = (LinearLayout.LayoutParams) headerSubtitleView.getLayoutParams();
+                sLp.topMargin = sdp(4);
+                headerSubtitleView.setLayoutParams(sLp);
+            }
+        }
+        if (diagRowView != null && diagRowView.getLayoutParams() instanceof LinearLayout.LayoutParams) {
+            LinearLayout.LayoutParams rLp = (LinearLayout.LayoutParams) diagRowView.getLayoutParams();
+            rLp.topMargin = sdp(8);
+            diagRowView.setLayoutParams(rLp);
+        }
+        if (diagBadgeBtn != null) {
+            diagBadgeBtn.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 10f * s);
+            diagBadgeBtn.setPadding(sdp(10), sdp(4), sdp(10), sdp(4));
+        }
+        if (selfTestBadgeBtn != null) {
+            selfTestBadgeBtn.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 10f * s);
+            selfTestBadgeBtn.setPadding(sdp(10), sdp(4), sdp(10), sdp(4));
+            if (selfTestBadgeBtn.getLayoutParams() instanceof LinearLayout.LayoutParams) {
+                LinearLayout.LayoutParams stLp = (LinearLayout.LayoutParams) selfTestBadgeBtn.getLayoutParams();
+                stLp.leftMargin = sdp(6);
+                selfTestBadgeBtn.setLayoutParams(stLp);
+            }
+        }
+
+        if (userBox != null && userBox.getLayoutParams() instanceof LinearLayout.LayoutParams) {
+            LinearLayout.LayoutParams uLp = (LinearLayout.LayoutParams) userBox.getLayoutParams();
+            uLp.height = sdp(48);
+            uLp.bottomMargin = sdp(10);
+            userBox.setLayoutParams(uLp);
+        }
+        if (passBox != null && passBox.getLayoutParams() instanceof LinearLayout.LayoutParams) {
+            LinearLayout.LayoutParams pLp = (LinearLayout.LayoutParams) passBox.getLayoutParams();
+            pLp.height = sdp(48);
+            pLp.bottomMargin = sdp(8);
+            passBox.setLayoutParams(pLp);
+        }
+
+        scaleChip(userChip, userIconView);
+        scaleChip(passChip, passIconView);
+        scaleInputField(editUser);
+        scaleInputField(editPass);
+        scalePasteBtn(userPasteBtn);
+        scalePasteBtn(passPasteBtn);
+
+        if (cbRowView != null) {
+            cbRowView.setPadding(0, sdp(2), 0, sdp(2));
+        }
+        if (rememberCb != null) rememberCb.applyScale(s);
+        if (showCb != null) showCb.applyScale(s);
+
+        if (loginBtn != null && loginBtn.getLayoutParams() instanceof LinearLayout.LayoutParams) {
+            LinearLayout.LayoutParams bLp = (LinearLayout.LayoutParams) loginBtn.getLayoutParams();
+            bLp.height = sdp(44);
+            bLp.topMargin = sdp(8);
+            loginBtn.setLayoutParams(bLp);
+        }
+        if (loginBtnSpinner != null && loginBtnSpinner.getLayoutParams() instanceof LinearLayout.LayoutParams) {
+            LinearLayout.LayoutParams spLp = (LinearLayout.LayoutParams) loginBtnSpinner.getLayoutParams();
+            int sz = sdp(15);
+            spLp.width = sz;
+            spLp.height = sz;
+            spLp.rightMargin = sdp(7);
+            loginBtnSpinner.setLayoutParams(spLp);
+        }
+        if (loginBtnLabel != null) {
+            loginBtnLabel.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 13f * s);
+        }
+
+        if (statusRow != null) {
+            statusRow.setMinimumHeight(sdp(34));
+            if (statusRow.getLayoutParams() instanceof LinearLayout.LayoutParams) {
+                LinearLayout.LayoutParams srLp = (LinearLayout.LayoutParams) statusRow.getLayoutParams();
+                srLp.topMargin = sdp(8);
+                statusRow.setLayoutParams(srLp);
+            }
+        }
+        if (statusIcon != null && statusIcon.getLayoutParams() instanceof LinearLayout.LayoutParams) {
+            LinearLayout.LayoutParams siLp = (LinearLayout.LayoutParams) statusIcon.getLayoutParams();
+            int sz = sdp(15);
+            siLp.width = sz;
+            siLp.height = sz;
+            siLp.rightMargin = sdp(6);
+            statusIcon.setLayoutParams(siLp);
+        }
+        if (statusTxt != null) {
+            statusTxt.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 11f * s);
+        }
+    }
+
+    private void scaleChip(FrameLayout chip, ImageView iv) {
+        if (chip != null && chip.getLayoutParams() instanceof LinearLayout.LayoutParams) {
+            LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) chip.getLayoutParams();
+            int boxSz = sdp(30);
+            lp.width = boxSz;
+            lp.height = boxSz;
+            lp.leftMargin = sdp(10);
+            lp.rightMargin = sdp(4);
+            chip.setLayoutParams(lp);
+        }
+        if (iv != null && iv.getLayoutParams() instanceof FrameLayout.LayoutParams) {
+            FrameLayout.LayoutParams ilp = (FrameLayout.LayoutParams) iv.getLayoutParams();
+            int sz = sdp(18);
+            ilp.width = sz;
+            ilp.height = sz;
+            iv.setLayoutParams(ilp);
+        }
+    }
+
+    private void scaleInputField(EditText et) {
+        if (et == null) return;
+        et.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 13f * uiScale);
+        et.setPadding(sdp(8), 0, sdp(4), 0);
+    }
+
+    private void scalePasteBtn(ImageView btn) {
+        if (btn == null) return;
+        btn.setPadding(sdp(10), sdp(12), sdp(10), sdp(12));
+        if (btn.getLayoutParams() instanceof LinearLayout.LayoutParams) {
+            LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) btn.getLayoutParams();
+            lp.width = sdp(40);
+            lp.height = sdp(44);
+            lp.rightMargin = sdp(4);
+            btn.setLayoutParams(lp);
+        }
+    }
+
+    private void setLoginButtonLoading(boolean loading) {
+        loginButtonBusy = loading;
+        if (loginBtn == null) return;
+        loginBtn.setAlpha(1f);
+        loginBtn.setEnabled(true);
+        loginBtn.setClickable(!loading);
+        if (loginBtnLabel != null) {
+            loginBtnLabel.setText(loading ? "Signing in..." : "SIGN IN");
+        }
+        if (loginBtnSpinner != null) {
+            if (loading) {
+                loginBtnSpinner.setVisibility(View.VISIBLE);
+                if (loginSpinnerAnimator == null) {
+                    loginSpinnerAnimator = ObjectAnimator.ofFloat(loginBtnSpinner, "rotation", 0f, 360f);
+                    loginSpinnerAnimator.setDuration(750L);
+                    loginSpinnerAnimator.setRepeatCount(ObjectAnimator.INFINITE);
+                    loginSpinnerAnimator.setInterpolator(new LinearInterpolator());
+                }
+                if (!loginSpinnerAnimator.isStarted()) {
+                    loginSpinnerAnimator.start();
+                }
+            } else {
+                if (loginSpinnerAnimator != null) {
+                    loginSpinnerAnimator.cancel();
+                }
+                loginBtnSpinner.setRotation(0f);
+                loginBtnSpinner.setVisibility(View.GONE);
+            }
+        }
+    }
+
     private void setStatus(final String msg, final int color) {
         setStatus(msg, color, null);
     }
 
     private void setStatus(final String msg, final int color, final Drawable icon) {
         if (statusRow == null || statusTxt == null) return;
-        mainHandler.post(new Runnable() {
+        Runnable update = new Runnable() {
             @Override
             public void run() {
                 if (destroyed || statusRow == null || statusTxt == null) return;
                 statusRow.animate().cancel();
-                statusRow.animate().alpha(0f).setDuration(100)
-                        .withEndAction(new Runnable() {
-                            @Override
-                            public void run() {
-                                if (destroyed || statusRow == null || statusTxt == null) return;
-                                statusRow.setVisibility(TextUtils.isEmpty(msg) ? View.GONE : View.VISIBLE);
-                                statusTxt.setText(msg);
-                                statusTxt.setTextColor(color);
-                                if (statusIcon != null) {
-                                    if (icon != null && !TextUtils.isEmpty(msg)) {
-                                        statusIcon.setImageDrawable(icon);
-                                        statusIcon.setVisibility(View.VISIBLE);
-                                    } else {
-                                        statusIcon.setImageDrawable(null);
-                                        statusIcon.setVisibility(View.GONE);
-                                    }
-                                }
-                                if (!TextUtils.isEmpty(msg)) {
-                                    statusRow.animate().alpha(1f).setDuration(200).start();
-                                }
-                            }
-                        }).start();
+                if (TextUtils.isEmpty(msg)) {
+                    statusRow.setVisibility(View.INVISIBLE);
+                    statusRow.setAlpha(0f);
+                    statusTxt.setText("");
+                    if (statusIcon != null) {
+                        statusIcon.setImageDrawable(null);
+                        statusIcon.setVisibility(View.GONE);
+                    }
+                    notifyContentMetricsChanged();
+                    return;
+                }
+                boolean wasHidden = (statusRow.getVisibility() != View.VISIBLE || statusRow.getAlpha() < 0.05f);
+                statusRow.setVisibility(View.VISIBLE);
+                statusTxt.setText(msg);
+                statusTxt.setTextColor(color);
+                if (statusIcon != null) {
+                    if (icon != null) {
+                        statusIcon.setImageDrawable(icon);
+                        statusIcon.setVisibility(View.VISIBLE);
+                    } else {
+                        statusIcon.setImageDrawable(null);
+                        statusIcon.setVisibility(View.GONE);
+                    }
+                }
+                if (wasHidden) {
+                    statusRow.setAlpha(0f);
+                    statusRow.animate().alpha(1f).setDuration(200).start();
+                } else {
+                    statusRow.setAlpha(0.45f);
+                    statusRow.animate().alpha(1f).setDuration(150).start();
+                }
+                notifyContentMetricsChanged();
             }
-        });
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            update.run();
+        } else {
+            mainHandler.post(update);
+        }
     }
 
     private String getVersionName() {
@@ -1197,7 +1470,7 @@ public class LoginHelper {
     }
 
     private void applyLoginFailureStatus(String reason, int retryAfterSec, boolean forSavedSession) {
-        int iconPx = dp(15);
+        int iconPx = sdp(15);
         if ("expired".equals(reason)) {
             setStatus("Key expired", COLOR_DANGER, ModxIcons.lock(COLOR_DANGER, iconPx));
             showKeyExpiredDialog();
@@ -1238,16 +1511,16 @@ public class LoginHelper {
             setStatus("No internet. Connect to the internet to use your saved login.",
                     COLOR_WARN, ModxIcons.wifiOff(COLOR_WARN, iconPx));
         } else if ("no_internet".equals(reason)) {
-            setStatus("No internet / DNS blocked", COLOR_DANGER, ModxIcons.wifiOff(COLOR_DANGER, iconPx));
+            setStatus("No internet / DNS blocked", COLOR_WARN, ModxIcons.wifiOff(COLOR_WARN, iconPx));
         } else if ("connect_error".equals(reason)) {
-            setStatus("Server unreachable", COLOR_DANGER, ModxIcons.wifiOff(COLOR_DANGER, iconPx));
+            setStatus("Server unreachable", COLOR_WARN, ModxIcons.wifiOff(COLOR_WARN, iconPx));
         } else if ("timeout".equals(reason)) {
-            setStatus("Connection timed out", COLOR_DANGER, ModxIcons.wifiOff(COLOR_DANGER, iconPx));
+            setStatus("Connection timed out", COLOR_WARN, ModxIcons.wifiOff(COLOR_WARN, iconPx));
         } else if (reason != null && reason.startsWith("http_")) {
             setStatus("Server error (" + reason.toUpperCase() + ")",
                     COLOR_DANGER, ModxIcons.alertCircle(COLOR_DANGER, iconPx));
         } else if ("network".equals(reason)) {
-            setStatus("Connection failed", COLOR_DANGER, ModxIcons.wifiOff(COLOR_DANGER, iconPx));
+            setStatus("Connection failed", COLOR_WARN, ModxIcons.wifiOff(COLOR_WARN, iconPx));
         } else {
             setStatus("Login failed (" + reason + ")", COLOR_DANGER, ModxIcons.alertCircle(COLOR_DANGER, iconPx));
         }
@@ -1260,106 +1533,114 @@ public class LoginHelper {
         savedCheckInProgress = true;
         cancelSavedSessionRetry();
 
-        if (loginBtn != null) {
-            loginBtn.setEnabled(false);
-            loginBtn.setAlpha(0.55f);
-            loginBtn.setText("SIGN IN");
-        }
-        setStatus("Checking saved login...", COLOR_ACCENT_HI, ModxIcons.loader(COLOR_ACCENT_HI, dp(15)));
+        setLoginButtonLoading(true);
+        setStatus("Checking saved login...", COLOR_TEXT_MUTED, ModxIcons.loader(COLOR_TEXT_MUTED, sdp(15)));
 
         new Thread(new Runnable() {
             @Override
             public void run() {
                 final long tStart = android.os.SystemClock.elapsedRealtime();
-                final String sentNonce = ModFirebase.generateNonce();
-                final JSONObject r = ModFirebase.verifySession(ctx, savedToken, deviceId, sentNonce);
-
                 boolean ok = false;
                 String reason = "network";
                 String freshToken = "", userOut = "", respNonce = "";
                 int retryAfterSec = 0;
 
-                if (r != null) {
-                    ok = r.optBoolean("ok", false);
-                    reason = r.optString("reason", "unknown");
-                    freshToken = r.optString("token", "");
-                    userOut = r.optString("user", "");
-                    respNonce = r.optString("nonce", "");
-                    retryAfterSec = r.optInt("retryAfterSec", 0);
-                }
+                if (!SecurityNative.verifyBeforeLogin(ctx)) {
+                    reason = "native_config";
+                } else {
+                    final String sentNonce = ModFirebase.generateNonce();
+                    final JSONObject r = ModFirebase.verifySession(ctx, savedToken, deviceId, sentNonce);
 
-                if (ok) {
-                    if (TextUtils.isEmpty(freshToken)
-                            || TextUtils.isEmpty(userOut)
-                            || !sentNonce.equals(respNonce)
-                            || !SecurityNative.verifySessionToken(freshToken, userOut, deviceId, sentNonce)) {
-                        ok = false;
-                        reason = "session_invalid";
+                    if (r != null) {
+                        ok = r.optBoolean("ok", false);
+                        reason = r.optString("reason", "unknown");
+                        freshToken = r.optString("token", "");
+                        userOut = r.optString("user", "");
+                        respNonce = r.optString("nonce", "");
+                        retryAfterSec = r.optInt("retryAfterSec", 0);
                     }
-                }
 
-                if (BuildConfig.SEC_DIAG) {
-                    long elapsed = android.os.SystemClock.elapsedRealtime() - tStart;
-                    SecurityNative.diag(302, "saved_session ok=" + ok + " reason=" + reason + " ms=" + elapsed);
-                }
+                    if (ok) {
+                        if (TextUtils.isEmpty(freshToken)
+                                || TextUtils.isEmpty(userOut)
+                                || !sentNonce.equals(respNonce)
+                                || !SecurityNative.verifySessionToken(freshToken, userOut, deviceId, sentNonce)) {
+                            ok = false;
+                            reason = "session_invalid";
+                        }
+                    }
 
-                if (!ok) {
-                    final String fReason = reason;
-                    final int fRetry = retryAfterSec;
-                    final boolean rejected = isServerRejectionReason(fReason);
-                    if (rejected) {
+                    if (BuildConfig.SEC_DIAG) {
+                        long elapsed = android.os.SystemClock.elapsedRealtime() - tStart;
+                        SecurityNative.diag(302, "saved_session ok=" + ok + " reason=" + reason + " ms=" + elapsed);
+                    }
+
+                    if (!ok) {
+                        final String fReason = reason;
+                        final int fRetry = retryAfterSec;
+                        final boolean rejected = isServerRejectionReason(fReason);
+                        if (rejected) {
+                            SecureTokenStore.clearToken(ctx);
+                        }
+                        mainHandler.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                savedCheckInProgress = false;
+                                if (destroyed) return;
+                                if (!loginInProgress) {
+                                    setLoginButtonLoading(false);
+                                }
+                                applyLoginFailureStatus(fReason, fRetry, true);
+                                if (!rejected && !"rate_limited".equals(fReason)
+                                        && rememberCb != null && rememberCb.isChecked()
+                                        && !TextUtils.isEmpty(SecureTokenStore.loadToken(ctx))) {
+                                    scheduleSavedSessionRetry(deviceId);
+                                }
+                            }
+                        });
+                        return;
+                    }
+
+                    if (destroyed || loginInProgress) {
+                        savedCheckInProgress = false;
+                        return;
+                    }
+
+                    final boolean keepSaved = (rememberCb == null || rememberCb.isChecked());
+                    if (keepSaved) {
+                        SecureTokenStore.saveToken(ctx, freshToken);
+                        SecureTokenStore.saveLastUser(ctx, userOut);
+                    } else {
                         SecureTokenStore.clearToken(ctx);
+                        SecureTokenStore.clearLastUser(ctx);
                     }
+
+                    final String fToken = freshToken;
+                    final String fUser = userOut;
                     mainHandler.post(new Runnable() {
                         @Override
                         public void run() {
                             savedCheckInProgress = false;
-                            if (destroyed) return;
-                            if (!loginInProgress && loginBtn != null) {
-                                loginBtn.setEnabled(true);
-                                loginBtn.setAlpha(1f);
-                                loginBtn.setText("SIGN IN");
-                            }
-                            applyLoginFailureStatus(fReason, fRetry, true);
-                            if (!rejected && !"rate_limited".equals(fReason)
-                                    && rememberCb != null && rememberCb.isChecked()
-                                    && !TextUtils.isEmpty(SecureTokenStore.loadToken(ctx))) {
-                                scheduleSavedSessionRetry(deviceId);
-                            }
+                            if (destroyed || loginInProgress) return;
+                            offlineRetryCount = 0;
+                            setLoginButtonLoading(false);
+                            setStatus("Welcome back!", COLOR_SUCCESS, ModxIcons.checkCircle(COLOR_SUCCESS, sdp(15)));
+                            checkUpdateAfterLogin(fToken, fUser, deviceId, sentNonce);
                         }
                     });
                     return;
                 }
 
-                if (destroyed || loginInProgress) {
-                    savedCheckInProgress = false;
-                    return;
-                }
-
-                final boolean keepSaved = (rememberCb == null || rememberCb.isChecked());
-                if (keepSaved) {
-                    SecureTokenStore.saveToken(ctx, freshToken);
-                    SecureTokenStore.saveLastUser(ctx, userOut);
-                } else {
-                    SecureTokenStore.clearToken(ctx);
-                    SecureTokenStore.clearLastUser(ctx);
-                }
-
-                final String fToken = freshToken;
-                final String fUser = userOut;
+                final String fFailReason = reason;
                 mainHandler.post(new Runnable() {
                     @Override
                     public void run() {
                         savedCheckInProgress = false;
-                        if (destroyed || loginInProgress) return;
-                        offlineRetryCount = 0;
-                        if (loginBtn != null) {
-                            loginBtn.setEnabled(true);
-                            loginBtn.setAlpha(1f);
-                            loginBtn.setText("SIGN IN");
+                        if (destroyed) return;
+                        if (!loginInProgress) {
+                            setLoginButtonLoading(false);
                         }
-                        setStatus("Welcome back!", COLOR_SUCCESS, ModxIcons.checkCircle(COLOR_SUCCESS, dp(15)));
-                        checkUpdateAfterLogin(fToken, fUser, deviceId, sentNonce);
+                        applyLoginFailureStatus(fFailReason, 0, true);
                     }
                 });
             }
@@ -1481,16 +1762,14 @@ public class LoginHelper {
         final String inputPass = editPass.getText().toString().trim();
 
         if (TextUtils.isEmpty(inputUser) || TextUtils.isEmpty(inputPass)) {
-            setStatus("Please fill in all fields", COLOR_WARN, ModxIcons.alertCircle(COLOR_WARN, dp(15)));
+            setStatus("Please fill in all fields", COLOR_WARN, ModxIcons.alertCircle(COLOR_WARN, sdp(15)));
             return;
         }
 
         cancelSavedSessionRetry();
         loginInProgress = true;
-        loginBtn.setEnabled(false);
-        loginBtn.setAlpha(0.75f);
-        loginBtn.setText("SIGNING IN...");
-        setStatus("Verifying credentials...", COLOR_ACCENT_HI, ModxIcons.loader(COLOR_ACCENT_HI, dp(15)));
+        setLoginButtonLoading(true);
+        setStatus("Verifying credentials...", COLOR_TEXT_MUTED, ModxIcons.loader(COLOR_TEXT_MUTED, sdp(15)));
 
         final boolean shouldRemember = (rememberCb != null && rememberCb.isChecked());
         if (!shouldRemember) {
@@ -1504,6 +1783,25 @@ public class LoginHelper {
             @Override
             public void run() {
                 final long tStart = android.os.SystemClock.elapsedRealtime();
+                boolean ok = false;
+                String reason = "network";
+                String token = "", userOut = "", respNonce = "";
+                int retryAfterSec = 0;
+
+                if (!SecurityNative.verifyBeforeLogin(ctx)) {
+                    reason = "native_config";
+                    mainHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            loginInProgress = false;
+                            if (destroyed) return;
+                            setLoginButtonLoading(false);
+                            applyLoginFailureStatus("native_config", 0, false);
+                        }
+                    });
+                    return;
+                }
+
                 final Thread updPrefetch = new Thread(new Runnable() {
                     @Override
                     public void run() {
@@ -1515,11 +1813,6 @@ public class LoginHelper {
 
                 final String sentNonce = ModFirebase.generateNonce();
                 final JSONObject r = ModFirebase.login(ctx, inputUser, inputPass, deviceId, sentNonce);
-
-                boolean ok = false;
-                String reason = "network";
-                String token = "", userOut = "", respNonce = "";
-                int retryAfterSec = 0;
 
                 if (r != null) {
                     ok = r.optBoolean("ok", false);
@@ -1553,9 +1846,7 @@ public class LoginHelper {
                         public void run() {
                             loginInProgress = false;
                             if (destroyed) return;
-                            loginBtn.setEnabled(true);
-                            loginBtn.setAlpha(1f);
-                            loginBtn.setText("SIGN IN");
+                            setLoginButtonLoading(false);
                             applyLoginFailureStatus(fReason, fRetry, false);
                         }
                     });
@@ -1577,10 +1868,8 @@ public class LoginHelper {
                     public void run() {
                         loginInProgress = false;
                         if (destroyed) return;
-                        loginBtn.setEnabled(true);
-                        loginBtn.setAlpha(1f);
-                        loginBtn.setText("SIGN IN");
-                        setStatus("Welcome back!", COLOR_SUCCESS, ModxIcons.checkCircle(COLOR_SUCCESS, dp(15)));
+                        setLoginButtonLoading(false);
+                        setStatus("Welcome back!", COLOR_SUCCESS, ModxIcons.checkCircle(COLOR_SUCCESS, sdp(15)));
                         Toast.makeText(ctx, "Login Success", Toast.LENGTH_SHORT).show();
                         checkUpdateAfterLogin(fToken, fUser, deviceId, sentNonce);
                     }
@@ -1944,6 +2233,7 @@ public class LoginHelper {
     }
 
     private class CustomCheck extends LinearLayout {
+        private final FrameLayout box;
         private final GradientDrawable boxBg;
         private final View checkmark;
         private final TextView labelView;
@@ -1958,7 +2248,7 @@ public class LoginHelper {
             setMinimumHeight(dp(40));
             setPadding(0, dp(6), 0, dp(6));
 
-            FrameLayout box = new FrameLayout(ctx);
+            box = new FrameLayout(ctx);
             LinearLayout.LayoutParams boxLp = new LinearLayout.LayoutParams(dp(17), dp(17));
             boxLp.setMargins(0, 0, dp(8), 0);
             box.setLayoutParams(boxLp);
@@ -1982,7 +2272,7 @@ public class LoginHelper {
             labelView = new TextView(ctx);
             labelView.setText(label);
             labelView.setTextColor(initial ? COLOR_TEXT : COLOR_TEXT_MUTED);
-            labelView.setTextSize(11f);
+            labelView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 11f);
             labelView.setTypeface(tfMedium);
             labelView.setIncludeFontPadding(false);
 
@@ -1995,6 +2285,27 @@ public class LoginHelper {
                     toggle();
                 }
             });
+        }
+
+        void applyScale(float s) {
+            setMinimumHeight(dp(40f * s));
+            setPadding(0, dp(6f * s), 0, dp(6f * s));
+            if (box.getLayoutParams() instanceof LinearLayout.LayoutParams) {
+                LinearLayout.LayoutParams bLp = (LinearLayout.LayoutParams) box.getLayoutParams();
+                int bsz = dp(17f * s);
+                bLp.width = bsz;
+                bLp.height = bsz;
+                bLp.rightMargin = dp(8f * s);
+                box.setLayoutParams(bLp);
+            }
+            if (checkmark.getLayoutParams() instanceof FrameLayout.LayoutParams) {
+                FrameLayout.LayoutParams cmLp = (FrameLayout.LayoutParams) checkmark.getLayoutParams();
+                int csz = dp(9f * s);
+                cmLp.width = csz;
+                cmLp.height = csz;
+                checkmark.setLayoutParams(cmLp);
+            }
+            labelView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 11f * s);
         }
 
         void setListener(CheckListener l) { this.listener = l; }
