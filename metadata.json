@@ -1,0 +1,6 @@
+{
+  "name": "Subway Surf ModX Lab",
+  "description": "Subway Surf ModX Lab Android Mod Menu app",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

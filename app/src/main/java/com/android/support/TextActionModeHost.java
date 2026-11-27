@@ -13,6 +13,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.ColorFilter;
 import android.graphics.Insets;
+import android.graphics.Outline;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
@@ -22,6 +23,7 @@ import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
+import android.graphics.drawable.StateListDrawable;
 import android.os.Build;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -879,10 +881,7 @@ final class TextActionModeHost {
     }
 
     private static Context createDeviceFloatingThemeContext(Context baseCtx) {
-        int themeRes = isNightMode(baseCtx)
-                ? android.R.style.Theme_DeviceDefault
-                : android.R.style.Theme_DeviceDefault_Light;
-        return new ContextThemeWrapper(baseCtx, themeRes);
+        return new ContextThemeWrapper(baseCtx, android.R.style.Theme_DeviceDefault);
     }
 
     private static Rect computeVisibleDisplayFrame(Context ctx, View anchor, DisplayMetrics dm) {
@@ -1310,7 +1309,9 @@ final class TextActionModeHost {
         private final int[] ownerScreen = new int[2];
 
         private final int themeBgColor;
+        private final int themeBorderColor;
         private final int themeTextColor;
+        private final int themeDisabledTextColor;
         private final int themeHighlightColor;
 
         private boolean overflowOpen = false;
@@ -1345,50 +1346,16 @@ final class TextActionModeHost {
             this.menu = new PopupMenu(this.themedCtx, owner).getMenu();
             this.toolbarWindow = new ToolbarWindow(host, ctx, this.themedCtx);
 
-            boolean night = isNightMode(ctx);
-            int bgFallback = night ? ModxTheme.TOOLBAR_DARK_BG : ModxTheme.TOOLBAR_LIGHT_BG;
-            int bg = resolveThemeColor(this.themedCtx, android.R.attr.colorBackgroundFloating,
-                    resolveThemeColor(this.themedCtx, android.R.attr.colorBackground, bgFallback));
-            if (Color.alpha(bg) < 0xF0) {
-                bg = bgFallback;
-            }
-            this.themeBgColor = bg;
-
-            boolean bgIsLight = ModxTheme.isLight(this.themeBgColor);
-            int fgFallback = bgIsLight ? ModxTheme.TOOLBAR_LIGHT_FG : ModxTheme.TOOLBAR_DARK_FG;
-            int fg = resolveThemeColor(this.themedCtx, android.R.attr.textColorPrimary, fgFallback);
-            if (Color.alpha(fg) < 0xB0 || ModxTheme.contrastRatio(fg, this.themeBgColor) < 3.0) {
-                fg = fgFallback;
-            }
-            this.themeTextColor = fg;
-
-            int hlFallback = bgIsLight
-                    ? ModxTheme.TOOLBAR_LIGHT_HIGHLIGHT
-                    : ModxTheme.TOOLBAR_DARK_HIGHLIGHT;
-            int hl = resolveThemeColor(this.themedCtx, android.R.attr.colorControlHighlight, hlFallback);
-            if (Color.alpha(hl) == 0) {
-                hl = hlFallback;
-            }
-            this.themeHighlightColor = hl;
+            this.themeBgColor = ModxTheme.CARD;
+            this.themeBorderColor = ModxTheme.LINE_STRONG;
+            this.themeTextColor = ModxTheme.FG;
+            this.themeDisabledTextColor = ModxTheme.SUBTLE;
+            this.themeHighlightColor = ModxTheme.accentSoft(ModxTheme.ACCENT);
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && hasTypeArg) {
                 try {
                     setType(type);
                 } catch (Throwable ignored) { }
-            }
-        }
-
-        private static int resolveThemeColor(Context c, int attr, int fallback) {
-            TypedArray ta = null;
-            try {
-                ta = c.obtainStyledAttributes(new int[]{ attr });
-                ColorStateList csl = ta.getColorStateList(0);
-                if (csl != null) return csl.getDefaultColor();
-                return ta.getColor(0, fallback);
-            } catch (Throwable ignored) {
-                return fallback;
-            } finally {
-                if (ta != null) ta.recycle();
             }
         }
 
@@ -1553,10 +1520,46 @@ final class TextActionModeHost {
             return null;
         }
 
+        private Drawable makeToolbarItemBg(float density) {
+            final float cornerRadius = ModxTheme.RADIUS_DP * density;
+            GradientDrawable normal = new GradientDrawable();
+            normal.setColor(Color.TRANSPARENT);
+            normal.setCornerRadius(cornerRadius);
+
+            GradientDrawable pressed = new GradientDrawable();
+            pressed.setColor(themeHighlightColor);
+            pressed.setCornerRadius(cornerRadius);
+
+            StateListDrawable states = new StateListDrawable();
+            states.addState(new int[]{android.R.attr.state_pressed}, pressed);
+            states.addState(new int[0], normal);
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                GradientDrawable mask = new GradientDrawable();
+                mask.setColor(ModxTheme.TOOLBAR_RIPPLE_MASK);
+                mask.setCornerRadius(cornerRadius);
+                return new RippleDrawable(
+                        ColorStateList.valueOf(themeHighlightColor),
+                        null,
+                        mask);
+            }
+            return states;
+        }
+
         private TextView makeMenuItemView(final MenuItem item, String label, float density, boolean verticalRow) {
             TextView tv = new TextView(themedCtx);
             tv.setText(label);
-            tv.setTextColor(themeTextColor);
+            boolean enabled = item != null && item.isEnabled();
+            tv.setEnabled(enabled);
+            tv.setTextColor(new ColorStateList(
+                    new int[][]{
+                            new int[]{-android.R.attr.state_enabled},
+                            new int[0]
+                    },
+                    new int[]{
+                            themeDisabledTextColor,
+                            themeTextColor
+                    }));
             tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
             tv.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
             tv.setGravity(verticalRow ? (Gravity.CENTER_VERTICAL | Gravity.START) : Gravity.CENTER);
@@ -1570,17 +1573,13 @@ final class TextActionModeHost {
             tv.setMinimumWidth(minW);
             tv.setMinHeight(minH);
             tv.setMinimumHeight(minH);
-            tv.setClickable(true);
+            tv.setClickable(enabled);
             tv.setFocusable(false);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                tv.setBackground(new RippleDrawable(
-                        ColorStateList.valueOf(themeHighlightColor),
-                        null,
-                        new ColorDrawable(ModxTheme.TOOLBAR_RIPPLE_MASK)));
-            }
+            tv.setBackground(makeToolbarItemBg(density));
             tv.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
+                    if (item == null || !item.isEnabled()) return;
                     if (BuildConfig.SEC_DIAG) {
                         SecurityNative.diagUi("ToolbarWindow.onClick: itemId=" + item.getItemId()
                                 + " title=" + resolveRealLabel(item));
@@ -1623,12 +1622,7 @@ final class TextActionModeHost {
             btn.setClickable(true);
             btn.setFocusable(false);
             btn.setContentDescription(isBackButton ? "Back" : "More options");
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                btn.setBackground(new RippleDrawable(
-                        ColorStateList.valueOf(themeHighlightColor),
-                        null,
-                        new ColorDrawable(ModxTheme.TOOLBAR_RIPPLE_MASK)));
-            }
+            btn.setBackground(makeToolbarItemBg(density));
             ImageView icon = new ImageView(themedCtx);
             icon.setScaleType(ImageView.ScaleType.CENTER);
             icon.setImageDrawable(new ToolbarGlyphDrawable(themeTextColor, density, isBackButton));
@@ -1706,15 +1700,24 @@ final class TextActionModeHost {
                 overflowOpen = false;
             }
 
+            final float cornerRadiusPx = ModxTheme.RADIUS_DP * density;
+            final int borderPx = Math.max(1, dp(1, density));
+
             LinearLayout card = new LinearLayout(themedCtx);
             GradientDrawable cardBg = new GradientDrawable();
             cardBg.setColor(themeBgColor);
-            // 48dp pill -> 24dp radius; matches Android FloatingToolbar with zero stroke/dividers
-            cardBg.setCornerRadius(dp(24, density));
+            cardBg.setCornerRadius(cornerRadiusPx);
+            cardBg.setStroke(borderPx, themeBorderColor);
             card.setBackground(cardBg);
+            card.setPadding(borderPx, borderPx, borderPx, borderPx);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 card.setElevation(dp(8, density));
-                card.setOutlineProvider(ViewOutlineProvider.BACKGROUND);
+                card.setOutlineProvider(new ViewOutlineProvider() {
+                    @Override
+                    public void getOutline(View view, Outline outline) {
+                        outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), cornerRadiusPx);
+                    }
+                });
                 card.setClipToOutline(true);
             }
 
