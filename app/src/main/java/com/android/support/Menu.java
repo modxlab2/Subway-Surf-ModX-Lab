@@ -1734,6 +1734,7 @@ Preferences.init(context);
     // ================================================================
     private static class SlimScrollView extends ScrollView {
         private static final int ACTIVE_ALPHA = 153;
+        private static final int LOGIN_IDLE_ALPHA = 110;
         private static final int IDLE_ALPHA = 0;
 
         private final Paint thumbPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -1771,14 +1772,29 @@ Preferences.init(context);
 
         void setLoginScrollMode(boolean loginMode) {
             this.loginScrollMode = loginMode;
-            if (!loginMode) {
+            if (loginMode) {
+                if (scrollingEnabled && barAlpha < LOGIN_IDLE_ALPHA) {
+                    barAlpha = LOGIN_IDLE_ALPHA;
+                }
+                invalidate();
+            } else {
                 horizontalLock = false;
                 verticalLock = false;
+                if (!scrollingEnabled) {
+                    barAlpha = IDLE_ALPHA;
+                }
+                invalidate();
             }
         }
 
         void setScrollingEnabled(boolean enabled) {
-            if (this.scrollingEnabled == enabled) return;
+            if (this.scrollingEnabled == enabled) {
+                if (enabled && loginScrollMode && barAlpha < LOGIN_IDLE_ALPHA) {
+                    barAlpha = LOGIN_IDLE_ALPHA;
+                    invalidate();
+                }
+                return;
+            }
             this.scrollingEnabled = enabled;
             if (!enabled) {
                 removeCallbacks(fadeRunnable);
@@ -1786,6 +1802,8 @@ Preferences.init(context);
                 if (getScrollX() != 0 || getScrollY() != 0) {
                     super.scrollTo(0, 0);
                 }
+            } else if (loginScrollMode) {
+                barAlpha = Math.max(barAlpha, LOGIN_IDLE_ALPHA);
             }
             invalidate();
         }
@@ -1799,9 +1817,10 @@ Preferences.init(context);
         private final Runnable fadeRunnable = new Runnable() {
             @Override
             public void run() {
-                barAlpha = Math.max(IDLE_ALPHA, barAlpha - 25);
+                int targetIdle = (loginScrollMode && scrollingEnabled) ? LOGIN_IDLE_ALPHA : IDLE_ALPHA;
+                barAlpha = Math.max(targetIdle, barAlpha - 25);
                 invalidate();
-                if (barAlpha > IDLE_ALPHA) postDelayed(this, 30);
+                if (barAlpha > targetIdle) postDelayed(this, 30);
             }
         };
 
@@ -1910,6 +1929,11 @@ Preferences.init(context);
             super.draw(canvas);
             if (!scrollingEnabled || getChildCount() == 0) return;
 
+            final int effectiveAlpha = (loginScrollMode && scrollingEnabled)
+                    ? Math.max(barAlpha, LOGIN_IDLE_ALPHA)
+                    : barAlpha;
+            if (effectiveAlpha <= 0) return;
+
             final int viewH = getHeight();
             final int contentH = getChildAt(0).getHeight();
             final int range = contentH - viewH;
@@ -1929,12 +1953,12 @@ Preferences.init(context);
             final float r = w / 2f;
 
             trackPaint.setColor(ModxTheme.MUTED);
-            trackPaint.setAlpha(barAlpha * 24 / 255);
+            trackPaint.setAlpha(effectiveAlpha * 24 / 255);
             rect.set(left, trackTop, right, trackTop + trackH);
             canvas.drawRoundRect(rect, r, r, trackPaint);
 
             thumbPaint.setColor(accentColor);
-            thumbPaint.setAlpha(barAlpha);
+            thumbPaint.setAlpha(effectiveAlpha);
             rect.set(left, thumbTop, right, thumbTop + thumbH);
             canvas.drawRoundRect(rect, r, r, thumbPaint);
         }
@@ -4718,22 +4742,21 @@ private int measureLoginContentHeightPx(int menuWidthPx) {
     return measuredContentH;
 }
 
-private int computeDesiredLoginWindowHeightPx(int menuWidthPx) {
-    int contentH = measureLoginContentHeightPx(menuWidthPx);
-    int chromeH = getLoginChromeHeightPx(menuWidthPx);
-    int desiredH = contentH + chromeH;
+private int getDefaultMenuHeightPx() {
     int minH = dp(MIN_MENU_HEIGHT_DP);
-    int loggedInMaxH = Math.min(dp(MENU_HEIGHT), Math.max(minH, Math.round(screenH() * 0.85f)));
-    return Math.max(minH, Math.min(desiredH, loggedInMaxH));
+    int maxH = Math.max(minH, Math.round(screenH() * 0.85f));
+    return Math.min(dp(MENU_HEIGHT), maxH);
+}
+
+private int computeDesiredLoginWindowHeightPx(int menuWidthPx) {
+    return getDefaultMenuHeightPx();
 }
 
 private void applyComputedLoginDefaultHeight(boolean flashIfOverflow) {
     if (isLoggedIn || loginUserResized || menuFrame == null) return;
     ViewGroup.LayoutParams lp = menuFrame.getLayoutParams();
     if (lp == null) return;
-    int targetW = (menuFrame.getWidth() > 0) ? menuFrame.getWidth()
-            : (lp.width > 0 ? lp.width : dp(MENU_WIDTH));
-    int targetH = computeDesiredLoginWindowHeightPx(targetW);
+    int targetH = getDefaultMenuHeightPx();
     if (lp.height != targetH) {
         lp.height = targetH;
         menuFrame.setLayoutParams(lp);
@@ -4755,7 +4778,7 @@ private void resetWindowSizeToDefault() {
     int minW = dp(MIN_MENU_WIDTH_DP);
     int minH = dp(MIN_MENU_HEIGHT_DP);
     int targetW = Math.min(dp(MENU_WIDTH), Math.max(minW, screenW() - dp(10)));
-    int targetH;
+    int targetH = getDefaultMenuHeightPx();
     if (!isLoggedIn) {
         lastLoginAppliedScale = -1f;
         ModxTheme.MenuScaleTokens loginTokens = ModxTheme.resolveMenuTokens(
@@ -4765,10 +4788,6 @@ private void resetWindowSizeToDefault() {
         }
         applyFooterMetrics(loginTokens);
         applyResizeGripAndToastMetrics(loginTokens);
-        targetH = computeDesiredLoginWindowHeightPx(targetW);
-    } else {
-        int maxMenuH = Math.max(minH, Math.round(screenH() * 0.85f));
-        targetH = Math.min(dp(MENU_HEIGHT), maxMenuH);
     }
     lp.width = targetW;
     lp.height = targetH;
@@ -4804,15 +4823,15 @@ private void updateLoginOverflowScroll(boolean flashIfOverflow) {
     int measuredContentH = measureLoginContentHeightPx(targetW);
     if (measuredContentH <= 0) return;
 
-    int enableTolPx = dp(6);
-    int disableTolPx = dp(2);
+    int enableTolPx = dp(2);
+    int disableTolPx = dp(1);
     int deltaPx = measuredContentH - viewportH;
     boolean wasOverflow = loginOverflowActive;
     boolean overflow = wasOverflow ? (deltaPx > -disableTolPx) : (deltaPx > enableTolPx);
 
     loginOverflowActive = overflow;
-    ssv.setLoginScrollMode(overflow);
     ssv.setScrollingEnabled(overflow);
+    ssv.setLoginScrollMode(overflow);
     if (overflow && flashIfOverflow) {
         ssv.showScrollbarBriefly();
     }
@@ -5073,9 +5092,7 @@ private void showLoginScreen(final String forcedLogoutReason) {
             if (!loginUserResized && menuFrame != null) {
                 ViewGroup.LayoutParams mlp = menuFrame.getLayoutParams();
                 if (mlp != null) {
-                    int minH = dp(MIN_MENU_HEIGHT_DP);
-                    int maxH = Math.max(minH, Math.round(screenH() * 0.85f));
-                    int defH = Math.min(dp(MENU_HEIGHT), maxH);
+                    int defH = getDefaultMenuHeightPx();
                     if (mlp.height != defH) {
                         mlp.height = defH;
                         menuFrame.setLayoutParams(mlp);

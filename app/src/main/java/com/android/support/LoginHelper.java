@@ -270,7 +270,7 @@ public class LoginHelper {
         final LinearLayout card = new LinearLayout(ctx);
         cardView = card;
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(16), dp(10), dp(16), dp(8));
+        card.setPadding(dp(16), dp(10), dp(16), dp(6));
         card.setGravity(Gravity.CENTER_HORIZONTAL);
         card.setBackgroundColor(Color.TRANSPARENT);
         card.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
@@ -297,7 +297,7 @@ public class LoginHelper {
         userBox.addView(userPasteBtn);
 
         LinearLayout.LayoutParams uLp = new LinearLayout.LayoutParams(MATCH_PARENT, dp(44));
-        uLp.setMargins(0, 0, 0, dp(8));
+        uLp.setMargins(0, 0, 0, dp(7));
         userBox.setLayoutParams(uLp);
         card.addView(userBox);
 
@@ -324,7 +324,7 @@ public class LoginHelper {
         passBox.addView(passPasteBtn);
 
         LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(MATCH_PARENT, dp(44));
-        pLp.setMargins(0, 0, 0, dp(6));
+        pLp.setMargins(0, 0, 0, dp(5));
         passBox.setLayoutParams(pLp);
         card.addView(passBox);
 
@@ -423,7 +423,7 @@ public class LoginHelper {
             loginBtn.setElevation(0f);
         }
         LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(MATCH_PARENT, dp(42));
-        bLp.setMargins(0, dp(6), 0, 0);
+        bLp.setMargins(0, dp(5), 0, 0);
         loginBtn.setLayoutParams(bLp);
 
         loginBtnContent = new LinearLayout(ctx);
@@ -567,7 +567,7 @@ public class LoginHelper {
         header.setOrientation(LinearLayout.VERTICAL);
         header.setGravity(Gravity.CENTER_HORIZONTAL);
         LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
-        hLp.setMargins(0, 0, 0, dp(BuildConfig.SEC_DIAG ? 8 : 10));
+        hLp.setMargins(0, 0, 0, dp(BuildConfig.SEC_DIAG ? 6 : 8));
         header.setLayoutParams(hLp);
 
         TextView title = new TextView(ctx);
@@ -1202,11 +1202,11 @@ public class LoginHelper {
         if (Math.abs(s - uiScale) < 0.005f) return;
         uiScale = s;
 
-        cardView.setPadding(sdp(16), sdp(10), sdp(16), sdp(8));
+        cardView.setPadding(sdp(16), sdp(10), sdp(16), sdp(6));
 
         if (headerView != null && headerView.getLayoutParams() instanceof LinearLayout.LayoutParams) {
             LinearLayout.LayoutParams hLp = (LinearLayout.LayoutParams) headerView.getLayoutParams();
-            hLp.bottomMargin = sdp(BuildConfig.SEC_DIAG ? 8 : 10);
+            hLp.bottomMargin = sdp(BuildConfig.SEC_DIAG ? 6 : 8);
             headerView.setLayoutParams(hLp);
         }
         if (headerTitleView != null) {
@@ -1242,13 +1242,13 @@ public class LoginHelper {
         if (userBox != null && userBox.getLayoutParams() instanceof LinearLayout.LayoutParams) {
             LinearLayout.LayoutParams uLp = (LinearLayout.LayoutParams) userBox.getLayoutParams();
             uLp.height = sdp(44);
-            uLp.bottomMargin = sdp(8);
+            uLp.bottomMargin = sdp(7);
             userBox.setLayoutParams(uLp);
         }
         if (passBox != null && passBox.getLayoutParams() instanceof LinearLayout.LayoutParams) {
             LinearLayout.LayoutParams pLp = (LinearLayout.LayoutParams) passBox.getLayoutParams();
             pLp.height = sdp(44);
-            pLp.bottomMargin = sdp(6);
+            pLp.bottomMargin = sdp(5);
             passBox.setLayoutParams(pLp);
         }
 
@@ -1268,7 +1268,7 @@ public class LoginHelper {
         if (loginBtn != null && loginBtn.getLayoutParams() instanceof LinearLayout.LayoutParams) {
             LinearLayout.LayoutParams bLp = (LinearLayout.LayoutParams) loginBtn.getLayoutParams();
             bLp.height = sdp(42);
-            bLp.topMargin = sdp(6);
+            bLp.topMargin = sdp(5);
             loginBtn.setLayoutParams(bLp);
         }
         if (loginBtnSpinner != null && loginBtnSpinner.getLayoutParams() instanceof LinearLayout.LayoutParams) {
@@ -2249,8 +2249,8 @@ public class LoginHelper {
             this.checked = initial;
             setOrientation(LinearLayout.HORIZONTAL);
             setGravity(Gravity.CENTER_VERTICAL);
-            setMinimumHeight(dp(36));
-            setPadding(0, dp(4), 0, dp(4));
+            setMinimumHeight(dp(32));
+            setPadding(0, dp(3), 0, dp(3));
 
             box = new FrameLayout(ctx);
             LinearLayout.LayoutParams boxLp = new LinearLayout.LayoutParams(dp(17), dp(17));
@@ -2292,8 +2292,8 @@ public class LoginHelper {
         }
 
         void applyScale(float s) {
-            setMinimumHeight(dp(36f * s));
-            setPadding(0, dp(4f * s), 0, dp(4f * s));
+            setMinimumHeight(dp(32f * s));
+            setPadding(0, dp(3f * s), 0, dp(3f * s));
             if (box.getLayoutParams() instanceof LinearLayout.LayoutParams) {
                 LinearLayout.LayoutParams bLp = (LinearLayout.LayoutParams) box.getLayoutParams();
                 int bsz = dp(17f * s);
