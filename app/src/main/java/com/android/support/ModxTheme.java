@@ -457,6 +457,27 @@ public final class ModxTheme {
         return withInteractiveRipple(ctx, states, withAlpha(accent, 0x24), RADIUS_DP);
     }
 
+    public static Drawable floatingIconBg(Context ctx, int accent) {
+        float r = dpf(ctx, RADIUS_DP);
+        int b = Math.max(1, dp(ctx, 1f));
+
+        GradientDrawable normal = new GradientDrawable();
+        normal.setColor(withAlphaFraction(SURFACE, 0.85f));
+        normal.setStroke(b, LINE);
+        normal.setCornerRadius(r);
+
+        GradientDrawable pressed = new GradientDrawable();
+        pressed.setColor(withAlphaFraction(CARD_HOVER, 0.92f));
+        pressed.setStroke(b, LINE_HOVER);
+        pressed.setCornerRadius(r);
+
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[]{android.R.attr.state_pressed}, pressed);
+        states.addState(new int[0], normal);
+
+        return withInteractiveRipple(ctx, states, withAlpha(accent, 0x24), RADIUS_DP);
+    }
+
     public static Drawable fieldBoxBg(Context ctx, int accent, boolean focused) {
         return roundRect(
                 ctx,
@@ -579,11 +600,11 @@ public final class ModxTheme {
                 this.modeDescSp = 9.5f;
                 this.modeAllowActiveTag = false;
 
-                this.gripTouchPx = dp(ctx, 32f);
+                this.gripTouchPx = dp(ctx, 20f);
                 this.footerIconOnly = true;
                 this.footerPadStartPx = dp(ctx, 6f);
                 this.footerPadVPx = dp(ctx, 5f);
-                this.footerPadEndPx = this.gripTouchPx + dp(ctx, 4f);
+                this.footerPadEndPx = this.footerPadStartPx;
                 this.footerBtnHeightPx = dp(ctx, 36f);
                 this.footerBtnFontSp = 0f;
                 this.footerBtnIconPx = dp(ctx, 16f);
@@ -627,11 +648,11 @@ public final class ModxTheme {
                 this.modeDescSp = clamp(10.5f * s, 9.5f, 10.5f);
                 this.modeAllowActiveTag = true;
 
-                this.gripTouchPx = dp(ctx, 32f);
+                this.gripTouchPx = dp(ctx, 22f);
                 this.footerIconOnly = false;
                 this.footerPadStartPx = dp(ctx, 7f);
                 this.footerPadVPx = dp(ctx, 6f);
-                this.footerPadEndPx = this.gripTouchPx + dp(ctx, 4f);
+                this.footerPadEndPx = this.footerPadStartPx;
                 this.footerBtnHeightPx = dp(ctx, 36f);
                 this.footerBtnFontSp = clamp(11f * s, 9.5f, 11f);
                 this.footerBtnIconPx = dp(ctx, 13f);
@@ -672,11 +693,11 @@ public final class ModxTheme {
                 this.modeDescSp = clamp(10.5f * s, 9.5f, 12f);
                 this.modeAllowActiveTag = true;
 
-                this.gripTouchPx = dp(ctx, 32f);
+                this.gripTouchPx = dp(ctx, 22f);
                 this.footerIconOnly = false;
                 this.footerPadStartPx = dp(ctx, clamp(8f * s, 6f, 12f));
                 this.footerPadVPx = dp(ctx, clamp(7f * s, 5f, 10f));
-                this.footerPadEndPx = this.gripTouchPx + dp(ctx, 4f);
+                this.footerPadEndPx = this.footerPadStartPx;
                 this.footerBtnHeightPx = Math.max(dp(ctx, 36f), Math.round(dp(ctx, 38f) * s));
                 this.footerBtnFontSp = clamp(11f * s, 9.5f, 12.5f);
                 this.footerBtnIconPx = Math.max(dp(ctx, 13f), Math.round(dp(ctx, 14f) * s));

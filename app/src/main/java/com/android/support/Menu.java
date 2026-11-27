@@ -247,6 +247,8 @@ public class Menu {
     private FrameLayout mFocusPillHideBtn = null;
     private ImageView mFocusPillHideIcon = null;
     private View mFocusPillHideProgress = null;
+    private View mFirstCardSafeTarget = null;
+    private int mFirstCardSafeAddedR = 0;
 
     // ===== Feature C: Reset All immediate + 8s UNDO snackbar =====
     private static final long UNDO_TIMEOUT_MS = 8000L;
@@ -884,7 +886,7 @@ Preferences.init(context);
         bottomBar.setGravity(Gravity.CENTER_VERTICAL);
         bottomBar.setBackgroundColor(ModxTheme.SURFACE);
         bottomBar.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
-        bottomBar.setPadding(dp(8), dp(7), dp(36), dp(7));
+        bottomBar.setPadding(dp(8), dp(7), dp(8), dp(7));
 
         FrameLayout hideContainer = new FrameLayout(context);
         LinearLayout.LayoutParams hideLp = new LinearLayout.LayoutParams(0, dp(38), 1f);
@@ -1070,11 +1072,11 @@ Preferences.init(context);
         mMenuToastView = toastTv;
         menuFrame.addView(toastTv);
 
-        // ---------------- Resize handle (32dp touch target, 3-dot triangle) ----------------
+        // ---------------- Resize handle (22dp touch target, compact 3-dot corner grip) ----------------
         resizeHandle = new ResizeGripView(context, innerRadius);
         resizeHandle.setColors(ModxTheme.withAlpha(ModxTheme.SUBTLE, 0x99), COLOR_ACCENT);
         resizeHandle.setContentDescription("Resize menu");
-        int hSize = dp(32);
+        int hSize = dp(22);
         FrameLayout.LayoutParams rhLp = new FrameLayout.LayoutParams(hSize, hSize);
         rhLp.gravity = Gravity.BOTTOM | Gravity.RIGHT;
         rhLp.setMargins(0, 0, inset, inset);
@@ -1539,9 +1541,9 @@ Preferences.init(context);
                 canvas.clipPath(clipPath);
             }
 
-            float margin = Math.max(4.5f * density, cornerRadiusPx * 0.52f);
-            float spacing = 4.2f * density;
-            float dotR = 1.25f * density;
+            float margin = Math.max(3.5f * density, cornerRadiusPx * 0.45f);
+            float spacing = 3.2f * density;
+            float dotR = 1.05f * density;
             float rx = w - margin;
             float by = h - margin;
 
@@ -2181,6 +2183,7 @@ Preferences.init(context);
             }
         }
 
+        clearFirstCardSafeZone();
         applyHeaderMetrics(tokens);
         applyFooterMetrics(tokens);
         applyResizeGripAndToastMetrics(tokens);
@@ -2190,6 +2193,7 @@ Preferences.init(context);
         rescaleAll();
         applyTabMetrics(tokens);
         applyModeCardsMetrics(tokens);
+        applyFirstCardSafeZone(tokens);
         updateHeaderWaveState();
     }
 
@@ -2260,6 +2264,7 @@ Preferences.init(context);
                 lmp.width = 0;
                 lmp.height = tokens.footerBtnHeightPx;
                 lmp.weight = 1f;
+                lmp.setMargins(0, 0, 0, 0);
                 mMinimizeBtn.setLayoutParams(lmp);
             }
         }
@@ -2713,11 +2718,11 @@ Preferences.init(context);
     // ================================================================
     private void buildFocusOverlayControls(Context ctx) {
         FrameLayout toggleBtn = new FrameLayout(ctx);
-        toggleBtn.setBackground(ModxTheme.ghostIconBg(ctx, COLOR_ACCENT));
+        toggleBtn.setBackground(ModxTheme.floatingIconBg(ctx, COLOR_ACCENT));
         toggleBtn.setClickable(true);
         toggleBtn.setFocusable(true);
         toggleBtn.setContentDescription("Focus mode");
-        FrameLayout.LayoutParams tLp = new FrameLayout.LayoutParams(dp(32), dp(32), Gravity.TOP | Gravity.RIGHT);
+        FrameLayout.LayoutParams tLp = new FrameLayout.LayoutParams(dp(32), dp(32), Gravity.TOP | Gravity.END);
         tLp.setMargins(0, dp(6), dp(6), 0);
         toggleBtn.setLayoutParams(tLp);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -2746,9 +2751,10 @@ Preferences.init(context);
         LinearLayout pill = new LinearLayout(ctx);
         pill.setOrientation(LinearLayout.HORIZONTAL);
         pill.setGravity(Gravity.CENTER_VERTICAL);
-        pill.setBackground(ModxTheme.pillBadgeBg(ctx, ModxTheme.SURFACE, ModxTheme.LINE_STRONG));
+        pill.setBackground(ModxTheme.pillBadgeBg(
+                ctx, ModxTheme.withAlphaFraction(ModxTheme.SURFACE, 0.85f), ModxTheme.LINE));
         pill.setPadding(dp(3), dp(2), dp(3), dp(2));
-        FrameLayout.LayoutParams pLp = new FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT, Gravity.TOP | Gravity.RIGHT);
+        FrameLayout.LayoutParams pLp = new FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT, Gravity.TOP | Gravity.END);
         pLp.setMargins(0, dp(6), dp(6), 0);
         pill.setLayoutParams(pLp);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -2900,7 +2906,7 @@ Preferences.init(context);
         if (tokens == null) return;
         boolean mini = (tokens.sizeClass == ModxTheme.SizeClass.MINI);
         boolean compact = (tokens.sizeClass == ModxTheme.SizeClass.COMPACT);
-        int toggleBoxPx = mini ? dp(26) : (compact ? dp(28) : dp(32));
+        int toggleBoxPx = mini ? dp(24) : (compact ? dp(28) : dp(32));
         int toggleIconPx = mini ? dp(13) : (compact ? dp(14) : dp(16));
         int pillBtnW = mini ? dp(22) : (compact ? dp(25) : dp(28));
         int pillBtnH = mini ? dp(24) : (compact ? dp(26) : dp(28));
@@ -2913,7 +2919,8 @@ Preferences.init(context);
                 FrameLayout.LayoutParams flp = (FrameLayout.LayoutParams) lp;
                 flp.width = toggleBoxPx;
                 flp.height = toggleBoxPx;
-                flp.setMargins(0, dp(mini ? 4 : 6), dp(mini ? 4 : 6), 0);
+                flp.gravity = Gravity.TOP | Gravity.END;
+                flp.setMargins(0, dp(6), dp(6), 0);
                 mFocusToggleBtn.setLayoutParams(flp);
             }
             mFocusToggleBtn.setVisibility(isLoggedIn && !focusMode ? View.VISIBLE : View.GONE);
@@ -2932,7 +2939,8 @@ Preferences.init(context);
             ViewGroup.LayoutParams lp = mFocusMiniPill.getLayoutParams();
             if (lp instanceof FrameLayout.LayoutParams) {
                 FrameLayout.LayoutParams flp = (FrameLayout.LayoutParams) lp;
-                flp.setMargins(0, dp(mini ? 4 : 6), dp(mini ? 4 : 6), 0);
+                flp.gravity = Gravity.TOP | Gravity.END;
+                flp.setMargins(0, dp(6), dp(6), 0);
                 mFocusMiniPill.setLayoutParams(flp);
             }
             mFocusMiniPill.setPadding(dp(mini ? 2 : 3), dp(2), dp(mini ? 2 : 3), dp(2));
@@ -2964,6 +2972,109 @@ Preferences.init(context);
         }
     }
 
+    private void clearFirstCardSafeZone() {
+        if (mFirstCardSafeTarget != null) {
+            if (mFirstCardSafeAddedR != 0) {
+                mFirstCardSafeTarget.setPadding(
+                        mFirstCardSafeTarget.getPaddingLeft(),
+                        mFirstCardSafeTarget.getPaddingTop(),
+                        Math.max(0, mFirstCardSafeTarget.getPaddingRight() - mFirstCardSafeAddedR),
+                        mFirstCardSafeTarget.getPaddingBottom());
+            }
+            mFirstCardSafeTarget = null;
+            mFirstCardSafeAddedR = 0;
+        }
+    }
+
+    private View findTaggedDescendant(View root, String tag) {
+        if (root == null) return null;
+        if (tag.equals(root.getTag())) return root;
+        if (root instanceof ViewGroup) {
+            ViewGroup vg = (ViewGroup) root;
+            for (int i = 0; i < vg.getChildCount(); i++) {
+                View found = findTaggedDescendant(vg.getChildAt(i), tag);
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
+    private boolean containsToggleView(View root) {
+        if (root instanceof ToggleView) return true;
+        if (root instanceof ViewGroup) {
+            ViewGroup vg = (ViewGroup) root;
+            for (int i = 0; i < vg.getChildCount(); i++) {
+                if (containsToggleView(vg.getChildAt(i))) return true;
+            }
+        }
+        return false;
+    }
+
+    private void applyFirstCardSafeZone(ModxTheme.MenuScaleTokens tokens) {
+        clearFirstCardSafeZone();
+        if (!isLoggedIn || focusMode || contentLayout == null || contentLayout.getChildCount() == 0) {
+            return;
+        }
+        View catRoot = contentLayout.getChildAt(0);
+        View firstCard = null;
+        if (catRoot instanceof ViewGroup) {
+            ViewGroup cg = (ViewGroup) catRoot;
+            for (int i = 0; i < cg.getChildCount(); i++) {
+                View c = cg.getChildAt(i);
+                if (c != null && c.getVisibility() != View.GONE) {
+                    firstCard = c;
+                    break;
+                }
+            }
+        } else if (catRoot != null && catRoot.getVisibility() != View.GONE) {
+            firstCard = catRoot;
+        }
+        if (firstCard == null) return;
+
+        View target = findTaggedDescendant(firstCard, "first_card_safe_target");
+        if (target == null) {
+            target = firstCard;
+        }
+
+        boolean mini = (tokens != null && tokens.sizeClass == ModxTheme.SizeClass.MINI);
+        boolean compact = (tokens != null && tokens.sizeClass == ModxTheme.SizeClass.COMPACT);
+        int toggleBoxPx = mini ? dp(24) : (compact ? dp(28) : dp(32));
+        int toggleMarginEnd = dp(6);
+        int cardOuterRight = dp(6) + dp(6);
+        int neededCardRight = Math.max(0, toggleMarginEnd + toggleBoxPx - cardOuterRight + dp(4));
+
+        int existingRight = 0;
+        View cur = target;
+        while (cur != null) {
+            existingRight += cur.getPaddingRight();
+            if (cur == firstCard) break;
+            ViewParent p = cur.getParent();
+            cur = (p instanceof View) ? (View) p : null;
+        }
+        if (containsToggleView(firstCard)) {
+            existingRight += dp(mini ? 5 : 8);
+        }
+
+        int extraR = Math.max(0, neededCardRight - existingRight);
+        if (extraR > 0) {
+            target.setPadding(
+                    target.getPaddingLeft(),
+                    target.getPaddingTop(),
+                    target.getPaddingRight() + extraR,
+                    target.getPaddingBottom());
+            mFirstCardSafeTarget = target;
+            mFirstCardSafeAddedR = extraR;
+            for (ModeButtonHolder h : mModeButtons.values()) {
+                if (h != null && h.titleRow == target) {
+                    ModxTheme.MenuScaleTokens tk = (tokens != null) ? tokens : ensureScaleTokens();
+                    updateModeBadgeFit(h, tk);
+                    fitModeTitle(h, tk);
+                    break;
+                }
+            }
+        }
+    }
+
     private void applyContentStagePadding(ModxTheme.MenuScaleTokens tokens) {
         if (contentLayout == null) return;
         if (!isLoggedIn) {
@@ -2973,8 +3084,7 @@ Preferences.init(context);
             }
             return;
         }
-        boolean mini = (tokens != null && tokens.sizeClass == ModxTheme.SizeClass.MINI);
-        int topPad = mini ? dp(32) : dp(36);
+        int topPad = dp(4);
         boolean undoVisible = (mUndoSnackbar != null && mUndoSnackbar.getVisibility() == View.VISIBLE);
         int botPad = undoVisible ? dp(50) : (focusMode ? dp(20) : dp(10));
         if (contentLayout.getPaddingLeft() != dp(2) || contentLayout.getPaddingTop() != topPad
@@ -3025,6 +3135,7 @@ Preferences.init(context);
             }
             if (mBottomDivider != null) mBottomDivider.setVisibility(View.VISIBLE);
             applyContentStagePadding(ensureScaleTokens());
+            applyFirstCardSafeZone(ensureScaleTokens());
             return;
         }
 
@@ -3055,6 +3166,7 @@ Preferences.init(context);
         final int fullFooterH = cachedFooterFullHeight > 0 ? cachedFooterFullHeight : measureViewFullHeight(mBottomBar, dp(50));
 
         applyFocusControlsMetrics(tokens);
+        applyFirstCardSafeZone(tokens);
         if (mFocusToggleBtn != null && !enabled && animate) {
             mFocusToggleBtn.setAlpha(0f);
             mFocusToggleBtn.animate().alpha(1f).setDuration(180).start();
@@ -3180,12 +3292,14 @@ Preferences.init(context);
             }
         }
         compactMode = SHOW_TAB_ICONS && (tokens.sidebarIconOnly || (isLoggedIn && enabled));
+        clearFirstCardSafeZone();
         applyFocusControlsMetrics(tokens);
         applyTabMetrics(tokens);
         applyModeCardsMetrics(tokens);
         applyUndoSnackbarMetrics(tokens);
         applyResizeGripAndToastMetrics(tokens);
         applyContentStagePadding(tokens);
+        applyFirstCardSafeZone(tokens);
         updateHeaderWaveState();
 
         if (contentScrollView != null) {
@@ -4064,6 +4178,8 @@ Preferences.init(context);
         final int prevContentScrollY = (contentScrollView != null) ? contentScrollView.getScrollY() : 0;
         final int prevSidebarScrollY = (sidebarScroll != null) ? sidebarScroll.getScrollY() : 0;
 
+        mFirstCardSafeTarget = null;
+        mFirstCardSafeAddedR = 0;
         textBase.clear();
         categoryViewsMap.clear();
         categoryNames.clear();
@@ -4198,6 +4314,7 @@ Preferences.init(context);
         applySavedTabOrder(categoryNames);
         setupSidebarTabs(prevTabName, prevContentScrollY, prevSidebarScrollY);
         ModxTheme.MenuScaleTokens tokens = ensureScaleTokens();
+        clearFirstCardSafeZone();
         applyHeaderMetrics(tokens);
         applyFooterMetrics(tokens);
         applyResizeGripAndToastMetrics(tokens);
@@ -4207,6 +4324,7 @@ Preferences.init(context);
         rescaleAll();
         applyTabMetrics(tokens);
         applyModeCardsMetrics(tokens);
+        applyFirstCardSafeZone(tokens);
         updateHeaderWaveState();
         if (isLoggedIn) {
             Preferences.pushRestoredSnapshotToNativeOnce();
@@ -4440,6 +4558,7 @@ Preferences.init(context);
             }
             contentLayout.addView(selectedCatView, new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
         }
+        applyFirstCardSafeZone(ensureScaleTokens());
         contentScrollView.scrollTo(0, 0);
 
         contentLayout.animate().cancel();
@@ -5916,7 +6035,7 @@ private void setWindowFocusable(boolean focusable) {
         LinearLayout textCol = new LinearLayout(getContext);
         textCol.setOrientation(LinearLayout.VERTICAL);
         textCol.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
-        textCol.setPadding(0, 0, dp(10), 0);
+        textCol.setPadding(0, 0, dp(6), 0);
 
         TextView label = new TextView(getContext);
         label.setText(featName);
@@ -6010,6 +6129,7 @@ private void setWindowFocusable(boolean focusable) {
         card.setPadding(dp(12), dp(9), dp(12), dp(8));
 
         LinearLayout head = new LinearLayout(getContext);
+        head.setTag("first_card_safe_target");
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
         head.setClipChildren(false);
@@ -6460,13 +6580,15 @@ private void setWindowFocusable(boolean focusable) {
     }
 
     private int estimateModeRowInnerWidthPx(ModeButtonHolder h, ModxTheme.MenuScaleTokens tokens) {
+        int extraTitlePad = (h != null && h.titleRow != null)
+                ? (h.titleRow.getPaddingLeft() + h.titleRow.getPaddingRight()) : 0;
         if (h != null && h.row != null && h.row.getWidth() > 0) {
-            return Math.max(0, h.row.getWidth() - h.row.getPaddingLeft() - h.row.getPaddingRight());
+            return Math.max(0, h.row.getWidth() - h.row.getPaddingLeft() - h.row.getPaddingRight() - extraTitlePad);
         }
         int menuW = (menuFrame != null && menuFrame.getWidth() > 0) ? menuFrame.getWidth() : dp(MENU_WIDTH);
         int sideW = (tokens != null) ? tokens.sidebarWidthPx : dp(96);
         int padH = (tokens != null) ? tokens.modeCardPadHPx : dp(12);
-        return Math.max(dp(110), menuW - sideW - dp(24) - padH * 2);
+        return Math.max(dp(90), menuW - sideW - dp(24) - padH * 2 - extraTitlePad);
     }
 
     private void fitModeTitle(ModeButtonHolder h, ModxTheme.MenuScaleTokens tokens) {
@@ -6664,6 +6786,7 @@ private void setWindowFocusable(boolean focusable) {
             textCol.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
 
             LinearLayout titleRow = new LinearLayout(getContext);
+            titleRow.setTag("first_card_safe_target");
             titleRow.setOrientation(LinearLayout.HORIZONTAL);
             titleRow.setGravity(Gravity.CENTER_VERTICAL);
             titleRow.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
@@ -7428,6 +7551,7 @@ private void setWindowFocusable(boolean focusable) {
         container.setLayoutParams(rowLp(6, 3, 6, 3));
 
         final LinearLayout spinnerRow = new LinearLayout(ctx);
+        spinnerRow.setTag("first_card_safe_target");
         spinnerRow.setBackground(ModxTheme.withInteractiveRipple(
                 ctx, ModxTheme.cardSurface(ctx, ModxTheme.LINE),
                 ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
@@ -8381,7 +8505,7 @@ private void setWindowFocusable(boolean focusable) {
         }
 
         if (mFocusToggleBtn != null) {
-            mFocusToggleBtn.setBackground(ModxTheme.ghostIconBg(getContext, COLOR_ACCENT));
+            mFocusToggleBtn.setBackground(ModxTheme.floatingIconBg(getContext, COLOR_ACCENT));
         }
         if (mFocusToggleIcon != null) {
             int toggleIconPx = (tokens.sizeClass == ModxTheme.SizeClass.MINI) ? dp(13)
