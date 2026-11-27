@@ -43,6 +43,8 @@ public final class FeatureStateStore {
     private static final String KEY_SAVE_ENABLED        = "save_enabled";
     private static final String KEY_MENU_ACCENT         = "menu_accent_color";
     private static final String KEY_RECENT_MENU_COLORS  = "recent_menu_colors";
+    private static final String KEY_TAB_ORDER           = "tab_order";
+    private static final String KEY_FOCUS_MODE          = "focus_mode";
     private static final String KEY_MIGRATED_V2         = "mxl_migrated_v2";
     private static final String KEY_SNAPSHOT_USER       = "snapshot_user";
     private static final String LEGACY_THEME_PREF       = "menu_theme";
@@ -68,6 +70,8 @@ public final class FeatureStateStore {
     private static String snapshotUser = "";
     private static int menuAccentColor = DEFAULT_MENU_COLOR;
     private static final ArrayList<Integer> recentMenuColors = new ArrayList<Integer>();
+    private static final ArrayList<String> tabOrder = new ArrayList<String>();
+    private static boolean focusMode = false;
 
     private static final LinkedHashMap<Integer, Boolean> bools   = new LinkedHashMap<Integer, Boolean>();
     private static final LinkedHashMap<Integer, Integer> ints    = new LinkedHashMap<Integer, Integer>();
@@ -178,6 +182,8 @@ public final class FeatureStateStore {
             int savedAccent = prefs.getInt(KEY_MENU_ACCENT, DEFAULT_MENU_COLOR);
             menuAccentColor = (savedAccent != 0) ? (0xFF000000 | savedAccent) : DEFAULT_MENU_COLOR;
             loadRecentMenuColorsLocked(prefs.getString(KEY_RECENT_MENU_COLORS, ""));
+            loadTabOrderLocked(prefs.getString(KEY_TAB_ORDER, ""));
+            focusMode = prefs.getBoolean(KEY_FOCUS_MODE, false);
             normalizeActiveModeLocked();
         } else {
             sessionRestoredFromDisk = false;
@@ -185,6 +191,8 @@ public final class FeatureStateStore {
             snapshotUser = "";
             menuAccentColor = DEFAULT_MENU_COLOR;
             recentMenuColors.clear();
+            tabOrder.clear();
+            focusMode = false;
             clearSnapshotKeysOnDiskLocked(false);
         }
 
@@ -313,6 +321,8 @@ public final class FeatureStateStore {
             dirty = false;
             menuAccentColor = DEFAULT_MENU_COLOR;
             recentMenuColors.clear();
+            tabOrder.clear();
+            focusMode = false;
             snapshotUser = newUser;
             clearSnapshotKeysOnDiskLocked(true);
             if (BuildConfig.SEC_DIAG) {
@@ -383,6 +393,12 @@ public final class FeatureStateStore {
         }
         ed.putInt(KEY_MENU_ACCENT, menuAccentColor);
         ed.putString(KEY_RECENT_MENU_COLORS, serializeRecentMenuColorsLocked());
+        if (!tabOrder.isEmpty()) {
+            ed.putString(KEY_TAB_ORDER, serializeTabOrderLocked());
+        } else {
+            ed.remove(KEY_TAB_ORDER);
+        }
+        ed.putBoolean(KEY_FOCUS_MODE, focusMode);
 
         for (Map.Entry<Integer, Boolean> e : bools.entrySet()) {
             int fn = e.getKey();
@@ -604,6 +620,95 @@ public final class FeatureStateStore {
             sb.append(String.format("#%06X", (0xFFFFFF & recentMenuColors.get(i))));
         }
         return sb.toString();
+    }
+
+    // =========================================================================
+    // Sidebar tab order & Focus mode (obey Save features preference)
+    // =========================================================================
+
+    public static synchronized List<String> getTabOrder() {
+        return new ArrayList<String>(tabOrder);
+    }
+
+    public static synchronized void setTabOrder(Context ctx, List<String> order) {
+        ensureInit(ctx);
+        tabOrder.clear();
+        if (order != null) {
+            for (int i = 0; i < order.size(); i++) {
+                String name = order.get(i);
+                if (name != null && !name.isEmpty() && !tabOrder.contains(name)) {
+                    tabOrder.add(name);
+                }
+            }
+        }
+        if (saveEnabled && prefs != null) {
+            if (batchDepth == 0) {
+                SharedPreferences.Editor ed = prefs.edit();
+                if (tabOrder.isEmpty()) {
+                    ed.remove(KEY_TAB_ORDER);
+                } else {
+                    ed.putString(KEY_TAB_ORDER, serializeTabOrderLocked());
+                }
+                boolean ok = ed.commit();
+                dirty = !ok;
+            } else {
+                dirty = true;
+            }
+        }
+    }
+
+    public static synchronized void resetTabOrder(Context ctx) {
+        ensureInit(ctx);
+        tabOrder.clear();
+        if (saveEnabled && prefs != null) {
+            if (batchDepth == 0) {
+                boolean ok = prefs.edit().remove(KEY_TAB_ORDER).commit();
+                dirty = !ok;
+            } else {
+                dirty = true;
+            }
+        }
+    }
+
+    public static synchronized boolean isFocusMode() {
+        return focusMode;
+    }
+
+    public static synchronized void setFocusMode(Context ctx, boolean enabled) {
+        ensureInit(ctx);
+        if (focusMode == enabled) return;
+        focusMode = enabled;
+        if (saveEnabled && prefs != null) {
+            if (batchDepth == 0) {
+                boolean ok = prefs.edit().putBoolean(KEY_FOCUS_MODE, enabled).commit();
+                dirty = !ok;
+            } else {
+                dirty = true;
+            }
+        }
+    }
+
+    private static void loadTabOrderLocked(String raw) {
+        tabOrder.clear();
+        if (raw == null || raw.isEmpty()) return;
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(raw);
+            for (int i = 0; i < arr.length(); i++) {
+                String name = arr.optString(i, "");
+                if (!name.isEmpty() && !tabOrder.contains(name)) {
+                    tabOrder.add(name);
+                }
+            }
+        } catch (Exception ignored) { }
+    }
+
+    private static String serializeTabOrderLocked() {
+        if (tabOrder.isEmpty()) return "";
+        org.json.JSONArray arr = new org.json.JSONArray();
+        for (int i = 0; i < tabOrder.size(); i++) {
+            arr.put(tabOrder.get(i));
+        }
+        return arr.toString();
     }
 
     // =========================================================================
@@ -972,7 +1077,7 @@ public final class FeatureStateStore {
     }
 
     /** Matches native Main.cpp cases 800/801/802 boolean effects exactly. */
-    private static Boolean getModePresetBoolOnValue(int modeFn, int featNum) {
+    static Boolean getModePresetBoolOnValue(int modeFn, int featNum) {
         if (modeFn != 800 && modeFn != 801 && modeFn != 802) return null;
         if (featNum == 104 || featNum == 110 || featNum == 150) return Boolean.TRUE;
         if (modeFn == 801 || modeFn == 802) {
@@ -986,7 +1091,7 @@ public final class FeatureStateStore {
     }
 
     /** Matches native Main.cpp cases 800/801/802 integer effects exactly. */
-    private static Integer getModePresetIntOnValue(int modeFn, int featNum) {
+    static Integer getModePresetIntOnValue(int modeFn, int featNum) {
         if (modeFn != 800 && modeFn != 801 && modeFn != 802) return null;
         if (featNum == 103) return 5;
         if (featNum == 151) return 9999;
@@ -1118,6 +1223,8 @@ public final class FeatureStateStore {
         final boolean pendingNativeRestore;
         final String snapshotUser;
         final int menuAccentColor;
+        final boolean focusMode;
+        final ArrayList<String> tabOrder = new ArrayList<String>();
         final ArrayList<Integer> recentColors = new ArrayList<Integer>();
         final LinkedHashMap<Integer, Boolean> bools = new LinkedHashMap<Integer, Boolean>();
         final LinkedHashMap<Integer, Integer> ints = new LinkedHashMap<Integer, Integer>();
@@ -1127,12 +1234,14 @@ public final class FeatureStateStore {
         final Map<String, Object> rawDisk = new HashMap<String, Object>();
 
         DiagSnapshot(boolean saveEnabled, boolean sessionRestoredFromDisk,
-                     boolean pendingNativeRestore, String snapshotUser, int menuAccentColor) {
+                     boolean pendingNativeRestore, String snapshotUser,
+                     int menuAccentColor, boolean focusMode) {
             this.saveEnabled = saveEnabled;
             this.sessionRestoredFromDisk = sessionRestoredFromDisk;
             this.pendingNativeRestore = pendingNativeRestore;
             this.snapshotUser = snapshotUser;
             this.menuAccentColor = menuAccentColor;
+            this.focusMode = focusMode;
         }
     }
 
@@ -1140,7 +1249,8 @@ public final class FeatureStateStore {
         ensureInit(ctx);
         DiagSnapshot snap = new DiagSnapshot(
                 saveEnabled, sessionRestoredFromDisk, pendingNativeRestore,
-                snapshotUser, menuAccentColor);
+                snapshotUser, menuAccentColor, focusMode);
+        snap.tabOrder.addAll(tabOrder);
         snap.recentColors.addAll(recentMenuColors);
         snap.bools.putAll(bools);
         snap.ints.putAll(ints);
@@ -1164,6 +1274,9 @@ public final class FeatureStateStore {
         pendingNativeRestore = snap.pendingNativeRestore;
         snapshotUser = snap.snapshotUser != null ? snap.snapshotUser : "";
         menuAccentColor = snap.menuAccentColor;
+        focusMode = snap.focusMode;
+        tabOrder.clear();
+        tabOrder.addAll(snap.tabOrder);
         recentMenuColors.clear();
         recentMenuColors.addAll(snap.recentColors);
 

@@ -228,6 +228,38 @@ public final class ModxIcons {
                 .addFillPath("M21.8 3.6 L2.4 11.1 C1.1 11.6 1.1 12.3 2.2 12.6 L7.1 14.1 L18.4 7.0 C18.9 6.7 19.4 6.9 19.0 7.2 L9.9 15.5 L9.5 20.6 C10.0 20.6 10.2 20.4 10.5 20.1 L12.9 17.8 L17.8 21.4 C18.7 21.9 19.4 21.6 19.6 20.6 L22.9 5.0 C23.2 3.7 22.4 3.2 21.8 3.6 Z");
     }
 
+    public static SvgIcon maximize2(int color, int sizePx) {
+        return icon(color, sizePx)
+                .addPath("M15 3 H21 V9")
+                .addPath("M9 21 H3 V15")
+                .addPath("M21 3 L14 10")
+                .addPath("M3 21 L10 14");
+    }
+
+    public static SvgIcon minimize2(int color, int sizePx) {
+        return icon(color, sizePx)
+                .addPath("M4 14 H10 V20")
+                .addPath("M20 10 H14 V4")
+                .addPath("M14 10 L21 3")
+                .addPath("M3 21 L10 14");
+    }
+
+    public static SvgIcon rotateCcw(int color, int sizePx) {
+        return icon(color, sizePx)
+                .addPath("M3 12 A9 9 0 1 0 9 4.5 L3 8")
+                .addPath("M3 3 V8 H8");
+    }
+
+    public static SvgIcon gripVertical(int color, int sizePx) {
+        return icon(color, sizePx)
+                .addFillCircle(9f, 5f, 1.35f)
+                .addFillCircle(9f, 12f, 1.35f)
+                .addFillCircle(9f, 19f, 1.35f)
+                .addFillCircle(15f, 5f, 1.35f)
+                .addFillCircle(15f, 12f, 1.35f)
+                .addFillCircle(15f, 19f, 1.35f);
+    }
+
     public static Drawable tabIconFor(Context ctx, String name, int color, int sizeDp) {
         int px = ModxTheme.dp(ctx, sizeDp);
         String n = name == null ? "" : name.toLowerCase(java.util.Locale.US);

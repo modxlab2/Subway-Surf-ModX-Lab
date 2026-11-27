@@ -112,6 +112,26 @@ public class Preferences {
         FeatureStateStore.recordMenuColorUsed(context, color);
     }
 
+    public static List<String> getTabOrder() {
+        return FeatureStateStore.getTabOrder();
+    }
+
+    public static void setTabOrder(List<String> order) {
+        FeatureStateStore.setTabOrder(context, order);
+    }
+
+    public static void resetTabOrder() {
+        FeatureStateStore.resetTabOrder(context);
+    }
+
+    public static boolean isFocusMode() {
+        return FeatureStateStore.isFocusMode();
+    }
+
+    public static void setFocusMode(boolean enabled) {
+        FeatureStateStore.setFocusMode(context, enabled);
+    }
+
     public static void flush(String reason) {
         try {
             FeatureStateStore.flush(context, reason);
