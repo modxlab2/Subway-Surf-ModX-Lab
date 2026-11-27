@@ -564,6 +564,13 @@ public class LoginHelper {
         header.addView(subtitle);
 
         if (BuildConfig.SEC_DIAG) {
+            LinearLayout diagRow = new LinearLayout(ctx);
+            diagRow.setOrientation(LinearLayout.HORIZONTAL);
+            diagRow.setGravity(Gravity.CENTER);
+            LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
+            rLp.setMargins(0, dp(8), 0, 0);
+            diagRow.setLayoutParams(rLp);
+
             final TextView diagBtn = new TextView(ctx);
             diagBtn.setText("DIAG LOGS [" + TextActionModeHost.getDiagModeLabel() + "]");
             diagBtn.setTextColor(COLOR_ACCENT);
@@ -573,9 +580,6 @@ public class LoginHelper {
             diagBtn.setPadding(dp(10), dp(4), dp(10), dp(4));
             diagBtn.setBackground(ModxTheme.pillBadgeBg(
                     ctx, ModxTheme.ACCENT_SOFT, ModxTheme.ACCENT_LINE));
-            LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
-            dLp.setMargins(0, dp(8), 0, 0);
-            diagBtn.setLayoutParams(dLp);
             diagBtn.setClickable(true);
             diagBtn.setFocusable(true);
             final Handler tapHandler = new Handler(Looper.getMainLooper());
@@ -604,7 +608,32 @@ public class LoginHelper {
                     }
                 }
             });
-            header.addView(diagBtn);
+            diagRow.addView(diagBtn);
+
+            TextView selfTestBtn = new TextView(ctx);
+            selfTestBtn.setText("SELF TEST");
+            selfTestBtn.setTextColor(ModxTheme.INFO);
+            selfTestBtn.setTextSize(10f);
+            selfTestBtn.setTypeface(tfBold);
+            selfTestBtn.setGravity(Gravity.CENTER);
+            selfTestBtn.setPadding(dp(10), dp(4), dp(10), dp(4));
+            selfTestBtn.setBackground(ModxTheme.pillBadgeBg(
+                    ctx, ModxTheme.badgeBg(ModxTheme.INFO), ModxTheme.badgeBorder(ModxTheme.INFO)));
+            LinearLayout.LayoutParams stLp = new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
+            stLp.setMargins(dp(6), 0, 0, 0);
+            selfTestBtn.setLayoutParams(stLp);
+            selfTestBtn.setClickable(true);
+            selfTestBtn.setFocusable(true);
+            selfTestBtn.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    ModxTheme.hapticTap(v);
+                    DiagSelfTestRunner.runAndShow(ctx, overlayRequired);
+                }
+            });
+            diagRow.addView(selfTestBtn);
+
+            header.addView(diagRow);
         }
 
         return header;

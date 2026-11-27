@@ -23,12 +23,14 @@ public final class SecurityNative {
     public static void diag(int stage, String msg) {
         if (BuildConfig.SEC_DIAG) {
             android.util.Log.println(android.util.Log.INFO, "MXL", "[" + stage + "] " + msg);
+            DiagLogViewer.appendLiveLine("MXL[" + stage + "] " + msg);
         }
     }
 
     public static void diagUi(String msg) {
         if (BuildConfig.SEC_DIAG) {
             android.util.Log.println(android.util.Log.INFO, "MXL_UI", msg);
+            DiagLogViewer.appendLiveLine("MXL_UI: " + msg);
         }
     }
 

@@ -299,8 +299,40 @@ public class Menu {
     private static final LinkedHashMap<Integer, PresetItem[]> MODE_PRESETS = buildModePresets();
     private static final int[] MODE_FEATNUMS = { MODE_SIMPLE, MODE_MAX, MODE_ULTRA };
 
+    private static boolean isResetByNative803(int featNum) {
+        switch (featNum) {
+            case 102: case 103: case 104: case 106: case 107: case 108:
+            case 110: case 119: case 130: case 131: case 132: case 133:
+            case 134: case 135: case 136: case 137: case 138: case 140:
+            case 141: case 142: case 143: case 144: case 145: case 150:
+            case 151: case 152: case 153: case 154: case 160: case 161:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private boolean mProgrammaticModeUpdate = false;
+    private int mProgrammaticDepth = 0;
+
+    private boolean isProgrammaticUpdate() {
+        return mProgrammaticDepth > 0;
+    }
+
+    private void beginProgrammaticUpdate() {
+        mProgrammaticDepth++;
+    }
+
+    private void endProgrammaticUpdate() {
+        if (mProgrammaticDepth > 0) {
+            mProgrammaticDepth--;
+        }
+    }
+
+    private Runnable showMenuRunnable = null;
+    private Runnable subGuardRunnable = null;
+    private int subGuardChecks = 0;
+    private boolean mSyncingTpMarkers = false;
 
     // ===== Mode buttons mutual exclusion =====
     private static class ModeButtonHolder {
@@ -383,6 +415,7 @@ public class Menu {
         RadioGroup radioGroup;
         TextView titleView;
         String selectedName;
+        int currentIndex;
     }
     private final HashMap<Integer, RadioGroupHolder> mRadioGroups =
             new HashMap<Integer, RadioGroupHolder>();
@@ -424,6 +457,7 @@ public class Menu {
     private View mBottomDivider = null;
     private TeleportPadView mMenuTeleportPad = null;
     private AlertDialog activeColorPickerDialog = null;
+    private final ArrayList<AlertDialog> activeDialogs = new ArrayList<AlertDialog>();
 
     boolean stopChecking, overlayRequired;
     Context getContext;
@@ -442,7 +476,6 @@ private int lastLoggedLoginDelta = Integer.MIN_VALUE;
 private View.OnLayoutChangeListener loginLayoutChangeListener = null;
 private android.view.ViewTreeObserver.OnGlobalLayoutListener loginGlobalLayoutListener = null;
 private LoginHelper activeLoginHelper = null;
-private PopupWindow activeDropdownPopup = null;
 private View sidebarDivider = null;
 private int effectivePosY = POS_Y;
 private static final long SESSION_REVERIFY_INTERVAL_MS = 10L * 60L * 1000L;
@@ -846,20 +879,8 @@ Preferences.init(context);
         hideBtn.setOnLongClickListener(new View.OnLongClickListener() {
                 public boolean onLongClick(View view) {
                     ModxTheme.hapticTap(view);
-                    Preferences.flush("menu_hide_kill");
                     Toast.makeText(view.getContext(), "Menu killed", Toast.LENGTH_LONG).show();
-                    stopChecking = true;
-                    stopPeriodicSessionCheck();
-                    activeSessionToken = "";
-                    activeSessionUser = "";
-                    activeSessionDeviceId = "";
-                    detachLoginScrollListeners();
-                    if (activeLoginHelper != null) {
-                        activeLoginHelper.cleanup();
-                        activeLoginHelper = null;
-                    }
-                    rootFrame.removeView(mRootContainer);
-                    mWindowManager.removeView(rootFrame);
+                    cleanupMenuResources("menu_hide_kill");
                     return false;
                 }
             });
@@ -1002,19 +1023,24 @@ Preferences.init(context);
         subTitle.setText("Subway Surf V3.70.2");
 
         final TextView fSub = subTitle;
-        final Handler subGuard = new Handler();
-        subGuard.postDelayed(new Runnable() {
+        subGuardChecks = 0;
+        subGuardRunnable = new Runnable() {
             @Override
             public void run() {
+                if (stopChecking || instance == null) return;
+                subGuardChecks++;
                 try {
                     CharSequence s = fSub.getText();
                     if (s != null && s.toString().contains("Waiting")) {
                         fSub.setText("Subway Surf V3.70.2");
                     }
                 } catch (Exception ignored) { }
-                subGuard.postDelayed(this, 1000);
+                if (subGuardChecks < 15 && !stopChecking) {
+                    mainHandler.postDelayed(this, 1000L);
+                }
             }
-        }, 1000);
+        };
+        mainHandler.postDelayed(subGuardRunnable, 1000L);
     }
 
     // ================================================================
@@ -2000,7 +2026,22 @@ Preferences.init(context);
     // ================================================================
     // Build features / categories
     // ================================================================
+    private String getCurrentSelectedTabName() {
+        for (int i = 0; i < tabHolders.size(); i++) {
+            TabHolder t = tabHolders.get(i);
+            if (isTabSelected(t)) {
+                return t.name;
+            }
+        }
+        return null;
+    }
+
     private void buildFeaturesAndCategories(String[] features) {
+        final String prevTabName = getCurrentSelectedTabName();
+        final int prevContentScrollY = (contentScrollView != null) ? contentScrollView.getScrollY() : 0;
+        final int prevSidebarScrollY = (sidebarScroll != null) ? sidebarScroll.getScrollY() : 0;
+
+        textBase.clear();
         categoryViewsMap.clear();
         categoryNames.clear();
         tabHolders.clear();
@@ -2088,15 +2129,15 @@ Preferences.init(context);
         }
 
         if (!categoryNames.contains("Power")) {
-    categoryNames.add("Power");
-    categoryViewsMap.put("Power", newCategoryLayout());
-}
+            categoryNames.add("Power");
+            categoryViewsMap.put("Power", newCategoryLayout());
+        }
 
-// Ensure Settings category always exists
-if (!categoryNames.contains("Settings")) {
-    categoryNames.add("Settings");
-    categoryViewsMap.put("Settings", newCategoryLayout());
-}
+        // Ensure Settings category always exists
+        if (!categoryNames.contains("Settings")) {
+            categoryNames.add("Settings");
+            categoryViewsMap.put("Settings", newCategoryLayout());
+        }
 
         LinearLayout settingsLay = categoryViewsMap.get("Settings");
         if (settingsLay != null) {
@@ -2111,6 +2152,11 @@ if (!categoryNames.contains("Settings")) {
             settingsLay.addView(makeMenuColorButton(
                     FeatureStateStore.DEFAULT_MENU_COLOR, "Reset to Default", -28));
 
+            if (BuildConfig.SEC_DIAG) {
+                Category(settingsLay, "Diagnostics");
+                settingsLay.addView(makeDiagSettingsStrip());
+            }
+
             Category(settingsLay, "Community");
 
             ButtonTelegram(settingsLay, "Join our Telegram",
@@ -2118,12 +2164,65 @@ if (!categoryNames.contains("Settings")) {
 
             Button(settingsLay, -6, "Close Settings");
         }
-        setupSidebarTabs();
+        setupSidebarTabs(prevTabName, prevContentScrollY, prevSidebarScrollY);
         rescaleAll();
         applyTabMetrics();
         if (isLoggedIn) {
             Preferences.pushRestoredSnapshotToNativeOnce();
         }
+    }
+
+    private LinearLayout makeDiagSettingsStrip() {
+        LinearLayout row = new LinearLayout(getContext);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setLayoutParams(rowLp(6, 4, 6, 4));
+        if (!BuildConfig.SEC_DIAG) return row;
+
+        TextView diagChip = new TextView(getContext);
+        diagChip.setText("DIAG LOGS");
+        diagChip.setTextColor(COLOR_ACCENT);
+        diagChip.setTextSize(10.5f);
+        diagChip.setTypeface(fontBold);
+        diagChip.setGravity(Gravity.CENTER);
+        diagChip.setMinHeight(dp(40));
+        diagChip.setPadding(dp(10), dp(6), dp(10), dp(6));
+        diagChip.setBackground(ModxTheme.pillBadgeBg(
+                getContext, ModxTheme.accentSoft(COLOR_ACCENT), ModxTheme.accentLine(COLOR_ACCENT)));
+        LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f);
+        dLp.setMargins(0, 0, dp(6), 0);
+        diagChip.setLayoutParams(dLp);
+        diagChip.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                ModxTheme.hapticTap(v);
+                DiagLogViewer.show(getContext, overlayRequired);
+            }
+        });
+
+        TextView testChip = new TextView(getContext);
+        testChip.setText("SELF TEST");
+        testChip.setTextColor(ModxTheme.INFO);
+        testChip.setTextSize(10.5f);
+        testChip.setTypeface(fontBold);
+        testChip.setGravity(Gravity.CENTER);
+        testChip.setMinHeight(dp(40));
+        testChip.setPadding(dp(10), dp(6), dp(10), dp(6));
+        testChip.setBackground(ModxTheme.pillBadgeBg(
+                getContext, ModxTheme.badgeBg(ModxTheme.INFO), ModxTheme.badgeBorder(ModxTheme.INFO)));
+        LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f);
+        testChip.setLayoutParams(tLp);
+        testChip.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                ModxTheme.hapticTap(v);
+                DiagSelfTestRunner.runAndShow(getContext, overlayRequired);
+            }
+        });
+
+        row.addView(diagChip);
+        row.addView(testChip);
+        return row;
     }
 
     private LinearLayout newCategoryLayout() {
@@ -2136,9 +2235,14 @@ if (!categoryNames.contains("Settings")) {
     // Sidebar tabs
     // ================================================================
     private void setupSidebarTabs() {
+        setupSidebarTabs(null, 0, 0);
+    }
+
+    private void setupSidebarTabs(final String restoreTabName, final int restoreContentY, final int restoreSidebarY) {
         tabHolders.clear();
         sidebarLayout.removeAllViews();
 
+        TabHolder restoredHolder = null;
         for (final String catName : categoryNames) {
             final TabHolder h = new TabHolder();
             h.name = catName;
@@ -2191,9 +2295,36 @@ if (!categoryNames.contains("Settings")) {
             tabHolders.add(h);
             sidebarLayout.addView(tab);
             styleTab(h, false);
+            if (restoreTabName != null && restoreTabName.equals(catName)) {
+                restoredHolder = h;
+            }
         }
 
-        if (tabHolders.size() > 0) selectTab(tabHolders.get(0));
+        if (restoredHolder != null) {
+            selectTab(restoredHolder, false);
+            if (contentScrollView != null && restoreContentY > 0) {
+                contentScrollView.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (contentScrollView != null) {
+                            contentScrollView.scrollTo(0, restoreContentY);
+                        }
+                    }
+                });
+            }
+            if (sidebarScroll != null && restoreSidebarY > 0) {
+                sidebarScroll.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (sidebarScroll != null) {
+                            sidebarScroll.scrollTo(0, restoreSidebarY);
+                        }
+                    }
+                });
+            }
+        } else if (tabHolders.size() > 0) {
+            selectTab(tabHolders.get(0), true);
+        }
     }
 
     private void styleTab(TabHolder h, boolean selected) {
@@ -2214,6 +2345,10 @@ if (!categoryNames.contains("Settings")) {
     }
 
     private void selectTab(TabHolder selected) {
+        selectTab(selected, true);
+    }
+
+    private void selectTab(TabHolder selected, boolean animate) {
         for (TabHolder t : tabHolders) styleTab(t, t == selected);
 
         contentLayout.removeAllViews();
@@ -2227,9 +2362,14 @@ if (!categoryNames.contains("Settings")) {
         contentScrollView.scrollTo(0, 0);
 
         contentLayout.animate().cancel();
-        contentLayout.setAlpha(0f);
-        contentLayout.setTranslationY(dp(6));
-        contentLayout.animate().alpha(1f).translationY(0f).setDuration(180).setInterpolator(new DecelerateInterpolator(1.5f)).start();
+        if (animate) {
+            contentLayout.setAlpha(0f);
+            contentLayout.setTranslationY(dp(6));
+            contentLayout.animate().alpha(1f).translationY(0f).setDuration(180).setInterpolator(new DecelerateInterpolator(1.5f)).start();
+        } else {
+            contentLayout.setAlpha(1f);
+            contentLayout.setTranslationY(0f);
+        }
     }
 
     private boolean selectTabByName(String name) {
@@ -2243,23 +2383,26 @@ if (!categoryNames.contains("Settings")) {
     }
 
     public void ShowMenu() {
-    rootFrame.addView(mRootContainer);
-    final Handler handler = new Handler();
-    handler.postDelayed(new Runnable() {
-        @Override
-        public void run() {
-            // ★ Game lib-এর জন্য অপেক্ষা না — সরাসরি login বা main menu দেখাই
-            if (!isLoggedIn) {
-                showLoginScreen();
-            } else {
-                if (contentScrollView instanceof SlimScrollView) {
-                    ((SlimScrollView) contentScrollView).setScrollingEnabled(true);
-                }
-                buildFeaturesAndCategories(GetFeatureList());
-            }
+        rootFrame.addView(mRootContainer);
+        if (showMenuRunnable != null) {
+            mainHandler.removeCallbacks(showMenuRunnable);
         }
-    }, 300);
-}
+        showMenuRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (stopChecking || instance == null) return;
+                if (!isLoggedIn) {
+                    showLoginScreen();
+                } else {
+                    if (contentScrollView instanceof SlimScrollView) {
+                        ((SlimScrollView) contentScrollView).setScrollingEnabled(true);
+                    }
+                    buildFeaturesAndCategories(GetFeatureList());
+                }
+            }
+        };
+        mainHandler.postDelayed(showMenuRunnable, 300L);
+    }
 
 // ================================================================
 // Recursively hide any TextView containing "Waiting for game lib"
@@ -2517,10 +2660,12 @@ private void runPeriodicSessionCheck() {
 private void forceLogoutToLogin(final String reason) {
     SecureTokenStore.clearToken(getContext);
     SecurityNative.clearVerifiedSession();
+    Preferences.onSessionCleared();
     Runnable task = new Runnable() {
         @Override
         public void run() {
             stopPeriodicSessionCheck();
+            dismissAllTrackedDialogs();
             activeSessionToken = "";
             activeSessionUser = "";
             activeSessionDeviceId = "";
@@ -2573,8 +2718,15 @@ private void showLoginScreen(final String forcedLogoutReason) {
             activeSessionToken = token != null ? token : "";
             activeSessionUser = user != null ? user : "";
             activeSessionDeviceId = deviceId != null ? deviceId : "";
+            boolean accentReset = Preferences.onSessionAuthenticated(activeSessionUser);
             setWindowFocusable(false);
             isLoggedIn = true;
+
+            if (accentReset) {
+                int defAccent = ensureReadableAccent(FeatureStateStore.DEFAULT_MENU_COLOR);
+                mCurrentHueF = getHueFromColor(defAccent);
+                applyMenuColorLive(defAccent);
+            }
 
             if (mHeaderView  != null) mHeaderView.setVisibility(View.VISIBLE);
             if (mShimmerView != null) mShimmerView.setVisibility(View.VISIBLE);
@@ -2977,32 +3129,112 @@ private void setWindowFocusable(boolean focusable) {
 }
     
     
-public void setTeleportPadVisible(boolean visible) {
-    if (tpPadView == null) return;
-    tpPadView.setVisibility(visible ? View.VISIBLE : View.GONE);
-    // (optional) hide করলে marker reset
-    if (!visible) tpPadView.invalidate();
-}
-        public void onDestroy() {
-    Preferences.flush("menu_onDestroy");
-    stopChecking = true;
-    stopPeriodicSessionCheck();
-    activeSessionToken = "";
-    activeSessionUser = "";
-    activeSessionDeviceId = "";
-    detachLoginScrollListeners();
-    if (activeLoginHelper != null) {
-        activeLoginHelper.cleanup();
-        activeLoginHelper = null;
+    public void setTeleportPadVisible(boolean visible) {
+        if (tpPadView != null) {
+            tpPadView.setVisibility(visible ? View.VISIBLE : View.GONE);
+            if (!visible && tpPadView instanceof TeleportPadTouchView) {
+                ((TeleportPadTouchView) tpPadView).clearMarker();
+            }
+        }
+        if (!visible && mMenuTeleportPad != null) {
+            mMenuTeleportPad.clearMarker();
+        }
     }
-    if (rootFrame != null && mWindowManager != null) {
-        try { mWindowManager.removeView(rootFrame); } catch (Exception e) {}
+
+    private void syncTeleportMarkersFromFloating(float nx, float ny) {
+        if (mSyncingTpMarkers) return;
+        mSyncingTpMarkers = true;
+        try {
+            if (mMenuTeleportPad != null) {
+                mMenuTeleportPad.setMarkerNorm(nx, ny);
+            }
+        } finally {
+            mSyncingTpMarkers = false;
+        }
     }
-    if (tpPadView != null && tpPadWindowManager != null) {
-        try { tpPadWindowManager.removeView(tpPadView); } catch (Exception e) {}
+
+    private void syncTeleportMarkersFromMenu(float nx, float ny) {
+        if (mSyncingTpMarkers) return;
+        mSyncingTpMarkers = true;
+        try {
+            if (tpPadView instanceof TeleportPadTouchView) {
+                ((TeleportPadTouchView) tpPadView).setMarkerNorm(nx, ny);
+            }
+        } finally {
+            mSyncingTpMarkers = false;
+        }
     }
-    instance = null;
-}
+
+    private void dismissAllTrackedDialogs() {
+        if (activeColorPickerDialog != null) {
+            try {
+                if (activeColorPickerDialog.isShowing()) {
+                    activeColorPickerDialog.dismiss();
+                }
+            } catch (Throwable ignored) { }
+            activeColorPickerDialog = null;
+        }
+        ArrayList<AlertDialog> copy = new ArrayList<AlertDialog>(activeDialogs);
+        activeDialogs.clear();
+        for (int i = 0; i < copy.size(); i++) {
+            AlertDialog d = copy.get(i);
+            if (d != null) {
+                try {
+                    if (d.isShowing()) d.dismiss();
+                } catch (Throwable ignored) { }
+            }
+        }
+        if (BuildConfig.SEC_DIAG) {
+            DiagLogViewer.dismissActive();
+        }
+    }
+
+    private void cleanupMenuResources(String flushReason) {
+        Preferences.flush(flushReason);
+        Preferences.onSessionCleared();
+        stopChecking = true;
+        isLoggedIn = false;
+        stopPeriodicSessionCheck();
+        if (showMenuRunnable != null) {
+            mainHandler.removeCallbacks(showMenuRunnable);
+            showMenuRunnable = null;
+        }
+        if (subGuardRunnable != null) {
+            mainHandler.removeCallbacks(subGuardRunnable);
+            subGuardRunnable = null;
+        }
+        if (mMenuToastHideRunnable != null) {
+            mainHandler.removeCallbacks(mMenuToastHideRunnable);
+            mMenuToastHideRunnable = null;
+        }
+        if (mHideHoldProgress != null) {
+            mHideHoldProgress.animate().cancel();
+        }
+        dismissAllTrackedDialogs();
+        activeSessionToken = "";
+        activeSessionUser = "";
+        activeSessionDeviceId = "";
+        detachLoginScrollListeners();
+        if (activeLoginHelper != null) {
+            activeLoginHelper.cleanup();
+            activeLoginHelper = null;
+        }
+        if (rootFrame != null && mWindowManager != null) {
+            try { rootFrame.removeView(mRootContainer); } catch (Exception ignored) { }
+            try { mWindowManager.removeView(rootFrame); } catch (Exception ignored) { }
+        }
+        if (tpPadView != null && tpPadWindowManager != null) {
+            try { tpPadWindowManager.removeView(tpPadView); } catch (Exception ignored) { }
+        }
+        if (instance == this) {
+            instance = null;
+        }
+    }
+
+    public void onDestroy() {
+        cleanupMenuResources("menu_onDestroy");
+    }
+
     private Button dialogButton(String text, boolean primary) {
         Button b = new Button(getContext);
         b.setText(text);
@@ -3083,18 +3315,42 @@ public void setTeleportPadVisible(boolean visible) {
             row.addView(pos, plp);
         }
 
-        AlertDialog.Builder builder = new AlertDialog.Builder(ctx);
+        Context dialogCtx = (ctx instanceof Activity)
+                ? ctx
+                : new ContextThemeWrapper(ctx,
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP
+                                ? android.R.style.Theme_Material_Dialog_Alert
+                                : android.R.style.Theme_Holo_Dialog);
+        AlertDialog.Builder builder = new AlertDialog.Builder(dialogCtx);
         builder.setView(box);
-        AlertDialog dialog = builder.create();
+        final AlertDialog dialog = builder.create();
         ref[0] = dialog;
+        activeDialogs.add(dialog);
+        dialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
+            @Override
+            public void onDismiss(DialogInterface dialogInterface) {
+                activeDialogs.remove(dialog);
+            }
+        });
         Window w = dialog.getWindow();
         if (w != null) {
             w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            if (overlayRequired) {
-                w.setType(Build.VERSION.SDK_INT >= 26 ? 2038 : 2002);
+            if (overlayRequired || !(ctx instanceof Activity)) {
+                w.setType(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ? 2038 : 2002);
             }
+            w.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                    | WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
         }
-        dialog.show();
+        try {
+            dialog.show();
+            Window shownW = dialog.getWindow();
+            if (shownW != null) {
+                shownW.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
+            }
+        } catch (Throwable ignored) {
+            activeDialogs.remove(dialog);
+        }
         return dialog;
     }
 
@@ -3115,9 +3371,13 @@ public void setTeleportPadVisible(boolean visible) {
         editText.setOnFocusChangeListener(new View.OnFocusChangeListener() {
                 @Override
                 public void onFocusChange(View v, boolean hasFocus) {
-                    InputMethodManager imm = (InputMethodManager) getContext.getSystemService(Context.INPUT_METHOD_SERVICE);
-                    if (hasFocus) imm.toggleSoftInput(InputMethodManager.SHOW_FORCED, InputMethodManager.HIDE_IMPLICIT_ONLY);
-                    else imm.toggleSoftInput(InputMethodManager.HIDE_IMPLICIT_ONLY, 0);
+                    try {
+                        InputMethodManager imm = (InputMethodManager) getContext.getSystemService(Context.INPUT_METHOD_SERVICE);
+                        if (imm != null) {
+                            if (hasFocus) imm.toggleSoftInput(InputMethodManager.SHOW_FORCED, InputMethodManager.HIDE_IMPLICIT_ONLY);
+                            else imm.hideSoftInputFromWindow(editText.getWindowToken(), 0);
+                        }
+                    } catch (Throwable ignored) { }
                 }
             });
         editText.requestFocus();
@@ -3127,14 +3387,19 @@ public void setTeleportPadVisible(boolean visible) {
                 @Override
                 public void run() {
                     onOk.run();
-                    editText.setFocusable(false);
+                    try {
+                        InputMethodManager imm = (InputMethodManager) getContext.getSystemService(Context.INPUT_METHOD_SERVICE);
+                        if (imm != null) imm.hideSoftInputFromWindow(editText.getWindowToken(), 0);
+                    } catch (Throwable ignored) { }
                 }
             },
             "Cancel", new Runnable() {
                 @Override
                 public void run() {
-                    InputMethodManager imm = (InputMethodManager) getContext.getSystemService(Context.INPUT_METHOD_SERVICE);
-                    imm.toggleSoftInput(InputMethodManager.HIDE_IMPLICIT_ONLY, 0);
+                    try {
+                        InputMethodManager imm = (InputMethodManager) getContext.getSystemService(Context.INPUT_METHOD_SERVICE);
+                        if (imm != null) imm.hideSoftInputFromWindow(editText.getWindowToken(), 0);
+                    } catch (Throwable ignored) { }
                 }
             });
     }
@@ -3408,7 +3673,7 @@ public void setTeleportPadVisible(boolean visible) {
                         bool ? ModxTheme.LINE : ModxTheme.accentLine(ToggleON),
                         bool ? ModxTheme.accentLine(ToggleON) : ModxTheme.LINE);
 
-                if (!mProgrammaticModeUpdate) {
+                if (!isProgrammaticUpdate()) {
                     Preferences.changeFeatureBool(featName, featNum, bool);
                 }
 
@@ -3508,9 +3773,19 @@ public void setTeleportPadVisible(boolean visible) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) seekBar.setSplitTrack(false);
         seekBar.setProgress(startVal);
 
+        final boolean[] isDraggingSeekBar = new boolean[]{ false };
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-                @Override public void onStartTrackingTouch(SeekBar s) { }
-                @Override public void onStopTrackingTouch(SeekBar s)  { }
+                @Override
+                public void onStartTrackingTouch(SeekBar s) {
+                    isDraggingSeekBar[0] = true;
+                }
+                @Override
+                public void onStopTrackingTouch(SeekBar s) {
+                    isDraggingSeekBar[0] = false;
+                    if (Preferences.isSaveEnabled()) {
+                        Preferences.flush("seekbar_stop");
+                    }
+                }
                 @Override
                 public void onProgressChanged(SeekBar s, int i, boolean z) {
                     int val = i < min ? min : i;
@@ -3523,8 +3798,12 @@ public void setTeleportPadVisible(boolean visible) {
                     if (z) {
                         ModxTheme.hapticTick(s);
                     }
-                    if (!mProgrammaticModeUpdate) {
-                        Preferences.changeFeatureInt(featName, featNum, val);
+                    if (!isProgrammaticUpdate()) {
+                        if (z && isDraggingSeekBar[0]) {
+                            Preferences.changeFeatureIntDeferred(featName, featNum, val);
+                        } else {
+                            Preferences.changeFeatureInt(featName, featNum, val);
+                        }
                     }
                 }
             });
@@ -4043,39 +4322,85 @@ public void setTeleportPadVisible(boolean visible) {
         runOnMainThread(new Runnable() {
             @Override
             public void run() {
-                if (mProgrammaticModeUpdate) return;
-                mProgrammaticModeUpdate = true;
+                if (isProgrammaticUpdate()) return;
+                beginProgrammaticUpdate();
                 Preferences.beginBatch();
                 try {
                     boolean newState = !state[0];
 
-                    // Step 1: When turning a Mode ON, turn any other active Mode OFF first
                     if (newState) {
+                        // Build lookup of features controlled by the NEW mode
+                        PresetItem[] newItems = MODE_PRESETS.get(featNum);
+                        HashMap<Integer, PresetItem> newItemMap = new HashMap<Integer, PresetItem>();
+                        if (newItems != null) {
+                            for (int i = 0; i < newItems.length; i++) {
+                                newItemMap.put(newItems[i].featNum, newItems[i]);
+                            }
+                        }
+
+                        // Step 1: Turn any other active Mode OFF in UI + Store (no Changes(other, false)),
+                        // and reset ONLY features belonging to the old Mode that are NOT in the new Mode.
                         for (int fn : MODE_FEATNUMS) {
                             if (fn == featNum) continue;
                             ModeButtonHolder other = mModeButtons.get(fn);
                             if (other != null && other.state[0]) {
                                 other.state[0] = false;
                                 applyModeCardStyle(other, false);
-                                Preferences.forceSyncBool(other.name, other.featNum, false, true);
-                                applyModeToMenuInternal(fn, false);
+                                Preferences.forceSyncBool(other.name, other.featNum, false, false);
+
+                                PresetItem[] oldItems = MODE_PRESETS.get(fn);
+                                if (oldItems != null) {
+                                    for (int i = 0; i < oldItems.length; i++) {
+                                        PresetItem oi = oldItems[i];
+                                        if (!newItemMap.containsKey(oi.featNum)) {
+                                            applyPresetItem(oi, false, true);
+                                        }
+                                    }
+                                }
+                            } else {
+                                Preferences.forceSyncBool("", fn, false, false);
                             }
                         }
+
+                        // Step 2: Update clicked Mode card (UI + Store + single native Changes(newMode, true))
+                        state[0] = true;
+                        applyModeCardStyle(holder, true);
+                        Preferences.forceSyncBool(featName, featNum, true, true);
+
+                        // Step 3: Reconcile all preset items in UI + Store (callNative=false; Changes(newMode, true) already set native!)
+                        applyModeToMenuInternal(featNum, true, false);
+                    } else {
+                        // Turning active Mode OFF: UI + Store + single native Changes(featNum, false)
+                        state[0] = false;
+                        applyModeCardStyle(holder, false);
+                        Preferences.forceSyncBool(featName, featNum, false, true);
+                        applyModeToMenuInternal(featNum, false, false);
                     }
-
-                    // Step 2: Update the clicked Mode card (UI + Store/Disk + Native)
-                    state[0] = newState;
-                    applyModeCardStyle(holder, newState);
-                    Preferences.forceSyncBool(featName, featNum, newState, true);
-
-                    // Step 3: Apply this Mode's full preset (leaves non-mode manual choices alone)
-                    applyModeToMenuInternal(featNum, newState);
                 } finally {
                     Preferences.endBatch(true);
-                    mProgrammaticModeUpdate = false;
+                    endProgrammaticUpdate();
                 }
             }
         });
+    }
+
+    private void applyPresetItem(PresetItem item, boolean enabled, boolean callNative) {
+        if (item == null) return;
+        int targetVal = enabled ? item.onValue : item.offValue;
+        switch (item.type) {
+            case PRESET_TOGGLE:
+                setToggleState(item.featNum, targetVal != 0, true, callNative);
+                break;
+            case PRESET_SEEKBAR:
+                setSeekBarValue(item.featNum, targetVal, true, callNative);
+                break;
+            case PRESET_SPINNER:
+                setSpinnerValue(item.featNum, targetVal, true, callNative);
+                break;
+            case PRESET_COLOR:
+                setColorPickerValue(item.featNum, targetVal, true, callNative);
+                break;
+        }
     }
 
     private void resetAllFeaturesAction(final LinearLayout resetRow, final TextView titleView,
@@ -4084,18 +4409,16 @@ public void setTeleportPadVisible(boolean visible) {
         runOnMainThread(new Runnable() {
             @Override
             public void run() {
-                if (mProgrammaticModeUpdate) return;
-                mProgrammaticModeUpdate = true;
+                if (isProgrammaticUpdate()) return;
+                beginProgrammaticUpdate();
                 Preferences.beginBatch();
                 try {
-                    // 1. Turn all Mode cards OFF (UI + Store/Disk; native 803 resets all game globals)
+                    // 1. Turn all Mode cards OFF (UI + Store; native 803 resets all game globals)
                     for (int fn : MODE_FEATNUMS) {
                         ModeButtonHolder mh = mModeButtons.get(fn);
                         if (mh != null) {
-                            if (mh.state[0]) {
-                                mh.state[0] = false;
-                                applyModeCardStyle(mh, false);
-                            }
+                            mh.state[0] = false;
+                            applyModeCardStyle(mh, false);
                             Preferences.forceSyncBool(mh.name, mh.featNum, false, false);
                         } else {
                             Preferences.forceSyncBool("", fn, false, false);
@@ -4104,70 +4427,66 @@ public void setTeleportPadVisible(boolean visible) {
 
                     // 2. Reset any non-mode ButtonOnOff controls
                     for (OtherButtonOnOffHolder oh : mOtherButtonOnOffs.values()) {
-                        boolean def = oh.defaultVal;
-                        if (oh.state[0] != def) {
-                            oh.state[0] = def;
-                            applyOnOffStyle(oh.button, oh.name, def);
-                        }
-                        Preferences.forceSyncBool(oh.name, oh.featNum, def, true);
+                        setOtherButtonOnOffState(oh.featNum, oh.defaultVal, true, !isResetByNative803(oh.featNum));
                     }
 
                     // 3. Reset all Toggles (NEVER touch featNum -1 "Save features preference")
                     for (ToggleHolder th : mToggles.values()) {
                         if (th.featNum == -1) continue;
-                        setToggleState(th.featNum, th.defaultVal, true);
+                        setToggleState(th.featNum, th.defaultVal, true, !isResetByNative803(th.featNum));
                     }
 
                     // 4. Reset all SeekBars to default
                     for (SeekBarHolder sb : mSeekBars.values()) {
-                        setSeekBarValue(sb.featNum, sb.defaultVal, true);
+                        setSeekBarValue(sb.featNum, sb.defaultVal, true, !isResetByNative803(sb.featNum));
                     }
 
-                    // 5. Reset all Spinners to index 0 (includes Camera Mode, Shader Target, Color Preset)
+                    // 5. Reset all Spinners to index 0 (native 803 resets 161, NOT 125/126)
                     for (SpinnerHolder sp : mSpinners.values()) {
-                        setSpinnerValue(sp.featNum, 0, true);
+                        setSpinnerValue(sp.featNum, 0, true, !isResetByNative803(sp.featNum));
                     }
 
                     // 6. Reset all CheckBoxes to default
                     for (CheckBoxHolder cb : mCheckBoxes.values()) {
-                        setCheckBoxState(cb.featNum, cb.defaultVal, true);
+                        setCheckBoxState(cb.featNum, cb.defaultVal, true, !isResetByNative803(cb.featNum));
                     }
 
                     // 7. Reset all RadioGroups to 0 (unselected)
                     for (RadioGroupHolder rg : mRadioGroups.values()) {
-                        rg.radioGroup.clearCheck();
-                        rg.selectedName = null;
-                        rg.titleView.setText(rg.featName + ":");
-                        Preferences.forceSyncInt(rg.featName, rg.featNum, 0, true);
+                        setRadioGroupValue(rg.featNum, 0, true, !isResetByNative803(rg.featNum));
                     }
 
                     // 8. Reset all ColorPickers to defaultColor
                     for (ColorPickerHolder cp : mColorPickers.values()) {
-                        setColorPickerValue(cp.featNum, cp.defaultColor, true);
+                        setColorPickerValue(cp.featNum, cp.defaultColor, true, !isResetByNative803(cp.featNum));
                     }
 
                     // 9. Reset all InputNum / InputLNum / InputText controls
                     for (InputHolder ih : mInputNums.values()) {
                         ih.currentValueText = "0";
                         ih.button.setText(Html.fromHtml(ih.featName + ": <font color='" + NumberTxtColor + "'>0</font>"));
-                        Preferences.forceSyncInt(ih.featName, ih.featNum, 0, true);
+                        Preferences.forceSyncInt(ih.featName, ih.featNum, 0, !isResetByNative803(ih.featNum));
                     }
                     for (InputHolder ih : mInputLNums.values()) {
                         ih.currentValueText = "0";
                         ih.button.setText(Html.fromHtml(ih.featName + ": <font color='" + NumberTxtColor + "'>0</font>"));
-                        Preferences.forceSyncLong(ih.featName, ih.featNum, 0L, true);
+                        Preferences.forceSyncLong(ih.featName, ih.featNum, 0L, !isResetByNative803(ih.featNum));
                     }
                     for (InputHolder ih : mInputTexts.values()) {
                         ih.currentValueText = "";
                         ih.button.setText(Html.fromHtml(ih.featName + ": <font color='" + NumberTxtColor + "'></font>"));
-                        Preferences.forceSyncString(ih.featName, ih.featNum, "", true);
+                        Preferences.forceSyncString(ih.featName, ih.featNum, "", !isResetByNative803(ih.featNum));
                     }
 
-                    // 10. Trigger native Reset All (803) and keep 803 itself unlatched (OFF)
+                    // 10. Clear any stale feature keys in Store/Disk while preserving Save flag & Menu Color
+                    Preferences.resetAllFeaturesInStore();
+                    setTeleportPadVisible(false);
+
+                    // 11. Trigger native Reset All (803) and keep 803 itself unlatched (OFF)
                     Preferences.triggerResetAllButton(resetName, MODE_RESET);
                 } finally {
                     Preferences.endBatch(true);
-                    mProgrammaticModeUpdate = false;
+                    endProgrammaticUpdate();
                 }
 
                 showMenuToast("All features reset");
@@ -4236,132 +4555,233 @@ public void setTeleportPadVisible(boolean visible) {
     }
 
     private void setToggleState(int featNum, boolean newState) {
-        setToggleState(featNum, newState, false);
+        setToggleState(featNum, newState, false, true);
     }
 
     private void setToggleState(int featNum, boolean newState, boolean forceSync) {
+        setToggleState(featNum, newState, forceSync, true);
+    }
+
+    private void setToggleState(int featNum, boolean newState, boolean forceSync, boolean callNative) {
         ToggleHolder h = mToggles.get(featNum);
         if (h == null) {
             if (forceSync) {
-                Preferences.forceSyncBool("", featNum, newState, true);
+                Preferences.forceSyncBool("", featNum, newState, callNative);
             }
             return;
         }
-        if (h.state[0] != newState) {
+        beginProgrammaticUpdate();
+        try {
+            boolean prev = h.state[0];
             h.state[0] = newState;
-            h.toggle.setChecked(newState, true);
-            animateStroke(h.rowBg,
-                    newState ? ModxTheme.LINE : ModxTheme.accentLine(ToggleON),
-                    newState ? ModxTheme.accentLine(ToggleON) : ModxTheme.LINE);
+            if (h.toggle.isChecked() != newState) {
+                h.toggle.setChecked(newState, true);
+            } else {
+                h.toggle.setChecked(newState, false);
+            }
+            if (prev != newState) {
+                animateStroke(h.rowBg,
+                        newState ? ModxTheme.LINE : ModxTheme.accentLine(ToggleON),
+                        newState ? ModxTheme.accentLine(ToggleON) : ModxTheme.LINE);
+            } else if (h.rowBg != null) {
+                h.rowBg.setStroke(dp(1), newState ? ModxTheme.accentLine(ToggleON) : ModxTheme.LINE);
+            }
             if (featNum == 710) setTeleportPadVisible(newState);
+        } finally {
+            endProgrammaticUpdate();
         }
         if (forceSync) {
-            Preferences.forceSyncBool(h.featName, featNum, newState, true);
+            Preferences.forceSyncBool(h.featName, featNum, newState, callNative);
         } else {
             Preferences.changeFeatureBool(h.featName, featNum, newState);
         }
     }
 
-    private void setCheckBoxState(int featNum, boolean newState, boolean forceSync) {
-        CheckBoxHolder h = mCheckBoxes.get(featNum);
+    private void setOtherButtonOnOffState(int featNum, boolean newState, boolean forceSync, boolean callNative) {
+        OtherButtonOnOffHolder h = mOtherButtonOnOffs.get(featNum);
         if (h == null) {
             if (forceSync) {
-                Preferences.forceSyncBool("", featNum, newState, true);
+                Preferences.forceSyncBool("", featNum, newState, callNative);
             }
             return;
         }
-        if (h.checkBox.isChecked() != newState) {
+        h.state[0] = newState;
+        applyOnOffStyle(h.button, h.name, newState);
+        if (forceSync) {
+            Preferences.forceSyncBool(h.name, featNum, newState, callNative);
+        } else {
+            Preferences.changeFeatureBool(h.name, featNum, newState);
+        }
+    }
+
+    private void setCheckBoxState(int featNum, boolean newState, boolean forceSync) {
+        setCheckBoxState(featNum, newState, forceSync, true);
+    }
+
+    private void setCheckBoxState(int featNum, boolean newState, boolean forceSync, boolean callNative) {
+        CheckBoxHolder h = mCheckBoxes.get(featNum);
+        if (h == null) {
+            if (forceSync) {
+                Preferences.forceSyncBool("", featNum, newState, callNative);
+            }
+            return;
+        }
+        beginProgrammaticUpdate();
+        try {
+            boolean prev = h.checkBox.isChecked();
             h.checkBox.setChecked(newState);
-            animateStroke(h.bg,
-                    newState ? ModxTheme.LINE : ModxTheme.accentLine(CheckBoxColor),
-                    newState ? ModxTheme.accentLine(CheckBoxColor) : ModxTheme.LINE);
+            if (prev != newState) {
+                animateStroke(h.bg,
+                        newState ? ModxTheme.LINE : ModxTheme.accentLine(CheckBoxColor),
+                        newState ? ModxTheme.accentLine(CheckBoxColor) : ModxTheme.LINE);
+            } else if (h.bg != null) {
+                h.bg.setStroke(dp(1), newState ? ModxTheme.accentLine(CheckBoxColor) : ModxTheme.LINE);
+            }
+        } finally {
+            endProgrammaticUpdate();
         }
         if (forceSync) {
-            Preferences.forceSyncBool(h.featName, featNum, newState, true);
+            Preferences.forceSyncBool(h.featName, featNum, newState, callNative);
         } else {
             Preferences.changeFeatureBool(h.featName, featNum, newState);
         }
     }
 
     private void setSeekBarValue(int featNum, int value) {
-        setSeekBarValue(featNum, value, false);
+        setSeekBarValue(featNum, value, false, true);
     }
 
     private void setSeekBarValue(int featNum, int value, boolean forceSync) {
+        setSeekBarValue(featNum, value, forceSync, true);
+    }
+
+    private void setSeekBarValue(int featNum, int value, boolean forceSync, boolean callNative) {
         SeekBarHolder h = mSeekBars.get(featNum);
         if (h == null) {
             if (forceSync) {
-                Preferences.forceSyncInt("", featNum, value, true);
+                Preferences.forceSyncInt("", featNum, value, callNative);
             }
             return;
         }
         int clamped = value;
         if (clamped < h.min) clamped = h.min;
         if (clamped > h.max) clamped = h.max;
-        if (h.seekBar.getProgress() != clamped) {
+        beginProgrammaticUpdate();
+        try {
             h.seekBar.setProgress(clamped);
             int disp = (featNum == 103) ? (clamped + 30) : clamped;
             h.chip.setText(String.valueOf(disp));
+        } finally {
+            endProgrammaticUpdate();
         }
         if (forceSync) {
-            Preferences.forceSyncInt(h.featName, featNum, clamped, true);
+            Preferences.forceSyncInt(h.featName, featNum, clamped, callNative);
         } else {
             Preferences.changeFeatureInt(h.featName, featNum, clamped);
         }
     }
 
     private void setSpinnerValue(int featNum, int index) {
-        setSpinnerValue(featNum, index, false);
+        setSpinnerValue(featNum, index, false, true);
     }
 
     private void setSpinnerValue(int featNum, int index, boolean forceSync) {
+        setSpinnerValue(featNum, index, forceSync, true);
+    }
+
+    private void setSpinnerValue(int featNum, int index, boolean forceSync, boolean callNative) {
         SpinnerHolder h = mSpinners.get(featNum);
         if (h == null) {
             if (forceSync) {
-                Preferences.forceSyncInt("", featNum, index, true);
+                Preferences.forceSyncInt("", featNum, index, callNative);
             }
             return;
         }
-        if (index < 0 || index >= h.items.length) return;
+        if (h.items == null || h.items.length == 0) return;
+        int clamped = Math.max(0, Math.min(index, h.items.length - 1));
 
-        if (h.currentIdx != index) {
-            h.currentIdx = index;
-            h.nameView.setText(h.featName + ": " + h.items[index]);
-            for (int j = 0; j < h.dropdownList.getChildCount(); j++) {
-                View child = h.dropdownList.getChildAt(j);
-                if (child instanceof TextView) {
-                    TextView t = (TextView) child;
-                    if (j == index) {
-                        t.setTextColor(COLOR_ACCENT);
-                        t.setBackground(ModxTheme.roundRect(getContext, ModxTheme.accentSoft(COLOR_ACCENT), 0, 0f, 4f));
-                    } else {
-                        t.setTextColor(ModxTheme.FG);
-                        t.setBackground(null);
-                    }
+        h.currentIdx = clamped;
+        h.nameView.setText(h.featName + ": " + h.items[clamped]);
+        for (int j = 0; j < h.dropdownList.getChildCount(); j++) {
+            View child = h.dropdownList.getChildAt(j);
+            if (child instanceof TextView) {
+                TextView t = (TextView) child;
+                if (j == clamped) {
+                    t.setTextColor(COLOR_ACCENT);
+                    t.setBackground(ModxTheme.roundRect(getContext, ModxTheme.accentSoft(COLOR_ACCENT), 0, 0f, 4f));
+                } else {
+                    t.setTextColor(ModxTheme.FG);
+                    t.setBackground(null);
                 }
             }
         }
         if (forceSync) {
-            Preferences.forceSyncInt(h.featName, featNum, index, true);
+            Preferences.forceSyncInt(h.featName, featNum, clamped, callNative);
         } else {
-            Preferences.changeFeatureInt(h.featName, featNum, index);
+            Preferences.changeFeatureInt(h.featName, featNum, clamped);
+        }
+    }
+
+    private void setRadioGroupValue(int featNum, int index, boolean forceSync, boolean callNative) {
+        RadioGroupHolder h = mRadioGroups.get(featNum);
+        if (h == null) {
+            if (forceSync) {
+                Preferences.forceSyncInt("", featNum, index, callNative);
+            }
+            return;
+        }
+        beginProgrammaticUpdate();
+        int resolvedIndex = index;
+        try {
+            if (resolvedIndex <= 0 || resolvedIndex >= h.radioGroup.getChildCount()) {
+                resolvedIndex = 0;
+                h.radioGroup.clearCheck();
+                h.selectedName = null;
+                h.currentIndex = 0;
+                h.titleView.setText(h.featName + ":");
+            } else {
+                View child = h.radioGroup.getChildAt(resolvedIndex);
+                if (child instanceof RadioButton) {
+                    ((RadioButton) child).setChecked(true);
+                    String radioName = ((RadioButton) child).getText().toString();
+                    h.selectedName = radioName;
+                    h.currentIndex = resolvedIndex;
+                    h.titleView.setText(Html.fromHtml(h.featName + ": <font color='" + NumberTxtColor + "'>"
+                            + TextUtils.htmlEncode(radioName) + "</font>"));
+                } else {
+                    resolvedIndex = 0;
+                    h.radioGroup.clearCheck();
+                    h.selectedName = null;
+                    h.currentIndex = 0;
+                    h.titleView.setText(h.featName + ":");
+                }
+            }
+        } finally {
+            endProgrammaticUpdate();
+        }
+        if (forceSync) {
+            Preferences.forceSyncInt(h.featName, featNum, resolvedIndex, callNative);
+        } else {
+            Preferences.changeFeatureInt(h.featName, featNum, resolvedIndex);
         }
     }
 
     private void setColorPickerValue(int featNum, int color, boolean forceSync) {
+        setColorPickerValue(featNum, color, forceSync, true);
+    }
+
+    private void setColorPickerValue(int featNum, int color, boolean forceSync, boolean callNative) {
         ColorPickerHolder h = mColorPickers.get(featNum);
         if (h == null) {
             if (forceSync) {
-                Preferences.forceSyncColor("", featNum, color, true);
+                Preferences.forceSyncColor("", featNum, color, callNative);
             }
             return;
         }
-        if (h.currentColor != color) {
-            h.currentColor = color;
-            applyColorButton(h, color);
-        }
+        h.currentColor = color;
+        applyColorButton(h, color);
         if (forceSync) {
-            Preferences.forceSyncColor(h.featName, featNum, color, true);
+            Preferences.forceSyncColor(h.featName, featNum, color, callNative);
         } else {
             Preferences.changeFeatureColor(h.featName, featNum, color);
         }
@@ -4371,39 +4791,24 @@ public void setTeleportPadVisible(boolean visible) {
         runOnMainThread(new Runnable() {
             @Override
             public void run() {
-                if (mProgrammaticModeUpdate) return;
-                mProgrammaticModeUpdate = true;
+                if (isProgrammaticUpdate()) return;
+                beginProgrammaticUpdate();
                 Preferences.beginBatch();
                 try {
-                    applyModeToMenuInternal(modeFeatNum, enabled);
+                    applyModeToMenuInternal(modeFeatNum, enabled, true);
                 } finally {
                     Preferences.endBatch(true);
-                    mProgrammaticModeUpdate = false;
+                    endProgrammaticUpdate();
                 }
             }
         });
     }
 
-    private void applyModeToMenuInternal(int modeFeatNum, boolean enabled) {
+    private void applyModeToMenuInternal(int modeFeatNum, boolean enabled, boolean callNative) {
         PresetItem[] items = MODE_PRESETS.get(modeFeatNum);
         if (items == null) return;
         for (int i = 0; i < items.length; i++) {
-            PresetItem item = items[i];
-            int targetVal = enabled ? item.onValue : item.offValue;
-            switch (item.type) {
-                case PRESET_TOGGLE:
-                    setToggleState(item.featNum, targetVal != 0, true);
-                    break;
-                case PRESET_SEEKBAR:
-                    setSeekBarValue(item.featNum, targetVal, true);
-                    break;
-                case PRESET_SPINNER:
-                    setSpinnerValue(item.featNum, targetVal, true);
-                    break;
-                case PRESET_COLOR:
-                    setColorPickerValue(item.featNum, targetVal, true);
-                    break;
-            }
+            applyPresetItem(items[i], enabled, callNative);
         }
     }
     // ================================================================
@@ -4547,21 +4952,38 @@ public void setTeleportPadVisible(boolean visible) {
                     ModxTheme.hapticTap(view);
                     final EditText editText = makeEditText();
                     if (maxValue != 0) editText.setHint("Max: " + maxValue);
-                    editText.setInputType(InputType.TYPE_CLASS_NUMBER);
+                    editText.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_SIGNED);
                     editText.setKeyListener(DigitsKeyListener.getInstance("0123456789-"));
-                    editText.setFilters(new InputFilter[]{new InputFilter.LengthFilter(10)});
+                    editText.setFilters(new InputFilter[]{new InputFilter.LengthFilter(11)});
+                    if (!TextUtils.isEmpty(inHolder.currentValueText)) {
+                        editText.setText(inHolder.currentValueText);
+                        editText.setSelection(editText.getText().length());
+                    }
                     showInputDialog("Input number", editText, new Runnable() {
                             @Override
                             public void run() {
-                                int num;
-                                try {
-                                    String inp = editText.getText().toString();
-                                    num = Integer.parseInt(inp.isEmpty() ? "0" : inp);
-                                    if (maxValue != 0 && num >= maxValue) num = maxValue;
-                                } catch (NumberFormatException ex) { num = maxValue != 0 ? maxValue : Integer.MAX_VALUE; }
-                                inHolder.currentValueText = String.valueOf(num);
-                                button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>" + num + "</font>"));
-                                Preferences.changeFeatureInt(featName, featNum, num);
+                                int parsed;
+                                String inp = editText.getText().toString().trim();
+                                if (inp.isEmpty()) {
+                                    parsed = 0;
+                                } else if ("-".equals(inp)) {
+                                    try { parsed = Integer.parseInt(inHolder.currentValueText); }
+                                    catch (NumberFormatException ex) { parsed = 0; }
+                                } else {
+                                    try {
+                                        parsed = Integer.parseInt(inp);
+                                        if (maxValue != 0 && parsed > maxValue) parsed = maxValue;
+                                    } catch (NumberFormatException ex) {
+                                        if (inp.startsWith("-")) {
+                                            parsed = Integer.MIN_VALUE;
+                                        } else {
+                                            parsed = maxValue != 0 ? maxValue : Integer.MAX_VALUE;
+                                        }
+                                    }
+                                }
+                                inHolder.currentValueText = String.valueOf(parsed);
+                                button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>" + parsed + "</font>"));
+                                Preferences.changeFeatureInt(featName, featNum, parsed);
                             }
                         });
                 }
@@ -4599,21 +5021,38 @@ public void setTeleportPadVisible(boolean visible) {
                     ModxTheme.hapticTap(view);
                     final EditText editText = makeEditText();
                     if (maxValue != 0) editText.setHint("Max: " + maxValue);
-                    editText.setInputType(InputType.TYPE_CLASS_NUMBER);
+                    editText.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_SIGNED);
                     editText.setKeyListener(DigitsKeyListener.getInstance("0123456789-"));
                     editText.setFilters(new InputFilter[]{new InputFilter.LengthFilter(20)});
+                    if (!TextUtils.isEmpty(ilHolder.currentValueText)) {
+                        editText.setText(ilHolder.currentValueText);
+                        editText.setSelection(editText.getText().length());
+                    }
                     showInputDialog("Input number", editText, new Runnable() {
                             @Override
                             public void run() {
-                                long num;
-                                try {
-                                    String inp = editText.getText().toString();
-                                    num = Long.parseLong(inp.isEmpty() ? "0" : inp);
-                                    if (maxValue != 0 && num >= maxValue) num = maxValue;
-                                } catch (NumberFormatException ex) { num = maxValue != 0 ? maxValue : Long.MAX_VALUE; }
-                                ilHolder.currentValueText = String.valueOf(num);
-                                button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>" + num + "</font>"));
-                                Preferences.changeFeatureLong(featName, featNum, num);
+                                long parsed;
+                                String inp = editText.getText().toString().trim();
+                                if (inp.isEmpty()) {
+                                    parsed = 0L;
+                                } else if ("-".equals(inp)) {
+                                    try { parsed = Long.parseLong(ilHolder.currentValueText); }
+                                    catch (NumberFormatException ex) { parsed = 0L; }
+                                } else {
+                                    try {
+                                        parsed = Long.parseLong(inp);
+                                        if (maxValue != 0 && parsed > maxValue) parsed = maxValue;
+                                    } catch (NumberFormatException ex) {
+                                        if (inp.startsWith("-")) {
+                                            parsed = Long.MIN_VALUE;
+                                        } else {
+                                            parsed = maxValue != 0 ? maxValue : Long.MAX_VALUE;
+                                        }
+                                    }
+                                }
+                                ilHolder.currentValueText = String.valueOf(parsed);
+                                button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>" + parsed + "</font>"));
+                                Preferences.changeFeatureLong(featName, featNum, parsed);
                             }
                         });
                 }
@@ -4626,7 +5065,9 @@ public void setTeleportPadVisible(boolean visible) {
         button.setMinHeight(dp(42));
         button.setMinimumHeight(dp(42));
         String string = Preferences.readInitialString(featName, featNum, "");
-        button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>" + string + "</font>"));
+        String safeText = (string != null) ? string : "";
+        button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>"
+                + TextUtils.htmlEncode(safeText) + "</font>"));
         button.setAllCaps(false);
         button.setLayoutParams(rowLp(6, 4, 6, 4));
         button.setTypeface(fontMedium);
@@ -4643,19 +5084,24 @@ public void setTeleportPadVisible(boolean visible) {
         itHolder.featNum          = featNum;
         itHolder.featName         = featName;
         itHolder.button           = button;
-        itHolder.currentValueText = (string != null) ? string : "";
+        itHolder.currentValueText = safeText;
         mInputTexts.put(featNum, itHolder);
         button.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View view) {
                     ModxTheme.hapticTap(view);
                     final EditText editText = makeEditText();
+                    if (!TextUtils.isEmpty(itHolder.currentValueText)) {
+                        editText.setText(itHolder.currentValueText);
+                        editText.setSelection(editText.getText().length());
+                    }
                     showInputDialog("Input text", editText, new Runnable() {
                             @Override
                             public void run() {
                                 String str = editText.getText().toString();
                                 itHolder.currentValueText = str;
-                                button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>" + str + "</font>"));
+                                button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>"
+                                        + TextUtils.htmlEncode(str) + "</font>"));
                                 Preferences.changeFeatureString(featName, featNum, str);
                             }
                         });
@@ -4686,11 +5132,11 @@ public void setTeleportPadVisible(boolean visible) {
         checkBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
                 @Override
                 public void onCheckedChanged(CompoundButton bv, boolean isChecked) {
-                    ModxTheme.hapticTap(bv);
-                    animateStroke(cbBg,
-                            isChecked ? ModxTheme.LINE : ModxTheme.accentLine(CheckBoxColor),
-                            isChecked ? ModxTheme.accentLine(CheckBoxColor) : ModxTheme.LINE);
-                    if (!mProgrammaticModeUpdate) {
+                    if (!isProgrammaticUpdate()) {
+                        ModxTheme.hapticTap(bv);
+                        animateStroke(cbBg,
+                                isChecked ? ModxTheme.LINE : ModxTheme.accentLine(CheckBoxColor),
+                                isChecked ? ModxTheme.accentLine(CheckBoxColor) : ModxTheme.LINE);
                         Preferences.changeFeatureBool(featName, featNum, isChecked);
                     }
                 }
@@ -4724,15 +5170,20 @@ public void setTeleportPadVisible(boolean visible) {
         rgHolder.featName   = featName;
         rgHolder.radioGroup = radioGroup;
         rgHolder.titleView  = textView;
+        rgHolder.currentIndex = 0;
         for (int i = 0; i < lists.size(); i++) {
             final RadioButton Radioo = new RadioButton(getContext);
             final String finalfeatName = featName, radioName = lists.get(i);
             View.OnClickListener rl = new View.OnClickListener() {
                 public void onClick(View v) {
+                    if (isProgrammaticUpdate()) return;
                     ModxTheme.hapticTap(v);
+                    int idx = radioGroup.indexOfChild(Radioo);
                     rgHolder.selectedName = radioName;
-                    textView.setText(Html.fromHtml(finalfeatName + ": <font color='" + NumberTxtColor + "'>" + radioName));
-                    Preferences.changeFeatureInt(finalfeatName, featNum, radioGroup.indexOfChild(Radioo));
+                    rgHolder.currentIndex = idx;
+                    textView.setText(Html.fromHtml(finalfeatName + ": <font color='" + NumberTxtColor + "'>"
+                            + TextUtils.htmlEncode(radioName) + "</font>"));
+                    Preferences.changeFeatureInt(finalfeatName, featNum, idx);
                 }
             };
             Radioo.setText(lists.get(i));
@@ -4747,7 +5198,9 @@ public void setTeleportPadVisible(boolean visible) {
         int index = Preferences.readInitialInt(featName, featNum, 0);
         if (index > 0 && index <= lists.size() && index < radioGroup.getChildCount()) {
             rgHolder.selectedName = lists.get(index - 1);
-            textView.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>" + lists.get(index - 1)));
+            rgHolder.currentIndex = index;
+            textView.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>"
+                    + TextUtils.htmlEncode(lists.get(index - 1)) + "</font>"));
             ((RadioButton) radioGroup.getChildAt(index)).setChecked(true);
         }
         mRadioGroups.put(featNum, rgHolder);
@@ -5194,7 +5647,8 @@ public void setTeleportPadVisible(boolean visible) {
                 }
             }
             if (rg.titleView != null && rg.selectedName != null) {
-                rg.titleView.setText(Html.fromHtml(rg.featName + ": <font color='" + NumberTxtColor + "'>" + rg.selectedName));
+                rg.titleView.setText(Html.fromHtml(rg.featName + ": <font color='" + NumberTxtColor + "'>"
+                        + TextUtils.htmlEncode(rg.selectedName) + "</font>"));
             }
         }
         updateInputHoldersTheme(mInputNums);
@@ -6662,6 +7116,18 @@ private static final int PAD_H_DP = 100;    // ★ 23% ছোট
         return super.onTouchEvent(e);
     }
 
+    void clearMarker() {
+        markerNX = -1f;
+        markerNY = -1f;
+        invalidate();
+    }
+
+    void setMarkerNorm(float nx, float ny) {
+        markerNX = nx;
+        markerNY = ny;
+        invalidate();
+    }
+
     private void handlePadTouch(float x, float y) {
     float l = contentLeft(),  t = contentTop();
     float r = contentRight(), b = contentBottom();
@@ -6683,6 +7149,9 @@ private static final int PAD_H_DP = 100;    // ★ 23% ছোট
     markerNX = nx; markerNY = ny;
     invalidate();
 
+    if (Menu.instance != null) {
+        Menu.instance.syncTeleportMarkersFromFloating(nx, ny);
+    }
     try { Menu.SetTeleportTargetNorm(nx, ny); }
     catch (Throwable ignored) { }
 }
@@ -6755,6 +7224,18 @@ private class TeleportPadView extends View {
         framePaint.setColor(ModxTheme.withAlpha(c, 0xCC));
         crossPaint.setColor(ModxTheme.withAlpha(c, 0x55));
         glowPaint.setColor(ModxTheme.withAlpha(c, 0x55));
+        invalidate();
+    }
+
+    void clearMarker() {
+        markerNX = -1f;
+        markerNY = -1f;
+        invalidate();
+    }
+
+    void setMarkerNorm(float nx, float ny) {
+        markerNX = nx;
+        markerNY = ny;
         invalidate();
     }
 
@@ -6855,8 +7336,110 @@ private class TeleportPadView extends View {
     markerNX = nx; markerNY = ny;
     invalidate();
 
+    syncTeleportMarkersFromMenu(nx, ny);
     try { Menu.SetTeleportTargetNorm(nx, ny); }
     catch (Throwable ignored) { }
 }
 }
+
+    // ================================================================
+    // SEC_DIAG-only live self-test inspection & control hooks
+    // Compiled out cleanly when BuildConfig.SEC_DIAG == false.
+    // ================================================================
+    boolean diagIsLoggedIn() {
+        return BuildConfig.SEC_DIAG && isLoggedIn;
+    }
+
+    String diagGetActiveUser() {
+        return BuildConfig.SEC_DIAG ? activeSessionUser : "";
+    }
+
+    void diagTriggerResetAll() {
+        if (!BuildConfig.SEC_DIAG) return;
+        resetAllFeaturesAction(null, null, null, null, "Reset All Features", null);
+    }
+
+    void diagClickMode(int modeFeatNum) {
+        if (!BuildConfig.SEC_DIAG) return;
+        ModeButtonHolder h = mModeButtons.get(modeFeatNum);
+        if (h != null) {
+            handleModeButtonToggle(h);
+        }
+    }
+
+    void diagSetToggleUiAndSync(int featNum, boolean val) {
+        if (!BuildConfig.SEC_DIAG) return;
+        setToggleState(featNum, val, false, true);
+    }
+
+    void diagSetSeekBarUiAndSync(int featNum, int val) {
+        if (!BuildConfig.SEC_DIAG) return;
+        setSeekBarValue(featNum, val, false, true);
+    }
+
+    void diagSetSpinnerUiAndSync(int featNum, int idx) {
+        if (!BuildConfig.SEC_DIAG) return;
+        setSpinnerValue(featNum, idx, false, true);
+    }
+
+    boolean diagIsModeUiActive(int modeFeatNum) {
+        if (!BuildConfig.SEC_DIAG) return false;
+        ModeButtonHolder h = mModeButtons.get(modeFeatNum);
+        return h != null && h.state != null && h.state[0];
+    }
+
+    boolean diagGetToggleUi(int featNum) {
+        if (!BuildConfig.SEC_DIAG) return false;
+        ToggleHolder h = mToggles.get(featNum);
+        return h != null && h.state != null && h.state[0];
+    }
+
+    int diagGetSeekBarUi(int featNum) {
+        if (!BuildConfig.SEC_DIAG) return -1;
+        SeekBarHolder h = mSeekBars.get(featNum);
+        return h != null && h.seekBar != null ? h.seekBar.getProgress() : -1;
+    }
+
+    String diagGetSeekBarChipText(int featNum) {
+        if (!BuildConfig.SEC_DIAG) return "";
+        SeekBarHolder h = mSeekBars.get(featNum);
+        return h != null && h.chip != null && h.chip.getText() != null
+                ? h.chip.getText().toString() : "";
+    }
+
+    int diagGetSpinnerUi(int featNum) {
+        if (!BuildConfig.SEC_DIAG) return -1;
+        SpinnerHolder h = mSpinners.get(featNum);
+        return h != null ? h.currentIdx : -1;
+    }
+
+    String diagGetSpinnerText(int featNum) {
+        if (!BuildConfig.SEC_DIAG) return "";
+        SpinnerHolder h = mSpinners.get(featNum);
+        return h != null && h.nameView != null && h.nameView.getText() != null
+                ? h.nameView.getText().toString() : "";
+    }
+
+    void diagSelectTab(String tabName) {
+        if (!BuildConfig.SEC_DIAG) return;
+        selectTabByName(tabName);
+    }
+
+    String diagGetSelectedTabName() {
+        if (!BuildConfig.SEC_DIAG) return "";
+        String t = getCurrentSelectedTabName();
+        return t != null ? t : "";
+    }
+
+    void diagRebuildMenusPreservingTab() {
+        if (!BuildConfig.SEC_DIAG) return;
+        buildFeaturesAndCategories(GetFeatureList());
+    }
+
+    void diagRestorePostTestUiAndNative(int restoredAccent) {
+        if (!BuildConfig.SEC_DIAG) return;
+        applyMenuColorLive(restoredAccent);
+        FeatureStateStore.onSessionLockedOut();
+        buildFeaturesAndCategories(GetFeatureList());
+    }
 }

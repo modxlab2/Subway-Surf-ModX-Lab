@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -23,9 +24,11 @@ import java.util.Map;
  *      c_<featNum>       (int ARGB: ColorPicker)
  *      menu_accent_color (int ARGB: Menu accent color)
  *      save_enabled      (boolean: Save features preference, featNum -1)
+ *      snapshot_user     (String: normalized username owning the saved snapshot)
  *      mxl_migrated_v2   (boolean: one-time legacy migration marker)
  *  - When saveEnabled == true:
- *      - All feature & menu color changes write through immediately.
+ *      - Discrete changes commit synchronously; continuous SeekBar drags apply
+ *        while dragging and commit on touch stop / batch end.
  *      - Turning Save ON mid-session writes a full synchronous commit() snapshot
  *        of the entire current in-memory state (including earlier changes).
  *  - When saveEnabled == false:
@@ -41,6 +44,7 @@ public final class FeatureStateStore {
     private static final String KEY_MENU_ACCENT         = "menu_accent_color";
     private static final String KEY_RECENT_MENU_COLORS  = "recent_menu_colors";
     private static final String KEY_MIGRATED_V2         = "mxl_migrated_v2";
+    private static final String KEY_SNAPSHOT_USER       = "snapshot_user";
     private static final String LEGACY_THEME_PREF       = "menu_theme";
     private static final String LEGACY_THEME_KEY        = "accent";
     private static final int    MAX_RECENT_MENU_COLORS  = 5;
@@ -57,10 +61,11 @@ public final class FeatureStateStore {
     private static boolean initialized = false;
     private static boolean saveEnabled = false;
     private static boolean sessionRestoredFromDisk = false;
-    private static boolean nativeRestoredOnce = false;
+    private static boolean pendingNativeRestore = false;
     private static boolean dirty = false;
     private static int batchDepth = 0;
 
+    private static String snapshotUser = "";
     private static int menuAccentColor = DEFAULT_MENU_COLOR;
     private static final ArrayList<Integer> recentMenuColors = new ArrayList<Integer>();
 
@@ -130,11 +135,12 @@ public final class FeatureStateStore {
         featNames.clear();
 
         saveEnabled = prefs.getBoolean(KEY_SAVE_ENABLED, false);
-        nativeRestoredOnce = false;
         dirty = false;
 
         if (saveEnabled) {
             sessionRestoredFromDisk = true;
+            pendingNativeRestore = true;
+            snapshotUser = normalizeUser(prefs.getString(KEY_SNAPSHOT_USER, ""));
             Map<String, ?> all = prefs.getAll();
             if (all != null) {
                 for (Map.Entry<String, ?> e : all.entrySet()) {
@@ -175,6 +181,8 @@ public final class FeatureStateStore {
             normalizeActiveModeLocked();
         } else {
             sessionRestoredFromDisk = false;
+            pendingNativeRestore = false;
+            snapshotUser = "";
             menuAccentColor = DEFAULT_MENU_COLOR;
             recentMenuColors.clear();
             clearSnapshotKeysOnDiskLocked(false);
@@ -275,6 +283,64 @@ public final class FeatureStateStore {
         }
     }
 
+    private static String normalizeUser(String user) {
+        return user == null ? "" : user.trim().toLowerCase(Locale.US);
+    }
+
+    /**
+     * Binds the current authenticated session user to the FeatureStateStore snapshot.
+     * If a DIFFERENT user logs in than the one who owns the current saved/session
+     * state, wipes the old state cleanly so features never leak across accounts.
+     *
+     * @return true if the menu accent color was reset and UI theme should refresh.
+     */
+    public static synchronized boolean bindSessionUser(Context ctx, String rawUser) {
+        ensureInit(ctx);
+        String newUser = normalizeUser(rawUser);
+        if (newUser.isEmpty()) return false;
+
+        boolean differentUser = !snapshotUser.isEmpty() && !snapshotUser.equals(newUser);
+        if (differentUser) {
+            int oldAccent = menuAccentColor;
+            bools.clear();
+            ints.clear();
+            longs.clear();
+            strings.clear();
+            colors.clear();
+            saveEnabled = false;
+            sessionRestoredFromDisk = false;
+            pendingNativeRestore = false;
+            dirty = false;
+            menuAccentColor = DEFAULT_MENU_COLOR;
+            recentMenuColors.clear();
+            snapshotUser = newUser;
+            clearSnapshotKeysOnDiskLocked(true);
+            if (BuildConfig.SEC_DIAG) {
+                SecurityNative.diagUi("FeatureStateStore: cleared snapshot on user switch");
+            }
+            return oldAccent != DEFAULT_MENU_COLOR;
+        }
+
+        snapshotUser = newUser;
+        if (saveEnabled && prefs != null) {
+            prefs.edit().putString(KEY_SNAPSHOT_USER, snapshotUser).commit();
+        }
+        return false;
+    }
+
+    /**
+     * Called when native session clears (logout / session expiry / lockdown).
+     * Native Main.cpp resets all C++ globals during clearVerifiedSession(), so if
+     * the same user logs back in during the same process we must re-push state.
+     */
+    public static synchronized void onSessionLockedOut() {
+        pendingNativeRestore = true;
+    }
+
+    public static synchronized String getSnapshotUser() {
+        return snapshotUser;
+    }
+
     public static synchronized boolean isSaveEnabled() {
         return saveEnabled;
     }
@@ -312,6 +378,9 @@ public final class FeatureStateStore {
     private static void writeFullSnapshotToEditorLocked(SharedPreferences.Editor ed) {
         ed.putBoolean(KEY_SAVE_ENABLED, true);
         ed.putBoolean(KEY_MIGRATED_V2, true);
+        if (!snapshotUser.isEmpty()) {
+            ed.putString(KEY_SNAPSHOT_USER, snapshotUser);
+        }
         ed.putInt(KEY_MENU_ACCENT, menuAccentColor);
         ed.putString(KEY_RECENT_MENU_COLORS, serializeRecentMenuColorsLocked());
 
@@ -361,6 +430,59 @@ public final class FeatureStateStore {
         } catch (Throwable ignored) { }
     }
 
+    /**
+     * Removes any stale feature keys from disk while preserving Save flag, user binding,
+     * Expand state (-3), and menu accent color theme. Used during Reset All Features.
+     */
+    public static synchronized void resetAllFeaturesInStore(Context ctx) {
+        ensureInit(ctx);
+        Boolean expandVal = bools.get(-3);
+        bools.clear();
+        ints.clear();
+        longs.clear();
+        strings.clear();
+        colors.clear();
+
+        if (expandVal != null) {
+            bools.put(-3, expandVal);
+        }
+        for (Map.Entry<Integer, Boolean> e : defaultBools.entrySet()) {
+            int fn = e.getKey();
+            if (fn == -1 || fn == -3) continue;
+            bools.put(fn, (fn == 803) ? Boolean.FALSE : e.getValue());
+        }
+        for (Map.Entry<Integer, Integer> e : defaultInts.entrySet()) {
+            ints.put(e.getKey(), e.getValue());
+        }
+        for (Map.Entry<Integer, Long> e : defaultLongs.entrySet()) {
+            longs.put(e.getKey(), e.getValue());
+        }
+        for (Map.Entry<Integer, String> e : defaultStrings.entrySet()) {
+            strings.put(e.getKey(), e.getValue());
+        }
+        for (Map.Entry<Integer, Integer> e : defaultColors.entrySet()) {
+            colors.put(e.getKey(), e.getValue());
+        }
+
+        if (saveEnabled && prefs != null) {
+            SharedPreferences.Editor ed = prefs.edit();
+            Map<String, ?> all = prefs.getAll();
+            if (all != null) {
+                for (String k : all.keySet()) {
+                    if (k == null) continue;
+                    if (k.startsWith(PREFIX_BOOL) || k.startsWith(PREFIX_INT)
+                            || k.startsWith(PREFIX_LONG) || k.startsWith(PREFIX_STRING)
+                            || k.startsWith(PREFIX_COLOR)) {
+                        ed.remove(k);
+                    }
+                }
+            }
+            writeFullSnapshotToEditorLocked(ed);
+            boolean ok = ed.commit();
+            dirty = !ok;
+        }
+    }
+
     public static synchronized void beginBatch(Context ctx) {
         ensureInit(ctx);
         batchDepth++;
@@ -374,8 +496,10 @@ public final class FeatureStateStore {
         if (batchDepth == 0 && saveEnabled && dirty && prefs != null) {
             SharedPreferences.Editor ed = prefs.edit();
             writeFullSnapshotToEditorLocked(ed);
-            boolean ok = syncCommit ? ed.commit() : true;
-            if (!syncCommit) {
+            boolean ok = true;
+            if (syncCommit) {
+                ok = ed.commit();
+            } else {
                 ed.apply();
             }
             dirty = syncCommit && !ok;
@@ -553,7 +677,7 @@ public final class FeatureStateStore {
         if (legacyInt != null && legacyInt != 0) {
             colors.put(featNum, legacyInt);
             if (saveEnabled && prefs != null) {
-                prefs.edit().remove(PREFIX_INT + featNum).putInt(PREFIX_COLOR + featNum, legacyInt).apply();
+                prefs.edit().remove(PREFIX_INT + featNum).putInt(PREFIX_COLOR + featNum, legacyInt).commit();
             }
             return legacyInt;
         }
@@ -587,19 +711,30 @@ public final class FeatureStateStore {
         }
         bools.put(featNum, value);
         if (saveEnabled && prefs != null) {
-            dirty = true;
             if (batchDepth == 0) {
-                prefs.edit().putBoolean(PREFIX_BOOL + featNum, value).apply();
+                boolean ok = prefs.edit().putBoolean(PREFIX_BOOL + featNum, value).commit();
+                dirty = !ok;
+            } else {
+                dirty = true;
             }
         }
         return true;
     }
 
     public static synchronized boolean updateInt(Context ctx, String featName, int featNum, int value) {
-        return updateInt(ctx, featName, featNum, value, false);
+        return updateInt(ctx, featName, featNum, value, false, true);
     }
 
     public static synchronized boolean updateInt(Context ctx, String featName, int featNum, int value, boolean force) {
+        return updateInt(ctx, featName, featNum, value, force, true);
+    }
+
+    public static synchronized boolean updateIntDeferred(Context ctx, String featName, int featNum, int value) {
+        return updateInt(ctx, featName, featNum, value, false, false);
+    }
+
+    private static boolean updateInt(Context ctx, String featName, int featNum, int value,
+                                     boolean force, boolean syncCommit) {
         ensureInit(ctx);
         if (featNum < 0) {
             return true;
@@ -611,9 +746,17 @@ public final class FeatureStateStore {
         }
         ints.put(featNum, value);
         if (saveEnabled && prefs != null) {
-            dirty = true;
             if (batchDepth == 0) {
-                prefs.edit().putInt(PREFIX_INT + featNum, value).apply();
+                SharedPreferences.Editor ed = prefs.edit().putInt(PREFIX_INT + featNum, value);
+                if (syncCommit) {
+                    boolean ok = ed.commit();
+                    dirty = !ok;
+                } else {
+                    ed.apply();
+                    dirty = true;
+                }
+            } else {
+                dirty = true;
             }
         }
         return true;
@@ -635,9 +778,11 @@ public final class FeatureStateStore {
         }
         longs.put(featNum, value);
         if (saveEnabled && prefs != null) {
-            dirty = true;
             if (batchDepth == 0) {
-                prefs.edit().putLong(PREFIX_LONG + featNum, value).apply();
+                boolean ok = prefs.edit().putLong(PREFIX_LONG + featNum, value).commit();
+                dirty = !ok;
+            } else {
+                dirty = true;
             }
         }
         return true;
@@ -660,9 +805,11 @@ public final class FeatureStateStore {
         }
         strings.put(featNum, safeVal);
         if (saveEnabled && prefs != null) {
-            dirty = true;
             if (batchDepth == 0) {
-                prefs.edit().putString(PREFIX_STRING + featNum, safeVal).apply();
+                boolean ok = prefs.edit().putString(PREFIX_STRING + featNum, safeVal).commit();
+                dirty = !ok;
+            } else {
+                dirty = true;
             }
         }
         return true;
@@ -684,35 +831,41 @@ public final class FeatureStateStore {
         }
         colors.put(featNum, color);
         if (saveEnabled && prefs != null) {
-            dirty = true;
             if (batchDepth == 0) {
-                prefs.edit().putInt(PREFIX_COLOR + featNum, color).apply();
+                boolean ok = prefs.edit().putInt(PREFIX_COLOR + featNum, color).commit();
+                dirty = !ok;
+            } else {
+                dirty = true;
             }
         }
         return true;
     }
 
     // =========================================================================
-    // Deterministic snapshot collection for one-time post-login native restore
-    // Order: 1) Active Mode buttons (800-802 where true)
-    //        2) All other modified (or mode-overriding) non-color features
-    //        3) All modified (or mode-overriding) ColorPickers
+    // Deterministic snapshot collection for post-login / relogin native restore
+    // Order: 1) Active Mode button (800-802 where true — at most 1)
+    //        2) Manual overrides to that mode + modified non-mode features
+    //        3) Modified ColorPickers
+    // Avoids duplicating features already applied identically by Phase 1 Mode.
     // =========================================================================
 
     public static synchronized List<NativeEntry> consumePendingNativeRestore() {
-        if (!sessionRestoredFromDisk || nativeRestoredOnce) {
+        if (!pendingNativeRestore) {
             return null;
         }
-        nativeRestoredOnce = true;
+        pendingNativeRestore = false;
 
         List<NativeEntry> list = new ArrayList<NativeEntry>();
 
-        // Phase 1: Mode buttons 800-802 (only active == true)
+        // Phase 1: Mode buttons 800-802 (enforce mutual exclusion before sending)
+        normalizeActiveModeLocked();
+        int activeModeFn = -1;
         int modeCount = 0;
         int[] modes = new int[]{800, 801, 802};
         for (int fn : modes) {
             Boolean v = bools.get(fn);
             if (v != null && v) {
+                activeModeFn = fn;
                 list.add(new NativeEntry(NativeEntry.TYPE_BOOL, fn, featNames.get(fn),
                         true, 0, 0L, null));
                 modeCount++;
@@ -720,7 +873,7 @@ public final class FeatureStateStore {
         }
         boolean hasActiveMode = (modeCount > 0);
 
-        // Phase 2: Other non-color features
+        // Phase 2: Manual overrides relative to activeModeFn, or non-default non-mode features
         int featCount = 0;
         for (Map.Entry<Integer, Boolean> e : bools.entrySet()) {
             int fn = e.getKey();
@@ -728,9 +881,20 @@ public final class FeatureStateStore {
                 continue;
             }
             boolean val = e.getValue();
+            if (hasActiveMode) {
+                Boolean presetBool = getModePresetBoolOnValue(activeModeFn, fn);
+                if (presetBool != null) {
+                    if (val != presetBool.booleanValue()) {
+                        list.add(new NativeEntry(NativeEntry.TYPE_BOOL, fn, featNames.get(fn),
+                                val, 0, 0L, null));
+                        featCount++;
+                    }
+                    continue;
+                }
+            }
             Boolean def = defaultBools.get(fn);
             boolean isDefault = (def != null) ? (def == val) : (!val);
-            if (hasActiveMode || !isDefault) {
+            if (!isDefault) {
                 list.add(new NativeEntry(NativeEntry.TYPE_BOOL, fn, featNames.get(fn),
                         val, 0, 0L, null));
                 featCount++;
@@ -740,9 +904,20 @@ public final class FeatureStateStore {
             int fn = e.getKey();
             if (fn < 0) continue;
             int val = e.getValue();
+            if (hasActiveMode) {
+                Integer presetInt = getModePresetIntOnValue(activeModeFn, fn);
+                if (presetInt != null) {
+                    if (val != presetInt.intValue()) {
+                        list.add(new NativeEntry(NativeEntry.TYPE_INT, fn, featNames.get(fn),
+                                false, val, 0L, null));
+                        featCount++;
+                    }
+                    continue;
+                }
+            }
             Integer def = defaultInts.get(fn);
             boolean isDefault = (def != null) ? (def == val) : (val == 0);
-            if (hasActiveMode || !isDefault) {
+            if (!isDefault) {
                 list.add(new NativeEntry(NativeEntry.TYPE_INT, fn, featNames.get(fn),
                         false, val, 0L, null));
                 featCount++;
@@ -754,7 +929,7 @@ public final class FeatureStateStore {
             long val = e.getValue();
             Long def = defaultLongs.get(fn);
             boolean isDefault = (def != null) ? (def == val) : (val == 0L);
-            if (hasActiveMode || !isDefault) {
+            if (!isDefault) {
                 list.add(new NativeEntry(NativeEntry.TYPE_LONG, fn, featNames.get(fn),
                         false, 0, val, null));
                 featCount++;
@@ -766,7 +941,7 @@ public final class FeatureStateStore {
             String val = e.getValue() != null ? e.getValue() : "";
             String def = defaultStrings.get(fn);
             boolean isDefault = (def != null) ? def.equals(val) : val.isEmpty();
-            if (hasActiveMode || !isDefault) {
+            if (!isDefault) {
                 list.add(new NativeEntry(NativeEntry.TYPE_STRING, fn, featNames.get(fn),
                         false, 0, 0L, val));
                 featCount++;
@@ -781,7 +956,7 @@ public final class FeatureStateStore {
             int val = e.getValue();
             Integer def = defaultColors.get(fn);
             boolean isDefault = (def != null && def == val);
-            if (hasActiveMode || !isDefault) {
+            if (!isDefault) {
                 list.add(new NativeEntry(NativeEntry.TYPE_COLOR, fn, featNames.get(fn),
                         false, val, 0L, null));
                 colorCount++;
@@ -794,6 +969,37 @@ public final class FeatureStateStore {
                     + " colors=" + colorCount);
         }
         return list;
+    }
+
+    /** Matches native Main.cpp cases 800/801/802 boolean effects exactly. */
+    private static Boolean getModePresetBoolOnValue(int modeFn, int featNum) {
+        if (modeFn != 800 && modeFn != 801 && modeFn != 802) return null;
+        if (featNum == 104 || featNum == 110 || featNum == 150) return Boolean.TRUE;
+        if (modeFn == 801 || modeFn == 802) {
+            if (featNum == 108 || featNum == 106 || featNum == 140) return Boolean.TRUE;
+        }
+        if (modeFn == 802) {
+            if (featNum == 130 || featNum == 131 || featNum == 132
+                    || featNum == 142 || featNum == 119) return Boolean.TRUE;
+        }
+        return null;
+    }
+
+    /** Matches native Main.cpp cases 800/801/802 integer effects exactly. */
+    private static Integer getModePresetIntOnValue(int modeFn, int featNum) {
+        if (modeFn != 800 && modeFn != 801 && modeFn != 802) return null;
+        if (featNum == 103) return 5;
+        if (featNum == 151) return 9999;
+        if (modeFn == 801 || modeFn == 802) {
+            if (featNum == 102) return 999;
+            if (featNum == 145) return 999;
+        }
+        if (modeFn == 802) {
+            if (featNum == 161) return 1;
+            if (featNum == 152) return 9999;
+            if (featNum == 153) return 9999;
+        }
+        return null;
     }
 
     private static void normalizeActiveModeLocked() {
@@ -819,7 +1025,7 @@ public final class FeatureStateStore {
                     ed.putBoolean(PREFIX_BOOL + fn, v);
                 }
             }
-            ed.apply();
+            ed.commit();
         }
     }
 
@@ -851,5 +1057,149 @@ public final class FeatureStateStore {
 
     private static String hexColor(int c) {
         return String.format("#%08X", c);
+    }
+
+    // =========================================================================
+    // Public state accessors + SEC_DIAG Snapshot Backup/Restore Helpers
+    // =========================================================================
+
+    public static synchronized boolean getBool(int featNum, boolean fallback) {
+        Boolean v = bools.get(featNum);
+        return v != null ? v : fallback;
+    }
+
+    public static synchronized int getInt(int featNum, int fallback) {
+        Integer v = ints.get(featNum);
+        return v != null ? v : fallback;
+    }
+
+    public static synchronized long getLong(int featNum, long fallback) {
+        Long v = longs.get(featNum);
+        return v != null ? v : fallback;
+    }
+
+    public static synchronized String getString(int featNum, String fallback) {
+        String v = strings.get(featNum);
+        return v != null ? v : (fallback != null ? fallback : "");
+    }
+
+    public static synchronized int getColor(int featNum, int fallback) {
+        Integer v = colors.get(featNum);
+        return v != null ? v : fallback;
+    }
+
+    static synchronized boolean hasDiskBoolKey(int featNum) {
+        return prefs != null && prefs.contains(PREFIX_BOOL + featNum);
+    }
+
+    static synchronized boolean hasDiskIntKey(int featNum) {
+        return prefs != null && prefs.contains(PREFIX_INT + featNum);
+    }
+
+    static synchronized int countDiskFeatureKeys() {
+        if (prefs == null) return 0;
+        Map<String, ?> all = prefs.getAll();
+        if (all == null) return 0;
+        int count = 0;
+        for (String k : all.keySet()) {
+            if (k == null) continue;
+            if (k.startsWith(PREFIX_BOOL) || k.startsWith(PREFIX_INT)
+                    || k.startsWith(PREFIX_LONG) || k.startsWith(PREFIX_STRING)
+                    || k.startsWith(PREFIX_COLOR) || k.equals(KEY_MENU_ACCENT)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    static final class DiagSnapshot {
+        final boolean saveEnabled;
+        final boolean sessionRestoredFromDisk;
+        final boolean pendingNativeRestore;
+        final String snapshotUser;
+        final int menuAccentColor;
+        final ArrayList<Integer> recentColors = new ArrayList<Integer>();
+        final LinkedHashMap<Integer, Boolean> bools = new LinkedHashMap<Integer, Boolean>();
+        final LinkedHashMap<Integer, Integer> ints = new LinkedHashMap<Integer, Integer>();
+        final LinkedHashMap<Integer, Long> longs = new LinkedHashMap<Integer, Long>();
+        final LinkedHashMap<Integer, String> strings = new LinkedHashMap<Integer, String>();
+        final LinkedHashMap<Integer, Integer> colors = new LinkedHashMap<Integer, Integer>();
+        final Map<String, Object> rawDisk = new HashMap<String, Object>();
+
+        DiagSnapshot(boolean saveEnabled, boolean sessionRestoredFromDisk,
+                     boolean pendingNativeRestore, String snapshotUser, int menuAccentColor) {
+            this.saveEnabled = saveEnabled;
+            this.sessionRestoredFromDisk = sessionRestoredFromDisk;
+            this.pendingNativeRestore = pendingNativeRestore;
+            this.snapshotUser = snapshotUser;
+            this.menuAccentColor = menuAccentColor;
+        }
+    }
+
+    static synchronized DiagSnapshot captureDiagSnapshot(Context ctx) {
+        ensureInit(ctx);
+        DiagSnapshot snap = new DiagSnapshot(
+                saveEnabled, sessionRestoredFromDisk, pendingNativeRestore,
+                snapshotUser, menuAccentColor);
+        snap.recentColors.addAll(recentMenuColors);
+        snap.bools.putAll(bools);
+        snap.ints.putAll(ints);
+        snap.longs.putAll(longs);
+        snap.strings.putAll(strings);
+        snap.colors.putAll(colors);
+        if (prefs != null) {
+            Map<String, ?> all = prefs.getAll();
+            if (all != null) {
+                snap.rawDisk.putAll(all);
+            }
+        }
+        return snap;
+    }
+
+    static synchronized void restoreDiagSnapshot(Context ctx, DiagSnapshot snap) {
+        if (snap == null) return;
+        ensureInit(ctx);
+        saveEnabled = snap.saveEnabled;
+        sessionRestoredFromDisk = snap.sessionRestoredFromDisk;
+        pendingNativeRestore = snap.pendingNativeRestore;
+        snapshotUser = snap.snapshotUser != null ? snap.snapshotUser : "";
+        menuAccentColor = snap.menuAccentColor;
+        recentMenuColors.clear();
+        recentMenuColors.addAll(snap.recentColors);
+
+        bools.clear();
+        bools.putAll(snap.bools);
+        ints.clear();
+        ints.putAll(snap.ints);
+        longs.clear();
+        longs.putAll(snap.longs);
+        strings.clear();
+        strings.putAll(snap.strings);
+        colors.clear();
+        colors.putAll(snap.colors);
+        batchDepth = 0;
+        dirty = false;
+
+        if (prefs != null) {
+            SharedPreferences.Editor ed = prefs.edit();
+            ed.clear();
+            for (Map.Entry<String, Object> e : snap.rawDisk.entrySet()) {
+                String k = e.getKey();
+                Object v = e.getValue();
+                if (k == null || v == null) continue;
+                if (v instanceof Boolean) {
+                    ed.putBoolean(k, (Boolean) v);
+                } else if (v instanceof Integer) {
+                    ed.putInt(k, (Integer) v);
+                } else if (v instanceof Long) {
+                    ed.putLong(k, (Long) v);
+                } else if (v instanceof String) {
+                    ed.putString(k, (String) v);
+                } else if (v instanceof Float) {
+                    ed.putFloat(k, (Float) v);
+                }
+            }
+            ed.commit();
+        }
     }
 }

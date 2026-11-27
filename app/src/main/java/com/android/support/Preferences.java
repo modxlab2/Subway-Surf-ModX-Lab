@@ -25,6 +25,9 @@ public class Preferences {
     /** Compatibility flag — true when session was restored from a saved snapshot. */
     public static boolean sessionLoadPref = false;
 
+    /** True only when user session is authenticated & verified for native Changes(). */
+    private static volatile boolean nativeSessionReady = false;
+
     private static final String LENGTH                = "_length";
     private static final String DEFAULT_STRING_VALUE  = "";
     private static final int    DEFAULT_INT_VALUE     = 0;
@@ -35,6 +38,14 @@ public class Preferences {
 
     public static native void Changes(Context context, int featNum, String featName,
                                       int value, long Lvalue, boolean isOn, String inputText);
+
+    private static void dispatchNativeChanges(int featNum, String featName,
+                                              int value, long Lvalue, boolean isOn, String inputText) {
+        if (BuildConfig.SEC_DIAG) {
+            DiagSelfTestRunner.recordNativeCall(featNum, value, Lvalue, isOn, inputText);
+        }
+        Changes(context, featNum, featName, value, Lvalue, isOn, inputText);
+    }
 
     // ================================================================
     // init() — called in Menu constructor BEFORE building any UI
@@ -55,6 +66,29 @@ public class Preferences {
             loadPref        = false;
             sessionLoadPref = false;
             isExpanded      = false;
+        }
+    }
+
+    public static boolean onSessionAuthenticated(String user) {
+        nativeSessionReady = true;
+        boolean accentReset = FeatureStateStore.bindSessionUser(context, user);
+        loadPref = FeatureStateStore.isSaveEnabled();
+        sessionLoadPref = loadPref;
+        return accentReset;
+    }
+
+    public static void onSessionCleared() {
+        nativeSessionReady = false;
+        FeatureStateStore.onSessionLockedOut();
+    }
+
+    public static boolean isNativeSessionReady() {
+        return nativeSessionReady;
+    }
+
+    static void setNativeSessionReadyForDiag(boolean ready) {
+        if (BuildConfig.SEC_DIAG) {
+            nativeSessionReady = ready;
         }
     }
 
@@ -82,6 +116,10 @@ public class Preferences {
         try {
             FeatureStateStore.flush(context, reason);
         } catch (Throwable ignored) { }
+    }
+
+    public static void resetAllFeaturesInStore() {
+        FeatureStateStore.resetAllFeaturesInStore(context);
     }
 
     // ================================================================
@@ -114,9 +152,10 @@ public class Preferences {
     }
 
     // ================================================================
-    // Deterministic post-login native restore (once per launch)
+    // Deterministic post-login / relogin native restore
     // ================================================================
     public static void pushRestoredSnapshotToNativeOnce() {
+        if (!nativeSessionReady) return;
         List<FeatureStateStore.NativeEntry> entries = FeatureStateStore.consumePendingNativeRestore();
         if (entries == null || entries.isEmpty()) return;
 
@@ -124,17 +163,17 @@ public class Preferences {
             FeatureStateStore.NativeEntry e = entries.get(i);
             switch (e.type) {
                 case FeatureStateStore.NativeEntry.TYPE_BOOL:
-                    Changes(context, e.featNum, e.featName, 0, 0L, e.boolVal, null);
+                    dispatchNativeChanges(e.featNum, e.featName, 0, 0L, e.boolVal, null);
                     break;
                 case FeatureStateStore.NativeEntry.TYPE_INT:
                 case FeatureStateStore.NativeEntry.TYPE_COLOR:
-                    Changes(context, e.featNum, e.featName, e.intVal, 0L, false, null);
+                    dispatchNativeChanges(e.featNum, e.featName, e.intVal, 0L, false, null);
                     break;
                 case FeatureStateStore.NativeEntry.TYPE_LONG:
-                    Changes(context, e.featNum, e.featName, 0, e.longVal, false, null);
+                    dispatchNativeChanges(e.featNum, e.featName, 0, e.longVal, false, null);
                     break;
                 case FeatureStateStore.NativeEntry.TYPE_STRING:
-                    Changes(context, e.featNum, e.featName, 0, 0L, false, e.stringVal);
+                    dispatchNativeChanges(e.featNum, e.featName, 0, 0L, false, e.stringVal);
                     break;
             }
         }
@@ -151,68 +190,90 @@ public class Preferences {
     // ================================================================
     // Unified state changes (Memory -> Native Changes -> Disk if Save ON)
     // ================================================================
+    private static boolean canDispatchFeature(int featNum) {
+        return featNum < 0 || nativeSessionReady;
+    }
+
     public static void triggerActionButton(String featureName, int featureNum) {
-        Changes(context, featureNum, featureName, 0, 0L, false, null);
+        if (!canDispatchFeature(featureNum)) return;
+        dispatchNativeChanges(featureNum, featureName, 0, 0L, false, null);
     }
 
     public static void triggerResetAllButton(String featureName, int featureNum) {
+        if (!canDispatchFeature(featureNum)) return;
         FeatureStateStore.updateBool(context, featureName, featureNum, false, true);
-        Changes(context, featureNum, featureName, 0, 0L, true, null);
+        dispatchNativeChanges(featureNum, featureName, 0, 0L, true, null);
     }
 
     public static void changeFeatureInt(String featureName, int featureNum, int value) {
+        if (!canDispatchFeature(featureNum)) return;
         boolean changed = FeatureStateStore.updateInt(context, featureName, featureNum, value);
         if (changed) {
-            Changes(context, featureNum, featureName, value, 0L, false, null);
+            dispatchNativeChanges(featureNum, featureName, value, 0L, false, null);
+        }
+    }
+
+    public static void changeFeatureIntDeferred(String featureName, int featureNum, int value) {
+        if (!canDispatchFeature(featureNum)) return;
+        boolean changed = FeatureStateStore.updateIntDeferred(context, featureName, featureNum, value);
+        if (changed) {
+            dispatchNativeChanges(featureNum, featureName, value, 0L, false, null);
         }
     }
 
     public static void forceSyncInt(String featureName, int featureNum, int value, boolean callNative) {
+        if (!canDispatchFeature(featureNum)) return;
         FeatureStateStore.updateInt(context, featureName, featureNum, value, true);
         if (callNative) {
-            Changes(context, featureNum, featureName, value, 0L, false, null);
+            dispatchNativeChanges(featureNum, featureName, value, 0L, false, null);
         }
     }
 
     public static void changeFeatureColor(String featureName, int featureNum, int color) {
+        if (!canDispatchFeature(featureNum)) return;
         boolean changed = FeatureStateStore.updateColor(context, featureName, featureNum, color);
         if (changed) {
-            Changes(context, featureNum, featureName, color, 0L, false, null);
+            dispatchNativeChanges(featureNum, featureName, color, 0L, false, null);
         }
     }
 
     public static void forceSyncColor(String featureName, int featureNum, int color, boolean callNative) {
+        if (!canDispatchFeature(featureNum)) return;
         FeatureStateStore.updateColor(context, featureName, featureNum, color, true);
         if (callNative) {
-            Changes(context, featureNum, featureName, color, 0L, false, null);
+            dispatchNativeChanges(featureNum, featureName, color, 0L, false, null);
         }
     }
 
     public static void changeFeatureLong(String featureName, int featureNum, long Lvalue) {
+        if (!canDispatchFeature(featureNum)) return;
         boolean changed = FeatureStateStore.updateLong(context, featureName, featureNum, Lvalue);
         if (changed) {
-            Changes(context, featureNum, featureName, 0, Lvalue, false, null);
+            dispatchNativeChanges(featureNum, featureName, 0, Lvalue, false, null);
         }
     }
 
     public static void forceSyncLong(String featureName, int featureNum, long Lvalue, boolean callNative) {
+        if (!canDispatchFeature(featureNum)) return;
         FeatureStateStore.updateLong(context, featureName, featureNum, Lvalue, true);
         if (callNative) {
-            Changes(context, featureNum, featureName, 0, Lvalue, false, null);
+            dispatchNativeChanges(featureNum, featureName, 0, Lvalue, false, null);
         }
     }
 
     public static void changeFeatureString(String featureName, int featureNum, String inputString) {
+        if (!canDispatchFeature(featureNum)) return;
         boolean changed = FeatureStateStore.updateString(context, featureName, featureNum, inputString);
         if (changed) {
-            Changes(context, featureNum, featureName, 0, 0L, false, inputString);
+            dispatchNativeChanges(featureNum, featureName, 0, 0L, false, inputString);
         }
     }
 
     public static void forceSyncString(String featureName, int featureNum, String inputString, boolean callNative) {
+        if (!canDispatchFeature(featureNum)) return;
         FeatureStateStore.updateString(context, featureName, featureNum, inputString, true);
         if (callNative) {
-            Changes(context, featureNum, featureName, 0, 0L, false, inputString);
+            dispatchNativeChanges(featureNum, featureName, 0, 0L, false, inputString);
         }
     }
 
@@ -223,20 +284,21 @@ public class Preferences {
             if (bool) {
                 sessionLoadPref = true;
             }
-            Changes(context, featureNum, featureName, 0, 0L, bool, null);
+            dispatchNativeChanges(featureNum, featureName, 0, 0L, bool, null);
             return;
         }
         if (featureNum == -3) {
             boolean changed = FeatureStateStore.updateBool(context, featureName, featureNum, bool);
             isExpanded = bool;
             if (changed) {
-                Changes(context, featureNum, featureName, 0, 0L, bool, null);
+                dispatchNativeChanges(featureNum, featureName, 0, 0L, bool, null);
             }
             return;
         }
+        if (!nativeSessionReady) return;
         boolean changed = FeatureStateStore.updateBool(context, featureName, featureNum, bool);
         if (changed) {
-            Changes(context, featureNum, featureName, 0, 0L, bool, null);
+            dispatchNativeChanges(featureNum, featureName, 0, 0L, bool, null);
         }
     }
 
@@ -244,12 +306,13 @@ public class Preferences {
         if (featureNum == -1) {
             return;
         }
+        if (!canDispatchFeature(featureNum)) return;
         FeatureStateStore.updateBool(context, featureName, featureNum, bool, true);
         if (featureNum == -3) {
             isExpanded = bool;
         }
         if (callNative) {
-            Changes(context, featureNum, featureName, 0, 0L, bool, null);
+            dispatchNativeChanges(featureNum, featureName, 0, 0L, bool, null);
         }
     }
 
