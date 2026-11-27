@@ -1977,8 +1977,11 @@ public class LoginHelper {
         LinearLayout.LayoutParams ihLp = new LinearLayout.LayoutParams(size, size);
         ihLp.setMargins(0, 0, 0, dp(12));
         iconHolder.setLayoutParams(ihLp);
+        boolean isDangerTone = (mainColor == COLOR_DANGER);
         iconHolder.setBackground(ModxTheme.pillBadgeBg(
-                ctx, ModxTheme.badgeBg(mainColor), ModxTheme.badgeBorder(mainColor)));
+                ctx,
+                isDangerTone ? ModxTheme.RAISED : ModxTheme.badgeBg(mainColor),
+                isDangerTone ? ModxTheme.LINE_STRONG : ModxTheme.badgeBorder(mainColor)));
 
         ImageView icon = new ImageView(ctx);
         icon.setImageDrawable(glyph);

@@ -21,9 +21,12 @@ public class TitanicTextView extends TextView {
     private float maskX, maskY;
     private boolean sinking;
     private boolean setUp;
+    private Bitmap waveBitmap;
     private BitmapShader shader;
     private Matrix shaderMatrix;
     private float offsetY;
+    private int lastShaderColor = 0;
+    private int lastShaderHeight = -1;
 
     public TitanicTextView(Context context) {
         super(context);
@@ -58,7 +61,9 @@ public class TitanicTextView extends TextView {
 
     public void setMaskX(float maskX) {
         this.maskX = maskX;
-        invalidate();
+        if (sinking) {
+            invalidate();
+        }
     }
 
     public float getMaskY() {
@@ -67,7 +72,9 @@ public class TitanicTextView extends TextView {
 
     public void setMaskY(float maskY) {
         this.maskY = maskY;
-        invalidate();
+        if (sinking) {
+            invalidate();
+        }
     }
 
     public boolean isSinking() {
@@ -75,7 +82,13 @@ public class TitanicTextView extends TextView {
     }
 
     public void setSinking(boolean sinking) {
-        this.sinking = sinking;
+        if (this.sinking != sinking) {
+            this.sinking = sinking;
+            if (!sinking) {
+                getPaint().setShader(null);
+            }
+            invalidate();
+        }
     }
 
     public boolean isSetUp() {
@@ -98,7 +111,7 @@ public class TitanicTextView extends TextView {
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
         createShader();
-        if (!setUp) {
+        if (w > 0 && h > 0 && !setUp) {
             setUp = true;
             if (animationSetupCallback != null) {
                 animationSetupCallback.onSetupAnimation(TitanicTextView.this);
@@ -106,18 +119,34 @@ public class TitanicTextView extends TextView {
         }
     }
 
+    @Override
+    protected void onDetachedFromWindow() {
+        getPaint().setShader(null);
+        shader = null;
+        if (waveBitmap != null && !waveBitmap.isRecycled()) {
+            waveBitmap.recycle();
+        }
+        waveBitmap = null;
+        lastShaderHeight = -1;
+        super.onDetachedFromWindow();
+    }
+
     private void createShader() {
+        int textColor = getCurrentTextColor();
+        int h = getHeight();
+        offsetY = (h - WAVE_HEIGHT) / 2f;
+
+        if (shader != null && textColor == lastShaderColor && h == lastShaderHeight) {
+            return;
+        }
+
         try {
-            int textColor = getCurrentTextColor();
-            int baseColor = Color.argb(
-                    135,
-                    Color.red(textColor),
-                    Color.green(textColor),
-                    Color.blue(textColor));
+            int troughColor = ModxTheme.withAlpha(textColor, 0x86);
+            Bitmap oldBitmap = waveBitmap;
 
             Bitmap b = Bitmap.createBitmap(WAVE_WIDTH, WAVE_HEIGHT, Bitmap.Config.ARGB_8888);
             Canvas c = new Canvas(b);
-            c.drawColor(baseColor);
+            c.drawColor(troughColor);
 
             Paint wavePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
             wavePaint.setStyle(Paint.Style.FILL);
@@ -125,10 +154,10 @@ public class TitanicTextView extends TextView {
 
             Path path = new Path();
             float midY = WAVE_HEIGHT * 0.50f;
-            float amp = WAVE_HEIGHT * 0.14f;
+            float amp = WAVE_HEIGHT * 0.13f;
             path.moveTo(0f, WAVE_HEIGHT);
             path.lineTo(0f, midY);
-            for (int x = 0; x <= WAVE_WIDTH; x += 4) {
+            for (int x = 0; x <= WAVE_WIDTH; x += 2) {
                 float y = midY + (float) Math.sin((x / (double) WAVE_WIDTH) * 2.0 * Math.PI) * amp;
                 path.lineTo(x, y);
             }
@@ -136,9 +165,19 @@ public class TitanicTextView extends TextView {
             path.close();
             c.drawPath(path, wavePaint);
 
+            waveBitmap = b;
             shader = new BitmapShader(b, Shader.TileMode.REPEAT, Shader.TileMode.CLAMP);
-            getPaint().setShader(shader);
-            offsetY = (getHeight() - WAVE_HEIGHT) / 2f;
+            lastShaderColor = textColor;
+            lastShaderHeight = h;
+
+            if (sinking) {
+                getPaint().setShader(shader);
+            } else {
+                getPaint().setShader(null);
+            }
+            if (oldBitmap != null && oldBitmap != b && !oldBitmap.isRecycled()) {
+                oldBitmap.recycle();
+            }
         } catch (Exception e) {
             getPaint().setShader(null);
         }
@@ -147,12 +186,12 @@ public class TitanicTextView extends TextView {
     @Override
     protected void onDraw(Canvas canvas) {
         if (sinking && shader != null) {
-            if (getPaint().getShader() == null) {
+            if (getPaint().getShader() != shader) {
                 getPaint().setShader(shader);
             }
             shaderMatrix.setTranslate(maskX, maskY + offsetY);
             shader.setLocalMatrix(shaderMatrix);
-        } else {
+        } else if (getPaint().getShader() != null) {
             getPaint().setShader(null);
         }
         super.onDraw(canvas);

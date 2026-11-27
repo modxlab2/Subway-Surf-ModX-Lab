@@ -126,6 +126,18 @@ public final class ModxIcons {
                 .addPath("M9 12 L11 14 L15 10");
     }
 
+    public static SvgIcon check(int color, int sizePx) {
+        return new SvgIcon(24f, color, 2.4f)
+                .setIntrinsicSizePx(sizePx)
+                .addPath("M5.5 12.5 L10 17 L18.5 7.5");
+    }
+
+    public static SvgIcon power(int color, int sizePx) {
+        return icon(color, sizePx)
+                .addPath("M12 2 V12")
+                .addPath("M18.36 6.64 A9 9 0 1 1 5.64 6.64");
+    }
+
     public static SvgIcon circle(int color, int sizePx) {
         return icon(color, sizePx)
                 .addCircle(12f, 12f, 10f);

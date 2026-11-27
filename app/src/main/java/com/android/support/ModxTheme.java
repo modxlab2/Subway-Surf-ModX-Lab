@@ -77,6 +77,31 @@ public final class ModxTheme {
     // Geometry
     public static final float RADIUS_DP     = 6f;
 
+    // Color picker preset palettes (centralized here; zero hardcoded colors in UI classes)
+    public static final int[] MENU_ACCENT_PRESETS = {
+        ACCENT,      // ModX Emerald
+        0xFF22D3EE,  // Cyan
+        0xFF38BDF8,  // Sky Blue
+        0xFF60A5FA,  // Azure
+        0xFF818CF8,  // Indigo
+        0xFFA855F7,  // Electric Purple
+        0xFFEC4899,  // Neon Pink
+        0xFFF43F5E,  // Crimson Rose
+        0xFFFB923C,  // Amber Orange
+        0xFFFACC15,  // Gold
+        0xFFA3E635,  // Lime
+        0xFFE2E8F0   // Silver Frost
+    };
+
+    public static final int[] ESP_COLOR_PRESETS = {
+        ACCENT,     0xFFFF00FF, 0xFF00FFFF, 0xFFFF4D4F,
+        0xFF22C55E, 0xFF38BDF8, 0xFFFACC15, 0xFFFB923C,
+        0xFFEC4899, 0xFFA855F7, FG,         PAGE,
+        0xFFFFD700, 0xFF60A5FA, 0xFFA3E635, 0xFFFF6B35,
+        0xFF22D3EE, 0xFF4ADE80, 0xFFF43F5E, 0xFF818CF8,
+        0xFF2DD4BF, 0xFFFDE047, 0xFFF472B6, 0xFFE2E8F0
+    };
+
     // Typography
     public static final Typeface FONT_REGULAR  = Typeface.create("sans-serif", Typeface.NORMAL);
     public static final Typeface FONT_MEDIUM   = Typeface.create("sans-serif-medium", Typeface.NORMAL);
@@ -369,25 +394,46 @@ public final class ModxTheme {
         return withInteractiveRipple(ctx, states, 0x1AFFFFFF, RADIUS_DP);
     }
 
-    public static Drawable dangerOutlineButtonBg(Context ctx, boolean armed) {
+    public static Drawable ghostButtonBg(Context ctx) {
         float r = dpf(ctx, RADIUS_DP);
         int b = Math.max(1, dp(ctx, 1f));
 
         GradientDrawable normal = new GradientDrawable();
-        normal.setColor(armed ? badgeBg(DANGER) : withAlpha(DANGER, 0x14));
-        normal.setStroke(b, armed ? withAlpha(DANGER, 0xAA) : badgeBorder(DANGER));
+        normal.setColor(Color.TRANSPARENT);
+        normal.setStroke(b, LINE_STRONG);
         normal.setCornerRadius(r);
 
         GradientDrawable pressed = new GradientDrawable();
-        pressed.setColor(badgeBg(DANGER));
-        pressed.setStroke(b, DANGER);
+        pressed.setColor(CARD);
+        pressed.setStroke(b, LINE_HOVER);
         pressed.setCornerRadius(r);
 
         StateListDrawable states = new StateListDrawable();
         states.addState(new int[]{android.R.attr.state_pressed}, pressed);
         states.addState(new int[0], normal);
 
-        return withInteractiveRipple(ctx, states, withAlpha(DANGER, 0x26), RADIUS_DP);
+        return withInteractiveRipple(ctx, states, withAlpha(FG, 0x16), RADIUS_DP);
+    }
+
+    public static Drawable telegramButtonBg(Context ctx) {
+        float r = dpf(ctx, RADIUS_DP);
+        int b = Math.max(1, dp(ctx, 1f));
+
+        GradientDrawable normal = new GradientDrawable();
+        normal.setColor(TELEGRAM);
+        normal.setStroke(b, TELEGRAM_DEEP);
+        normal.setCornerRadius(r);
+
+        GradientDrawable pressed = new GradientDrawable();
+        pressed.setColor(TELEGRAM_DEEP);
+        pressed.setStroke(b, TELEGRAM_DEEP);
+        pressed.setCornerRadius(r);
+
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[]{android.R.attr.state_pressed}, pressed);
+        states.addState(new int[0], normal);
+
+        return withInteractiveRipple(ctx, states, withAlpha(FG, 0x26), RADIUS_DP);
     }
 
     public static Drawable ghostIconBg(Context ctx, int accent) {
@@ -430,5 +476,238 @@ public final class ModxTheme {
 
     public static Drawable transparentBg() {
         return new ColorDrawable(Color.TRANSPARENT);
+    }
+
+    // =========================================================================
+    // Unified Responsive Scale Model & Explicit Size-Class Token Tables
+    // =========================================================================
+    public enum SizeClass {
+        REGULAR, // >= 240dp wide
+        COMPACT, // 190dp .. < 240dp wide
+        MINI     // < 190dp wide
+    }
+
+    public static final class MenuScaleTokens {
+        public final SizeClass sizeClass;
+        public final float scale;
+
+        // Header
+        public final int headerMinHeightPx;
+        public final int headerPadHPx;
+        public final int headerPadVPx;
+        public final float titleSizeSp;
+        public final int titleDotPx;
+        public final boolean subtitleVisible;
+        public final float subtitleSizeSp;
+        public final int gearBoxPx;
+        public final int gearIconPx;
+
+        // Sidebar tabs
+        public final boolean sidebarIconOnly;
+        public final int sidebarWidthPx;
+        public final int tabMinHeightPx;
+        public final int tabPadHPx;
+        public final int tabPadVPx;
+        public final int tabIconPx;
+        public final float tabFontSp;
+        public final int tabIndicatorWpx;
+        public final int tabIndicatorHpx;
+
+        // Mode cards
+        public final int modeCardMinHeightPx;
+        public final int modeCardPadHPx;
+        public final int modeCardPadVPx;
+        public final int modeCheckSizePx;
+        public final int modeCheckIconPx;
+        public final float modeTitleMaxSp;
+        public final float modeTitleMinSp;
+        public final float modeDescSp;
+        public final boolean modeAllowActiveTag;
+
+        // Footer
+        public final boolean footerIconOnly;
+        public final int footerPadStartPx;
+        public final int footerPadVPx;
+        public final int footerPadEndPx;
+        public final int footerBtnHeightPx;
+        public final float footerBtnFontSp;
+        public final int footerBtnIconPx;
+        public final int footerGapPx;
+
+        // Resize grip & snackbar
+        public final int gripTouchPx;
+        public final float snackbarFontSp;
+        public final int snackbarPadHPx;
+        public final int snackbarPadVPx;
+        public final int snackbarBottomMarginPx;
+
+        private MenuScaleTokens(Context ctx, SizeClass sizeClass, float s, float widthDp) {
+            this.sizeClass = sizeClass;
+            this.scale = s;
+
+            int hairPx = Math.max(1, dp(ctx, 1f));
+            int innerWpx = Math.max(1, dp(ctx, widthDp) - hairPx * 2);
+
+            if (sizeClass == SizeClass.MINI) {
+                this.headerMinHeightPx = dp(ctx, 40f);
+                this.headerPadHPx = dp(ctx, 8f);
+                this.headerPadVPx = dp(ctx, 4f);
+                this.titleSizeSp = 13.5f;
+                this.titleDotPx = dp(ctx, 5f);
+                this.subtitleVisible = false;
+                this.subtitleSizeSp = 0f;
+                this.gearBoxPx = dp(ctx, 36f);
+                this.gearIconPx = dp(ctx, 16f);
+
+                this.sidebarIconOnly = true;
+                this.sidebarWidthPx = dp(ctx, 44f);
+                this.tabMinHeightPx = dp(ctx, 36f);
+                this.tabPadHPx = dp(ctx, 4f);
+                this.tabPadVPx = dp(ctx, 6f);
+                this.tabIconPx = dp(ctx, 16f);
+                this.tabFontSp = 10f;
+                this.tabIndicatorWpx = dp(ctx, 2.5f);
+                this.tabIndicatorHpx = dp(ctx, 16f);
+
+                this.modeCardMinHeightPx = dp(ctx, 44f);
+                this.modeCardPadHPx = dp(ctx, 8f);
+                this.modeCardPadVPx = dp(ctx, 8f);
+                this.modeCheckSizePx = dp(ctx, 16f);
+                this.modeCheckIconPx = dp(ctx, 10f);
+                this.modeTitleMaxSp = 12f;
+                this.modeTitleMinSp = 11f;
+                this.modeDescSp = 9.5f;
+                this.modeAllowActiveTag = false;
+
+                this.gripTouchPx = dp(ctx, 32f);
+                this.footerIconOnly = true;
+                this.footerPadStartPx = dp(ctx, 6f);
+                this.footerPadVPx = dp(ctx, 5f);
+                this.footerPadEndPx = this.gripTouchPx + dp(ctx, 4f);
+                this.footerBtnHeightPx = dp(ctx, 36f);
+                this.footerBtnFontSp = 0f;
+                this.footerBtnIconPx = dp(ctx, 16f);
+                this.footerGapPx = dp(ctx, 6f);
+
+                this.snackbarFontSp = 10f;
+                this.snackbarPadHPx = dp(ctx, 10f);
+                this.snackbarPadVPx = dp(ctx, 6f);
+                this.snackbarBottomMarginPx = this.footerBtnHeightPx + this.footerPadVPx * 2 + dp(ctx, 8f);
+            } else if (sizeClass == SizeClass.COMPACT) {
+                this.headerMinHeightPx = Math.max(dp(ctx, 42f), Math.round(dp(ctx, 46f) * s));
+                this.headerPadHPx = dp(ctx, Math.max(8f, 10f * s));
+                this.headerPadVPx = dp(ctx, Math.max(5f, 7f * s));
+                this.titleSizeSp = clamp(16f * s, 13.5f, 16f);
+                this.titleDotPx = dp(ctx, clamp(5.5f * s, 5f, 6f));
+                this.subtitleVisible = true;
+                this.subtitleSizeSp = clamp(10f * s, 8.5f, 10f);
+                this.gearBoxPx = dp(ctx, 36f);
+                this.gearIconPx = dp(ctx, 17f);
+
+                boolean iconOnly = widthDp < 210f;
+                this.sidebarIconOnly = iconOnly;
+                this.sidebarWidthPx = iconOnly
+                        ? dp(ctx, 46f)
+                        : Math.max(dp(ctx, 74f), Math.min(dp(ctx, 90f), Math.round(innerWpx * 0.35f)));
+                this.tabMinHeightPx = dp(ctx, 38f);
+                this.tabPadHPx = dp(ctx, iconOnly ? 4f : 7f);
+                this.tabPadVPx = dp(ctx, 7f);
+                this.tabIconPx = dp(ctx, 16f);
+                this.tabFontSp = clamp(11.5f * s, 10f, 11.5f);
+                this.tabIndicatorWpx = dp(ctx, 2.5f);
+                this.tabIndicatorHpx = dp(ctx, 16f);
+
+                this.modeCardMinHeightPx = dp(ctx, 48f);
+                this.modeCardPadHPx = dp(ctx, 10f);
+                this.modeCardPadVPx = dp(ctx, 8f);
+                this.modeCheckSizePx = dp(ctx, 18f);
+                this.modeCheckIconPx = dp(ctx, 12f);
+                this.modeTitleMaxSp = clamp(13f * s, 11.5f, 13f);
+                this.modeTitleMinSp = 11f;
+                this.modeDescSp = clamp(10.5f * s, 9.5f, 10.5f);
+                this.modeAllowActiveTag = true;
+
+                this.gripTouchPx = dp(ctx, 32f);
+                this.footerIconOnly = false;
+                this.footerPadStartPx = dp(ctx, 7f);
+                this.footerPadVPx = dp(ctx, 6f);
+                this.footerPadEndPx = this.gripTouchPx + dp(ctx, 4f);
+                this.footerBtnHeightPx = dp(ctx, 36f);
+                this.footerBtnFontSp = clamp(11f * s, 9.5f, 11f);
+                this.footerBtnIconPx = dp(ctx, 13f);
+                this.footerGapPx = dp(ctx, 6f);
+
+                this.snackbarFontSp = clamp(11f * s, 10f, 11f);
+                this.snackbarPadHPx = dp(ctx, 10f);
+                this.snackbarPadVPx = dp(ctx, 6f);
+                this.snackbarBottomMarginPx = this.footerBtnHeightPx + this.footerPadVPx * 2 + dp(ctx, 8f);
+            } else {
+                this.headerMinHeightPx = Math.max(dp(ctx, 46f), Math.round(dp(ctx, 54f) * s));
+                this.headerPadHPx = dp(ctx, clamp(12f * s, 10f, 16f));
+                this.headerPadVPx = dp(ctx, clamp(9f * s, 7f, 12f));
+                this.titleSizeSp = clamp(17f * s, 14f, 19.5f);
+                this.titleDotPx = dp(ctx, clamp(6f * s, 5f, 7.5f));
+                this.subtitleVisible = true;
+                this.subtitleSizeSp = clamp(10f * s, 9f, 11.5f);
+                this.gearBoxPx = Math.max(dp(ctx, 38f), Math.round(dp(ctx, 40f) * s));
+                this.gearIconPx = Math.max(dp(ctx, 16f), Math.round(dp(ctx, 19f) * s));
+
+                this.sidebarIconOnly = false;
+                this.sidebarWidthPx = Math.max(dp(ctx, 86f), Math.min(dp(ctx, 136f), Math.round(innerWpx * 0.36f)));
+                this.tabMinHeightPx = Math.max(dp(ctx, 40f), Math.round(dp(ctx, 42f) * s));
+                this.tabPadHPx = dp(ctx, clamp(9f * s, 7f, 12f));
+                this.tabPadVPx = dp(ctx, clamp(8f * s, 6f, 11f));
+                this.tabIconPx = Math.max(dp(ctx, 15f), Math.round(dp(ctx, 18f) * s));
+                this.tabFontSp = clamp(12f * s, 10.5f, 13.5f);
+                this.tabIndicatorWpx = dp(ctx, 3f);
+                this.tabIndicatorHpx = Math.max(dp(ctx, 16f), Math.round(dp(ctx, 18f) * s));
+
+                this.modeCardMinHeightPx = Math.max(dp(ctx, 50f), Math.round(dp(ctx, 56f) * s));
+                this.modeCardPadHPx = dp(ctx, clamp(12f * s, 10f, 16f));
+                this.modeCardPadVPx = dp(ctx, clamp(10f * s, 8f, 12f));
+                this.modeCheckSizePx = Math.max(dp(ctx, 18f), Math.round(dp(ctx, 20f) * s));
+                this.modeCheckIconPx = Math.max(dp(ctx, 11f), Math.round(dp(ctx, 13f) * s));
+                this.modeTitleMaxSp = clamp(13f * s, 11.5f, 14.5f);
+                this.modeTitleMinSp = 11f;
+                this.modeDescSp = clamp(10.5f * s, 9.5f, 12f);
+                this.modeAllowActiveTag = true;
+
+                this.gripTouchPx = dp(ctx, 32f);
+                this.footerIconOnly = false;
+                this.footerPadStartPx = dp(ctx, clamp(8f * s, 6f, 12f));
+                this.footerPadVPx = dp(ctx, clamp(7f * s, 5f, 10f));
+                this.footerPadEndPx = this.gripTouchPx + dp(ctx, 4f);
+                this.footerBtnHeightPx = Math.max(dp(ctx, 36f), Math.round(dp(ctx, 38f) * s));
+                this.footerBtnFontSp = clamp(11f * s, 9.5f, 12.5f);
+                this.footerBtnIconPx = Math.max(dp(ctx, 13f), Math.round(dp(ctx, 14f) * s));
+                this.footerGapPx = dp(ctx, clamp(6f * s, 4f, 8f));
+
+                this.snackbarFontSp = clamp(11f * s, 10f, 12.5f);
+                this.snackbarPadHPx = dp(ctx, clamp(12f * s, 10f, 16f));
+                this.snackbarPadVPx = dp(ctx, clamp(7f * s, 6f, 9f));
+                this.snackbarBottomMarginPx = this.footerBtnHeightPx + this.footerPadVPx * 2 + dp(ctx, 10f);
+            }
+        }
+    }
+
+    public static float clamp(float val, float min, float max) {
+        return Math.max(min, Math.min(max, val));
+    }
+
+    public static SizeClass resolveSizeClass(float widthDp) {
+        if (widthDp < 190f) return SizeClass.MINI;
+        if (widthDp < 240f) return SizeClass.COMPACT;
+        return SizeClass.REGULAR;
+    }
+
+    public static MenuScaleTokens resolveMenuTokens(Context ctx, int widthPx, int heightPx,
+                                                      float designWidthDp, float designHeightDp) {
+        DisplayMetrics dm = metrics(ctx);
+        float dens = dm.density > 0f ? dm.density : 1f;
+        float wDp = (widthPx > 0) ? (widthPx / dens) : designWidthDp;
+        float hDp = (heightPx > 0) ? (heightPx / dens) : designHeightDp;
+        float rawS = Math.min(wDp / Math.max(1f, designWidthDp), hDp / Math.max(1f, designHeightDp));
+        float s = clamp(rawS, 0.62f, 1.15f);
+        return new MenuScaleTokens(ctx, resolveSizeClass(wDp), s, wDp);
     }
 }

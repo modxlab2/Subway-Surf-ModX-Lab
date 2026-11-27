@@ -15,6 +15,7 @@
       --line: #31302E;
       --line-strong: #464541;
       --line-hover: #5A5955;
+      --hairline: rgba(222, 220, 209, 0.09);
       --fg: #FAF9F5;
       --muted: #BAB8AE;
       --subtle: #93918A;
@@ -23,33 +24,49 @@
       --on-accent: #04231B;
       --accent-soft: rgba(32, 201, 151, 0.12);
       --accent-line: rgba(32, 201, 151, 0.32);
+      --success: #22C55E;
       --danger: #F87171;
       --info: #38BDF8;
       --warning: #FBBF24;
       --telegram: #229ED9;
+      --telegram-deep: #1A7EB0;
       --radius: 6px;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      padding: 28px 20px 56px;
+      padding: 20px 14px 48px;
       background: var(--page);
       color: var(--fg);
       font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
-    .page { max-width: 1220px; margin: 0 auto; }
+    .page { max-width: 1280px; margin: 0 auto; }
     .top-bar {
       display: flex;
       flex-wrap: wrap;
       justify-content: space-between;
       align-items: center;
       gap: 12px;
-      padding-bottom: 18px;
+      padding-bottom: 16px;
       border-bottom: 1px solid var(--line);
-      margin-bottom: 24px;
+      margin-bottom: 22px;
     }
-    .top-bar h1 { margin: 0; font-size: 18px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
-    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); display: inline-block; }
+    .top-bar h1 {
+      margin: 0;
+      font-size: 17px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--success);
+      display: inline-block;
+      flex-shrink: 0;
+    }
     .tokens { display: flex; flex-wrap: wrap; gap: 6px; }
     .tok {
       font-size: 11px;
@@ -63,12 +80,18 @@
       gap: 6px;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     }
-    .tok i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; border: 1px solid rgba(255,255,255,0.18); }
+    .tok i {
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+      display: inline-block;
+      border: 1px solid rgba(255,255,255,0.18);
+    }
 
     .screens {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
-      gap: 22px;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
       align-items: start;
     }
     .section-lbl {
@@ -86,301 +109,493 @@
       border: 1px solid var(--line);
       border-radius: var(--radius);
       overflow: hidden;
-      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+      box-shadow: 0 16px 38px rgba(0, 0, 0, 0.48);
+      position: relative;
+      width: 100%;
     }
+    .win.w-regular { max-width: 312px; }
+    .win.w-compact { max-width: 224px; }
+    .win.w-mini    { max-width: 176px; }
+
     .win-header {
       background: var(--surface);
-      padding: 12px 14px;
+      padding: 10px 12px;
       border-bottom: 1px solid var(--line);
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 8px;
+      min-height: 52px;
     }
-    .brand-title { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 7px; }
-    .brand-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
-    .pro-pill {
+    .brand-title {
+      font-size: 16px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      line-height: 1.15;
+    }
+    /* Titanic Wave CSS Animation */
+    @keyframes titanicWave {
+      0%   { background-position: 0% 58%, 0 0; }
+      50%  { background-position: 100% 42%, 0 0; }
+      100% { background-position: 200% 58%, 0 0; }
+    }
+    .titanic-wave {
+      background-image:
+        linear-gradient(
+          115deg,
+          rgba(250, 249, 245, 0.52) 0%,
+          rgba(250, 249, 245, 0.96) 25%,
+          rgba(250, 249, 245, 0.54) 50%,
+          rgba(250, 249, 245, 1) 75%,
+          rgba(250, 249, 245, 0.52) 100%
+        );
+      background-size: 200% 100%;
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      animation: titanicWave 3.2s linear infinite;
+    }
+    .brand-sub {
       font-size: 10px;
+      color: var(--muted);
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .gear-box {
+      width: 38px;
+      height: 38px;
+      border-radius: var(--radius);
+      background: var(--card);
+      border: 1px solid var(--line);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      cursor: pointer;
+    }
+    .gear-box svg {
+      transition: transform 0.26s ease-out;
+    }
+    .gear-box:hover svg {
+      transform: rotate(90deg);
+    }
+
+    /* Login Card */
+    .login-body { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: var(--radius);
+      background: var(--accent-soft);
+      border: 1px solid var(--accent-line);
+      font-size: 11.5px;
+      color: var(--fg);
+    }
+    .field-lbl { font-size: 11px; font-weight: 600; color: var(--muted); margin-bottom: 4px; }
+    .input-box {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--input);
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      padding: 4px 6px 4px 10px;
+      min-height: 42px;
+    }
+    .input-box.focused { border-color: var(--accent); }
+    .input-val { flex: 1; font-size: 12.5px; color: var(--fg); }
+    .paste-btn {
+      width: 34px;
+      height: 34px;
+      border-radius: var(--radius);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+    }
+    .check-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11.5px;
+      color: var(--muted);
+    }
+    .chk {
+      width: 15px;
+      height: 15px;
+      border-radius: 4px;
+      background: var(--accent);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--on-accent);
+      font-weight: 800;
+      font-size: 10px;
+      margin-right: 6px;
+    }
+    .btn-primary {
+      width: 100%;
+      min-height: 42px;
+      border-radius: var(--radius);
+      background: var(--accent);
+      color: var(--on-accent);
+      font-weight: 700;
+      font-size: 12.5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .btn-secondary {
+      width: 100%;
+      min-height: 38px;
+      border-radius: var(--radius);
+      background: var(--raised);
+      border: 1px solid var(--line-strong);
+      color: var(--fg);
+      font-weight: 600;
+      font-size: 11.5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    /* Main Menu Shell */
+    .menu-body { display: grid; grid-template-columns: 92px 1fr; min-height: 330px; }
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--line);
+      padding: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .tab-item {
+      border-radius: var(--radius);
+      padding: 8px 7px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11.5px;
+      color: var(--muted);
+      min-height: 38px;
+    }
+    .tab-ind {
+      width: 3px;
+      height: 16px;
+      border-radius: 2px;
+      background: var(--accent);
+      opacity: 0;
+      transform: scaleY(0.35);
+      flex-shrink: 0;
+    }
+    .tab-item.active {
+      background: var(--accent-soft);
+      border: 1px solid var(--accent-line);
+      color: var(--fg);
+      font-weight: 600;
+    }
+    .tab-item.active .tab-ind {
+      opacity: 1;
+      transform: scaleY(1);
+    }
+
+    .content { padding: 8px 9px; display: flex; flex-direction: column; gap: 7px; }
+    .cat-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--subtle);
+      margin-top: 2px;
+    }
+    .cat-row::after { content: ""; flex: 1; height: 1px; background: var(--hairline); }
+
+    /* Mode Cards (Check-circle + NO Off pill) */
+    .mode-card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 9px 10px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+    .mode-card.active {
+      background: var(--accent-soft);
+      border: 1.5px solid var(--accent-line);
+    }
+    .check-circle {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 1.5px solid var(--muted);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .mode-card.active .check-circle {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .mode-col { flex: 1; min-width: 0; }
+    .mode-title-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .mode-title { font-size: 12.5px; font-weight: 700; color: var(--fg); line-height: 1.25; }
+    .mode-sub {
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 3px;
+      line-height: 1.3;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .mode-card.active .mode-sub { color: var(--fg); }
+    .active-tag {
+      font-size: 9.5px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: var(--radius);
+      background: var(--accent);
+      color: var(--on-accent);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .accordion, .neutral-card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 9px 10px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+    .accordion { justify-content: space-between; font-size: 11.5px; font-weight: 600; color: var(--fg); }
+    .neutral-title { font-size: 12px; font-weight: 700; color: var(--fg); }
+    .neutral-sub { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+    .callout {
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      border-radius: var(--radius);
+      padding: 8px 10px;
+      font-size: 10.5px;
+      color: var(--fg);
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+    }
+
+    /* SeekBar */
+    .seek-card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 9px 10px;
+    }
+    .seek-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
+    .seek-label { font-size: 12px; font-weight: 600; }
+    .seek-chip {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11px;
       font-weight: 700;
       color: var(--accent);
       background: var(--accent-soft);
       border: 1px solid var(--accent-line);
       border-radius: var(--radius);
-      padding: 3px 8px;
-    }
-    .icon-btn {
-      width: 38px; height: 38px;
-      border-radius: var(--radius);
-      background: var(--card);
-      border: 1px solid var(--line);
-      display: inline-flex; align-items: center; justify-content: center;
-      color: var(--accent);
-    }
-
-    /* Login Card */
-    .login-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-    .status-pill {
-      display: flex; align-items: center; gap: 9px;
-      padding: 9px 12px;
-      border-radius: var(--radius);
-      background: var(--accent-soft);
-      border: 1px solid var(--accent-line);
-      font-size: 12px;
-      color: var(--fg);
-    }
-    .field-lbl { font-size: 11px; font-weight: 600; color: var(--muted); margin-bottom: 5px; }
-    .input-box {
-      display: flex; align-items: center; gap: 8px;
-      background: var(--input);
-      border: 1px solid var(--line-strong);
-      border-radius: var(--radius);
-      padding: 4px 6px 4px 10px;
-      min-height: 44px;
-    }
-    .input-box.focused { border-color: var(--accent); }
-    .input-val { flex: 1; font-size: 13px; color: var(--fg); }
-    .paste-btn {
-      width: 38px; height: 38px;
-      border-radius: var(--radius);
-      display: flex; align-items: center; justify-content: center;
-      color: var(--muted);
-    }
-    .check-row { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--muted); }
-    .chk { width: 16px; height: 16px; border-radius: 4px; background: var(--accent); display: inline-flex; align-items: center; justify-content: center; color: var(--on-accent); font-weight: 800; font-size: 11px; margin-right: 7px; }
-    .btn-primary {
-      width: 100%; min-height: 44px;
-      border-radius: var(--radius);
-      border: none;
-      background: var(--accent);
-      color: var(--on-accent);
-      font-weight: 700; font-size: 13px;
-      display: flex; align-items: center; justify-content: center;
-    }
-    .btn-secondary {
-      width: 100%; min-height: 40px;
-      border-radius: var(--radius);
-      background: var(--raised);
-      border: 1px solid var(--line-strong);
-      color: var(--fg);
-      font-weight: 600; font-size: 12px;
-      display: flex; align-items: center; justify-content: center; gap: 6px;
-    }
-
-    /* Main Menu Shell */
-    .menu-body { display: grid; grid-template-columns: 92px 1fr; min-height: 365px; }
-    .sidebar {
-      background: var(--surface);
-      border-right: 1px solid var(--line);
-      padding: 8px 6px;
-      display: flex; flex-direction: column; gap: 4px;
-    }
-    .tab-item {
-      border-radius: var(--radius);
-      padding: 8px 6px;
-      display: flex; align-items: center; gap: 7px;
-      font-size: 11px; color: var(--muted);
-    }
-    .tab-item.active {
-      background: var(--card);
-      color: var(--fg);
-      border-left: 2.5px solid var(--accent);
-      font-weight: 600;
-    }
-    .content { padding: 10px 11px; display: flex; flex-direction: column; gap: 8px; }
-    .cat-row {
-      display: flex; align-items: center; gap: 8px;
-      font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
-      color: var(--subtle);
-      margin-top: 2px;
-    }
-    .cat-row::after { content: ""; flex: 1; height: 1px; background: rgba(222,220,209,0.09); }
-    .mode-card {
-      background: var(--card);
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      padding: 9px 11px;
-      display: flex; align-items: center; justify-content: space-between; gap: 8px;
-    }
-    .mode-card.active {
-      background: var(--accent-soft);
-      border-color: var(--accent-line);
-    }
-    .mode-title { font-size: 12.5px; font-weight: 600; }
-    .mode-sub { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
-    .badge {
-      font-size: 10px; font-weight: 700;
       padding: 2px 8px;
-      border-radius: var(--radius);
-      border: 1px solid var(--line-strong);
-      color: var(--subtle);
-      background: var(--raised);
     }
-    .badge.on {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: var(--on-accent);
-    }
-    .accordion {
-      background: var(--card);
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      padding: 9px 11px;
-      display: flex; align-items: center; justify-content: space-between;
-      font-size: 12px; font-weight: 600; color: var(--fg);
-    }
-    .danger-card {
-      background: rgba(248, 113, 113, 0.08);
-      border: 1px solid rgba(248, 113, 113, 0.35);
-      border-radius: var(--radius);
-      padding: 9px 11px;
-      display: flex; align-items: center; justify-content: space-between;
-      font-size: 12px; font-weight: 600; color: var(--danger);
-    }
-    .callout {
-      background: rgba(56, 189, 248, 0.09);
-      border: 1px solid rgba(56, 189, 248, 0.32);
-      border-left: 3px solid var(--info);
-      border-radius: var(--radius);
-      padding: 8px 10px;
-      font-size: 11px;
-      color: var(--fg);
+    .track { height: 4px; border-radius: 2px; background: var(--raised); position: relative; }
+    .track-fill { width: 58%; height: 100%; border-radius: 2px; background: var(--accent); }
+    .thumb {
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      background: var(--fg);
+      border: 2px solid var(--accent);
+      position: absolute;
+      top: -5.5px;
+      left: 56%;
     }
 
-    /* SeekBar without clipping */
-    .seek-card {
+    /* Settings Rows */
+    .setting-row {
       background: var(--card);
       border: 1px solid var(--line);
       border-radius: var(--radius);
-      padding: 10px 11px;
+      padding: 9px 11px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
     }
-    .seek-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
-    .seek-label { font-size: 12.5px; font-weight: 600; }
-    .seek-chip {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 11px; font-weight: 700;
-      color: var(--accent);
-      background: var(--accent-soft);
-      border: 1px solid var(--accent-line);
-      border-radius: var(--radius);
-      padding: 3px 9px;
-      white-space: nowrap;
+    .setting-row.on { border-color: var(--accent-line); }
+    .setting-title { font-size: 12px; font-weight: 600; color: var(--fg); line-height: 1.25; }
+    .setting-sub { font-size: 10px; color: var(--muted); margin-top: 3px; line-height: 1.3; }
+    .setting-hex { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; font-weight: 700; color: var(--muted); margin-top: 3px; }
+    .toggle-pill {
+      width: 38px;
+      height: 21px;
+      border-radius: 11px;
+      background: var(--accent);
+      position: relative;
       flex-shrink: 0;
     }
-    .track { height: 5px; border-radius: 3px; background: var(--line); position: relative; }
-    .track-fill { width: 42%; height: 100%; border-radius: 3px; background: var(--accent); }
-    .thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--fg); border: 2px solid var(--accent); position: absolute; top: -5.5px; left: 40%; }
-
-    /* Settings Swatch Row & Footer */
-    .swatch-row {
-      background: var(--card);
-      border: 1px solid var(--line);
+    .toggle-knob {
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      background: var(--on-accent);
+      position: absolute;
+      top: 3px;
+      right: 3px;
+    }
+    .swatch-28 {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: 1.5px solid var(--line-strong);
+      flex-shrink: 0;
+    }
+    .ghost-btn {
+      background: transparent;
+      border: 1px solid var(--line-strong);
       border-radius: var(--radius);
-      padding: 9px 11px;
-      display: flex; align-items: center; justify-content: space-between;
+      min-height: 40px;
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--fg);
     }
-    .swatch-right { display: flex; align-items: center; gap: 8px; }
-    .hex-badge {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 11px; color: var(--fg);
-      background: var(--input); border: 1px solid var(--line-strong);
-      border-radius: var(--radius); padding: 3px 7px;
-    }
-    .color-dot { width: 18px; height: 18px; border-radius: 50%; background: var(--accent); border: 1.5px solid var(--fg); }
     .tg-btn {
-      background: rgba(34, 158, 217, 0.14);
-      border: 1px solid rgba(34, 158, 217, 0.42);
+      background: var(--telegram);
+      border: 1px solid var(--telegram-deep);
       border-radius: var(--radius);
-      padding: 9px 12px;
-      display: flex; align-items: center; justify-content: center; gap: 8px;
-      color: var(--fg); font-size: 12px; font-weight: 600;
+      min-height: 42px;
+      padding: 8px 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      color: var(--fg);
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
     }
+
+    /* Footer + Resize Grip (3-dot triangle) */
     .win-footer {
       background: var(--surface);
       border-top: 1px solid var(--line);
-      padding: 8px 10px;
-      display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
-    }
-    .f-danger {
-      min-height: 36px; border-radius: var(--radius);
-      background: rgba(248, 113, 113, 0.08); border: 1px solid rgba(248, 113, 113, 0.35);
-      color: var(--danger); font-size: 11px; font-weight: 700;
-      display: flex; align-items: center; justify-content: center;
-    }
-    .f-min {
-      min-height: 36px; border-radius: var(--radius);
-      background: var(--raised); border: 1px solid var(--line-strong);
-      color: var(--fg); font-size: 11px; font-weight: 600;
-      display: flex; align-items: center; justify-content: center;
-    }
-
-    /* Color Palette Dialog Mock */
-    .palette-card {
-      background: var(--card);
-      border: 1px solid var(--accent-line);
-      border-radius: var(--radius);
-      padding: 14px;
-      display: flex; flex-direction: column; gap: 10px;
-    }
-    .preview-banner {
-      background: var(--accent);
-      color: var(--on-accent);
-      border-radius: var(--radius);
-      padding: 10px 12px;
-      display: flex; align-items: center; justify-content: space-between;
-    }
-    .orig-chip {
-      background: rgba(14,14,13,0.8); color: var(--fg);
-      border: 1px solid rgba(250,249,245,0.28);
-      border-radius: var(--radius); padding: 4px 8px; font-size: 10.5px;
-      display: inline-flex; align-items: center; gap: 5px;
-    }
-    .wheel-mock {
-      width: 128px; height: 128px; margin: 2px auto;
-      border-radius: 50%;
-      background: conic-gradient(#ff3b30,#ffcc00,#34c759,#20c997,#00c7be,#007aff,#af52de,#ff2d55,#ff3b30);
-      display: flex; align-items: center; justify-content: center;
+      padding: 7px 34px 7px 8px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
       position: relative;
     }
-    .wheel-inner {
-      width: 78px; height: 78px; border-radius: 50%;
-      background: var(--card);
-      display: flex; align-items: center; justify-content: center;
-    }
-    .wheel-center { width: 52px; height: 52px; border-radius: 50%; background: var(--accent); border: 1.5px solid rgba(250,249,245,0.35); }
-    .sv-mock {
-      height: 68px; border-radius: var(--radius);
+    .f-btn {
+      min-height: 36px;
+      border-radius: var(--radius);
+      background: var(--raised);
       border: 1px solid var(--line-strong);
-      background: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, var(--accent));
+      color: var(--fg);
+      font-size: 10.5px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      padding: 0 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      position: relative;
     }
-    .preset-dots { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; justify-items: center; }
-    .preset-dot { width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--line-strong); }
-    .preset-dot.sel { border: 2px solid var(--fg); }
+    .f-progress {
+      position: absolute;
+      left: 3px;
+      bottom: 1px;
+      width: 45%;
+      height: 2px;
+      background: var(--accent);
+      border-radius: 1px;
+    }
+    .resize-grip {
+      position: absolute;
+      right: 6px;
+      bottom: 6px;
+      width: 14px;
+      height: 14px;
+      opacity: 0.65;
+    }
+
+    /* Compact & Mini overrides */
+    .w-compact .win-header { padding: 8px 9px; min-height: 44px; }
+    .w-compact .brand-title { font-size: 14px; }
+    .w-compact .gear-box { width: 36px; height: 36px; }
+    .w-compact .menu-body { grid-template-columns: 76px 1fr; min-height: 290px; }
+    .w-compact .tab-item { padding: 6px 5px; font-size: 10.5px; }
+    .w-compact .f-btn { font-size: 9.5px; }
+
+    .w-mini .win-header { padding: 6px 8px; min-height: 40px; }
+    .w-mini .brand-title { font-size: 13.5px; }
+    .w-mini .brand-sub { display: none; }
+    .w-mini .gear-box { width: 34px; height: 34px; }
+    .w-mini .menu-body { grid-template-columns: 44px 1fr; min-height: 250px; }
+    .w-mini .tab-item { justify-content: center; padding: 6px 4px; }
+    .w-mini .tab-lbl { display: none; }
+    .w-mini .mode-card { padding: 7px 8px; gap: 7px; }
+    .w-mini .check-circle { width: 16px; height: 16px; }
+    .w-mini .mode-title { font-size: 11px; }
+    .w-mini .mode-sub { font-size: 9.5px; }
+    .w-mini .active-tag { display: none; }
+    .w-mini .win-footer { padding: 5px 32px 5px 6px; }
+    .w-mini .f-lbl { display: none; }
   </style>
 </head>
 <body>
 <div class="page">
   <div class="top-bar">
-    <h1><span class="dot"></span>ModX Lab — Android UI Design System</h1>
+    <h1><span class="dot"></span>ModX Lab — Android Menu Design System</h1>
     <div class="tokens">
       <span class="tok"><i style="background:#131312"></i>page #131312</span>
       <span class="tok"><i style="background:#0E0E0D"></i>surface #0E0E0D</span>
       <span class="tok"><i style="background:#222220"></i>card #222220</span>
+      <span class="tok"><i style="background:#2F2F2D"></i>raised #2F2F2D</span>
       <span class="tok"><i style="background:#31302E"></i>line #31302E</span>
       <span class="tok"><i style="background:#20C997"></i>accent #20C997</span>
-      <span class="tok"><i style="background:#FAF9F5"></i>fg #FAF9F5</span>
     </div>
   </div>
 
   <div class="screens">
     <!-- 1. Login Card -->
     <div>
-      <p class="section-lbl">1 · Login Card (LoginHelper.java)</p>
-      <div class="win">
+      <p class="section-lbl">1 · Login Card (LoginHelper)</p>
+      <div class="win w-regular">
         <div class="win-header">
-          <div>
-            <div class="brand-title"><span class="dot"></span>ModX Lab</div>
+          <div style="min-width:0;flex:1">
+            <div class="brand-title"><span class="titanic-wave">ModX Lab</span><span class="dot"></span></div>
             <div class="brand-sub">Sign in to unlock your session</div>
           </div>
-          <span class="pro-pill">PRO</span>
+          <span class="gear-box" title="Settings">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#20C997" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </span>
         </div>
         <div class="login-body">
           <div class="status-pill">Ready — enter your username &amp; password</div>
@@ -388,137 +603,306 @@
             <div class="field-lbl">Username</div>
             <div class="input-box focused">
               <span class="input-val">player_modx</span>
-              <span class="paste-btn" title="Paste">📋</span>
+              <span class="paste-btn">📋</span>
             </div>
           </div>
           <div>
             <div class="field-lbl">Password</div>
             <div class="input-box">
               <span class="input-val">••••••••••••</span>
-              <span class="paste-btn" title="Paste">📋</span>
+              <span class="paste-btn">📋</span>
             </div>
           </div>
           <div class="check-row">
             <span><span class="chk">✓</span>Remember me</span>
             <span style="color:var(--subtle)">Online verified</span>
           </div>
-          <div class="btn-primary">Sign in</div>
+          <div class="btn-primary">SIGN IN</div>
           <div class="btn-secondary">Check for Updates</div>
+        </div>
+        <div class="win-footer">
+          <div class="f-btn"><span class="f-lbl">HIDE/KILL (Hold)</span></div>
+          <div class="f-btn"><span class="f-lbl">MINIMIZE</span></div>
+          <svg class="resize-grip" viewBox="0 0 14 14"><circle cx="11" cy="11" r="1.4" fill="#93918A"/><circle cx="6" cy="11" r="1.4" fill="#93918A"/><circle cx="11" cy="6" r="1.4" fill="#93918A"/></svg>
         </div>
       </div>
     </div>
 
-    <!-- 2. Main Tab -->
+    <!-- 2. Main Tab (Regular >= 240dp) -->
     <div>
-      <p class="section-lbl">2 · Main Tab (Mode Cards + Collapsed Accordion)</p>
-      <div class="win">
+      <p class="section-lbl">2 · Main Tab (Regular &ge; 240dp)</p>
+      <div class="win w-regular">
         <div class="win-header">
-          <div>
-            <div class="brand-title"><span class="dot"></span>ModX Lab <span class="pro-pill">PRO</span></div>
-            <div class="brand-sub">Account · Active</div>
+          <div style="min-width:0;flex:1">
+            <div class="brand-title"><span class="titanic-wave">ModX Lab</span><span class="dot"></span></div>
+            <div class="brand-sub">player_modx · Active</div>
           </div>
-          <span class="icon-btn">⚙</span>
+          <span class="gear-box">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#20C997" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </span>
         </div>
         <div class="menu-body">
           <div class="sidebar">
-            <div class="tab-item active">Main</div>
-            <div class="tab-item">Shop</div>
-            <div class="tab-item">Safety</div>
-            <div class="tab-item">Player</div>
-            <div class="tab-item">Power</div>
-            <div class="tab-item">Settings</div>
+            <div class="tab-item active"><span class="tab-ind"></span><span class="tab-lbl">Main</span></div>
+            <div class="tab-item"><span class="tab-ind"></span><span class="tab-lbl">Shop</span></div>
+            <div class="tab-item"><span class="tab-ind"></span><span class="tab-lbl">Safety</span></div>
+            <div class="tab-item"><span class="tab-ind"></span><span class="tab-lbl">Player</span></div>
+            <div class="tab-item"><span class="tab-ind"></span><span class="tab-lbl">Power</span></div>
+            <div class="tab-item"><span class="tab-ind"></span><span class="tab-lbl">Settings</span></div>
           </div>
           <div class="content">
             <div class="cat-row">Quick Modes</div>
             <div class="mode-card">
-              <div>
-                <div class="mode-title">Simple Mode</div>
-                <div class="mode-sub">Safe balanced preset</div>
+              <span class="check-circle"></span>
+              <div class="mode-col">
+                <div class="mode-title-row"><span class="mode-title">Simple Mode</span></div>
+                <div class="mode-sub">Auto Revive · Unlimited Coins &amp; Shop · Jump 35</div>
               </div>
-              <span class="badge">Off</span>
             </div>
             <div class="mode-card active">
-              <div>
-                <div class="mode-title">Max Mode</div>
-                <div class="mode-sub">High-score + auto magnet</div>
+              <span class="check-circle">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#04231B" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              </span>
+              <div class="mode-col">
+                <div class="mode-title-row">
+                  <span class="mode-title">Max Mode</span>
+                  <span class="active-tag">Active</span>
+                </div>
+                <div class="mode-sub">Simple + God Mode · Max Jump · Powerup · Fast Lane</div>
               </div>
-              <span class="badge on">Active</span>
             </div>
             <div class="mode-card">
-              <div>
-                <div class="mode-title">Ultra Max Mode</div>
-                <div class="mode-sub">Full power + max multipliers</div>
+              <span class="check-circle"></span>
+              <div class="mode-col">
+                <div class="mode-title-row"><span class="mode-title">Ultra Max Mode</span></div>
+                <div class="mode-sub">Max + Chams · Low Gravity · Follow Cam · Wall Hack</div>
               </div>
-              <span class="badge">Off</span>
             </div>
-            <div class="accordion">
-              <span>What do the modes do?</span>
-              <span style="color:var(--muted)">▾</span>
-            </div>
-            <div class="danger-card">
-              <span>Reset All Features</span>
-              <span style="font-size:10px;opacity:.85">Tap to reset</span>
+            <div class="accordion"><span>What do the modes do?</span><span style="color:var(--muted)">▾</span></div>
+            <div class="neutral-card">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#BAB8AE" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15.74-6.26L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.74 6.26L3 16"/><path d="M8 16H3v5"/></svg>
+              <div>
+                <div class="neutral-title">Reset All Features</div>
+                <div class="neutral-sub">Restores every toggle, slider &amp; preset</div>
+              </div>
             </div>
           </div>
         </div>
         <div class="win-footer">
-          <div class="f-danger">HIDE / HOLD KILL</div>
-          <div class="f-min">Minimize</div>
+          <div class="f-btn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#BAB8AE" stroke-width="1.9"><path d="M12 2v10"/><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/></svg>
+            <span class="f-lbl">HIDE/KILL (Hold)</span>
+            <span class="f-progress"></span>
+          </div>
+          <div class="f-btn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#BAB8AE" stroke-width="1.9"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>
+            <span class="f-lbl">MINIMIZE</span>
+          </div>
+          <svg class="resize-grip" viewBox="0 0 14 14"><circle cx="11" cy="11" r="1.4" fill="#93918A"/><circle cx="6" cy="11" r="1.4" fill="#93918A"/><circle cx="11" cy="6" r="1.4" fill="#93918A"/></svg>
         </div>
       </div>
     </div>
 
-    <!-- 3. Shop & Settings + Color Palette -->
+    <!-- 3. Shop Tab -->
     <div>
-      <p class="section-lbl">3 · SeekBars, Settings Swatches &amp; Palette</p>
-      <div class="win" style="margin-bottom:16px">
-        <div class="content">
-          <div class="cat-row">Shop (No Clipping SeekBar)</div>
-          <div class="seek-card">
-            <div class="seek-head">
-              <span class="seek-label">Extra Coins</span>
-              <span class="seek-chip">Extra Coins [250]</span>
-            </div>
-            <div class="track"><div class="track-fill"></div><div class="thumb"></div></div>
+      <p class="section-lbl">3 · Shop Tab (SeekBars &amp; Callout)</p>
+      <div class="win w-regular">
+        <div class="win-header">
+          <div style="min-width:0;flex:1">
+            <div class="brand-title"><span class="titanic-wave">ModX Lab</span><span class="dot"></span></div>
+            <div class="brand-sub">player_modx · Active</div>
           </div>
-          <div class="callout">Enable Wall Hack before game starts for clean collision bypass.</div>
-          <div class="cat-row">Settings</div>
-          <div class="swatch-row">
-            <span style="font-size:12.5px;font-weight:600">Menu Color</span>
-            <div class="swatch-right">
-              <span class="hex-badge">#20C997</span>
-              <span class="color-dot"></span>
-            </div>
+          <span class="gear-box">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#20C997" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </span>
+        </div>
+        <div class="menu-body">
+          <div class="sidebar">
+            <div class="tab-item"><span class="tab-ind"></span><span class="tab-lbl">Main</span></div>
+            <div class="tab-item active"><span class="tab-ind"></span><span class="tab-lbl">Shop</span></div>
+            <div class="tab-item"><span class="tab-ind"></span><span class="tab-lbl">Safety</span></div>
+            <div class="tab-item"><span class="tab-ind"></span><span class="tab-lbl">Player</span></div>
+            <div class="tab-item"><span class="tab-ind"></span><span class="tab-lbl">Settings</span></div>
           </div>
-          <div class="tg-btn">Join Official Telegram</div>
+          <div class="content">
+            <div class="cat-row">Currency &amp; Boosts</div>
+            <div class="setting-row on">
+              <div><div class="setting-title">Free Shopping</div></div>
+              <span class="toggle-pill"><span class="toggle-knob"></span></span>
+            </div>
+            <div class="seek-card">
+              <div class="seek-head">
+                <span class="seek-label">Extra Coins</span>
+                <span class="seek-chip">9999</span>
+              </div>
+              <div class="track"><div class="track-fill"></div><div class="thumb"></div></div>
+            </div>
+            <div class="seek-card">
+              <div class="seek-head">
+                <span class="seek-label">Jump Height</span>
+                <span class="seek-chip">35</span>
+              </div>
+              <div class="track"><div class="track-fill" style="width:28%"></div><div class="thumb" style="left:26%"></div></div>
+            </div>
+            <div class="callout">Tap chip to type an exact value; long-press chip to reset.</div>
+          </div>
+        </div>
+        <div class="win-footer">
+          <div class="f-btn"><span class="f-lbl">HIDE/KILL (Hold)</span></div>
+          <div class="f-btn"><span class="f-lbl">MINIMIZE</span></div>
+          <svg class="resize-grip" viewBox="0 0 14 14"><circle cx="11" cy="11" r="1.4" fill="#93918A"/><circle cx="6" cy="11" r="1.4" fill="#93918A"/><circle cx="11" cy="6" r="1.4" fill="#93918A"/></svg>
         </div>
       </div>
+    </div>
 
-      <div class="palette-card">
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <span style="font-size:14px;font-weight:700;display:flex;align-items:center;gap:8px"><span class="dot"></span>Menu Color Palette</span>
-          <span class="tok" style="color:var(--fg)">Reset</span>
-        </div>
-        <div class="preview-banner">
-          <div>
-            <div style="font-family:monospace;font-weight:700;font-size:14px">#20C997</div>
-            <div style="font-size:10px;opacity:.82">Live Preview</div>
+    <!-- 4. Settings Tab -->
+    <div>
+      <p class="section-lbl">4 · Settings Tab (Vertical Rows &amp; Ghost Reset)</p>
+      <div class="win w-regular">
+        <div class="win-header">
+          <div style="min-width:0;flex:1">
+            <div class="brand-title"><span class="titanic-wave">ModX Lab</span><span class="dot"></span></div>
+            <div class="brand-sub">player_modx · Active</div>
           </div>
-          <span class="orig-chip"><i style="width:10px;height:10px;border-radius:50%;background:#20C997;display:inline-block;border:1px solid #fff"></i>Orig</span>
+          <span class="gear-box">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#20C997" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </span>
         </div>
-        <div class="wheel-mock"><div class="wheel-inner"><div class="wheel-center"></div></div></div>
-        <div class="sv-mock"></div>
-        <div class="preset-dots">
-          <span class="preset-dot sel" style="background:#20C997"></span>
-          <span class="preset-dot" style="background:#22D3EE"></span>
-          <span class="preset-dot" style="background:#38BDF8"></span>
-          <span class="preset-dot" style="background:#818CF8"></span>
-          <span class="preset-dot" style="background:#A855F7"></span>
-          <span class="preset-dot" style="background:#F43F5E"></span>
+        <div class="menu-body">
+          <div class="sidebar">
+            <div class="tab-item"><span class="tab-ind"></span><span class="tab-lbl">Main</span></div>
+            <div class="tab-item"><span class="tab-ind"></span><span class="tab-lbl">Shop</span></div>
+            <div class="tab-item active"><span class="tab-ind"></span><span class="tab-lbl">Settings</span></div>
+          </div>
+          <div class="content">
+            <div class="setting-row on">
+              <div>
+                <div class="setting-title">Save features preference</div>
+                <div class="setting-sub">Remember toggles, sliders &amp; theme across restarts</div>
+              </div>
+              <span class="toggle-pill"><span class="toggle-knob"></span></span>
+            </div>
+            <div class="cat-row">Menu Color Theme</div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-title">Menu color</div>
+                <div class="setting-hex">#20C997</div>
+              </div>
+              <span class="swatch-28"></span>
+            </div>
+            <div class="ghost-btn">Reset color</div>
+            <div class="cat-row">Window</div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-title">Reset size</div>
+                <div class="setting-sub">Restore default window width &amp; height</div>
+              </div>
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#20C997" stroke-width="1.75"><path d="M3 12a9 9 0 0 1 15.74-6.26L21 8"/><path d="M21 3v5h-5"/></svg>
+            </div>
+            <div class="cat-row">Community</div>
+            <div class="tg-btn">Join our Telegram</div>
+          </div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px">
-          <div class="btn-secondary">Cancel</div>
-          <div class="btn-primary">Apply</div>
+        <div class="win-footer">
+          <div class="f-btn"><span class="f-lbl">HIDE/KILL (Hold)</span></div>
+          <div class="f-btn"><span class="f-lbl">MINIMIZE</span></div>
+          <svg class="resize-grip" viewBox="0 0 14 14"><circle cx="11" cy="11" r="1.4" fill="#93918A"/><circle cx="6" cy="11" r="1.4" fill="#93918A"/><circle cx="11" cy="6" r="1.4" fill="#93918A"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- 5. Compact (190-240dp) -->
+    <div>
+      <p class="section-lbl">5 · Compact (190–240dp)</p>
+      <div class="win w-compact">
+        <div class="win-header">
+          <div style="min-width:0;flex:1">
+            <div class="brand-title"><span>ModX Lab</span><span class="dot"></span></div>
+            <div class="brand-sub">player_modx · Active</div>
+          </div>
+          <span class="gear-box">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#20C997" stroke-width="1.75"><circle cx="12" cy="12" r="3"/></svg>
+          </span>
+        </div>
+        <div class="menu-body">
+          <div class="sidebar">
+            <div class="tab-item active"><span class="tab-ind"></span><span class="tab-lbl">Main</span></div>
+            <div class="tab-item"><span class="tab-ind"></span><span class="tab-lbl">Shop</span></div>
+            <div class="tab-item"><span class="tab-ind"></span><span class="tab-lbl">Settings</span></div>
+          </div>
+          <div class="content">
+            <div class="mode-card active">
+              <span class="check-circle">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#04231B" stroke-width="2.6"><polyline points="20 6 9 17 4 12"/></svg>
+              </span>
+              <div class="mode-col">
+                <div class="mode-title-row"><span class="mode-title">Ultra Max Mode</span></div>
+                <div class="mode-sub">Max + Chams · Low Gravity</div>
+              </div>
+            </div>
+            <div class="mode-card">
+              <span class="check-circle"></span>
+              <div class="mode-col">
+                <div class="mode-title-row"><span class="mode-title">Simple Mode</span></div>
+                <div class="mode-sub">Auto Revive · Unlimited Coins</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="win-footer">
+          <div class="f-btn"><span class="f-lbl">HIDE/KILL</span></div>
+          <div class="f-btn"><span class="f-lbl">MINIMIZE</span></div>
+          <svg class="resize-grip" viewBox="0 0 14 14"><circle cx="11" cy="11" r="1.4" fill="#93918A"/><circle cx="6" cy="11" r="1.4" fill="#93918A"/><circle cx="11" cy="6" r="1.4" fill="#93918A"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- 6. Mini (< 190dp) -->
+    <div>
+      <p class="section-lbl">6 · Mini (&lt; 190dp · 1-row header + icons)</p>
+      <div class="win w-mini">
+        <div class="win-header">
+          <div style="min-width:0;flex:1">
+            <div class="brand-title"><span>ModX Lab</span><span class="dot"></span></div>
+            <div class="brand-sub">Hidden in Mini</div>
+          </div>
+          <span class="gear-box">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#20C997" stroke-width="1.75"><circle cx="12" cy="12" r="3"/></svg>
+          </span>
+        </div>
+        <div class="menu-body">
+          <div class="sidebar">
+            <div class="tab-item active"><span class="tab-ind"></span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#20C997" stroke-width="1.75"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>
+            <div class="tab-item"><span class="tab-ind"></span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#BAB8AE" stroke-width="1.75"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/></svg></div>
+            <div class="tab-item"><span class="tab-ind"></span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#BAB8AE" stroke-width="1.75"><circle cx="12" cy="12" r="3"/></svg></div>
+          </div>
+          <div class="content">
+            <div class="mode-card active">
+              <span class="check-circle">
+                <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#04231B" stroke-width="2.6"><polyline points="20 6 9 17 4 12"/></svg>
+              </span>
+              <div class="mode-col">
+                <div class="mode-title-row"><span class="mode-title">Max Mode</span></div>
+                <div class="mode-sub">Simple + God Mode</div>
+              </div>
+            </div>
+            <div class="mode-card">
+              <span class="check-circle"></span>
+              <div class="mode-col">
+                <div class="mode-title-row"><span class="mode-title">Simple Mode</span></div>
+                <div class="mode-sub">Auto Revive · Coins</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="win-footer">
+          <div class="f-btn" title="Hide or Hold to Kill">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#BAB8AE" stroke-width="1.9"><path d="M12 2v10"/><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/></svg>
+          </div>
+          <div class="f-btn" title="Minimize">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#BAB8AE" stroke-width="1.9"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>
+          </div>
+          <svg class="resize-grip" viewBox="0 0 14 14"><circle cx="11" cy="11" r="1.4" fill="#93918A"/><circle cx="6" cy="11" r="1.4" fill="#93918A"/><circle cx="11" cy="6" r="1.4" fill="#93918A"/></svg>
         </div>
       </div>
     </div>
