@@ -20,7 +20,6 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.ColorFilter;
 import android.graphics.LinearGradient;
-import android.graphics.Matrix;
 import android.graphics.Outline;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -33,7 +32,6 @@ import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
-import android.graphics.drawable.LayerDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -41,7 +39,6 @@ import android.text.Editable;
 import android.text.Html;
 import android.text.InputFilter;
 import android.text.InputType;
-import android.widget.PopupWindow;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.text.method.DigitsKeyListener;
@@ -61,11 +58,8 @@ import android.view.ViewOutlineProvider;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.animation.AccelerateInterpolator;
-import android.view.animation.AlphaAnimation;
-import android.view.animation.Animation;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.LinearInterpolator;
-import android.view.animation.OvershootInterpolator;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.RenderProcessGoneDetail;
@@ -86,7 +80,6 @@ import android.widget.RadioGroup;
 import android.widget.RelativeLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
-import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.view.ViewParent;
@@ -531,6 +524,12 @@ public class Menu {
     private View mBottomDivider = null;
     private LinearLayout mBottomBar = null;
     private TeleportPadView mMenuTeleportPad = null;
+    private final HashMap<Integer, String> mFeatureNamesByNum = new HashMap<Integer, String>();
+    private final HashMap<Integer, String[]> mSpinnerOptionsByNum = new HashMap<Integer, String[]>();
+    private final ArrayList<TextView> mInfoCardAccentViews = new ArrayList<TextView>();
+    private LinearLayout mModeDetailsBodyWrap = null;
+    private String mPendingWallHackNote = null;
+    private String mPendingPlayerTip = null;
     private AlertDialog activeColorPickerDialog = null;
     private final ArrayList<AlertDialog> activeDialogs = new ArrayList<AlertDialog>();
 
@@ -564,8 +563,9 @@ private String activeSessionUser = "";
 private String activeSessionDeviceId = "";
 private boolean sessionReverifyInFlight = false;
 private Runnable sessionReverifyRunnable = null;
-    private static final HashMap<Integer, Integer> SEEK_DEFAULTS = new HashMap<Integer, Integer>();
-    // (empty — no defaults needed for current features)
+private int lastRootScreenW = -1;
+private int lastRootScreenH = -1;
+private android.view.ViewTreeObserver.OnGlobalLayoutListener rootGlobalLayoutListener = null;
     
     native void Init(Context context, TextView title, TextView subTitle);
     native String Icon();
@@ -659,6 +659,7 @@ Preferences.init(context);
                         menuFrame.post(new Runnable() {
                                 @Override
                                 public void run() {
+                                    if (stopChecking || instance == null || menuFrame == null) return;
                                     applyResponsiveScale(menuFrame.getWidth(), menuFrame.getHeight());
                                 }
                             });
@@ -919,7 +920,7 @@ Preferences.init(context);
         hideBtn.setFocusable(true);
         hideBtn.setContentDescription("Hide or hold to kill menu");
         hideBtn.setLayoutParams(new FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
-        hideBtn.setBackground(ModxTheme.secondaryButtonBg(context));
+        hideBtn.setBackground(ModxTheme.cardButtonBg(context));
         hideBtn.setPadding(dp(8), 0, dp(8), 0);
 
         final ImageView hideIcon = new ImageView(context);
@@ -1005,7 +1006,7 @@ Preferences.init(context);
         closeBtn.setFocusable(true);
         closeBtn.setContentDescription("Minimize menu");
         closeBtn.setLayoutParams(new LinearLayout.LayoutParams(0, dp(38), 1f));
-        closeBtn.setBackground(ModxTheme.secondaryButtonBg(context));
+        closeBtn.setBackground(ModxTheme.cardButtonBg(context));
         closeBtn.setPadding(dp(8), 0, dp(8), 0);
 
         final ImageView minIcon = new ImageView(context);
@@ -1174,41 +1175,6 @@ Preferences.init(context);
     // ================================================================
     // Small helpers
     // ================================================================
-    private Typeface loadFont(String[] assetNames, String fallbackFamily, int fallbackStyle) {
-        try {
-            return Typeface.create(fallbackFamily, fallbackStyle);
-        } catch (Exception e) {
-            return Typeface.DEFAULT;
-        }
-    }
-
-    private static int withAlpha(int color, int alpha) {
-        return (color & 0x00FFFFFF) | ((alpha & 0xFF) << 24);
-    }
-
-    private static double linearizeChannel(double c) {
-        return (c <= 0.04045) ? (c / 12.92) : Math.pow((c + 0.055) / 1.055, 2.4);
-    }
-
-    private static double relativeLuminance(int color) {
-        double r = linearizeChannel(Color.red(color) / 255.0);
-        double g = linearizeChannel(Color.green(color) / 255.0);
-        double b = linearizeChannel(Color.blue(color) / 255.0);
-        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    }
-
-    private static double contrastRatio(int c1, int c2) {
-        double l1 = relativeLuminance(c1);
-        double l2 = relativeLuminance(c2);
-        double bright = Math.max(l1, l2);
-        double dark = Math.min(l1, l2);
-        return (bright + 0.05) / (dark + 0.05);
-    }
-
-    private static int bestTextOnColor(int bgColor) {
-        return ModxTheme.onAccent(bgColor);
-    }
-
     private void showMenuToast(final String message) {
         if (TextUtils.isEmpty(message) || mMenuToastView == null) return;
         runOnMainThread(new Runnable() {
@@ -1251,10 +1217,6 @@ Preferences.init(context);
         return ModxTheme.ensureReadableAccent(rawColor);
     }
 
-    private static boolean isLight(int color) {
-        return ModxTheme.isLight(color);
-    }
-
     private static String hex(int color) {
         return ModxTheme.hex6(color);
     }
@@ -1263,22 +1225,6 @@ Preferences.init(context);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
         lp.setMargins(dp(l), dp(t), dp(r), dp(b));
         return lp;
-    }
-
-    private GradientDrawable cardBg(int fill, int stroke, int radiusDp) {
-        GradientDrawable g = new GradientDrawable();
-        g.setColor(fill);
-        g.setCornerRadius(dp(radiusDp));
-        if (stroke != 0) {
-            g.setStroke(dp(1), stroke);
-        }
-        return g;
-    }
-
-    private GradientDrawable gradBg(int c1, int c2, int radiusDp) {
-        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{c1, c2});
-        g.setCornerRadius(dp(radiusDp));
-        return g;
     }
 
     private void flatten(Button b) {
@@ -1394,6 +1340,7 @@ Preferences.init(context);
         menuFrame.post(new Runnable() {
             @Override
             public void run() {
+                if (stopChecking || instance == null || menuFrame == null || isViewCollapsed()) return;
                 applyResponsiveScale(menuFrame.getWidth(), menuFrame.getHeight());
                 if (!isLoggedIn && !loginUserResized) {
                     applyComputedLoginDefaultHeight(false);
@@ -1438,11 +1385,15 @@ Preferences.init(context);
             .withEndAction(new Runnable() {
                 @Override
                 public void run() {
-                    menuFrame.setVisibility(View.GONE);
-                    menuFrame.setAlpha(1f);
-                    menuFrame.setScaleX(1f);
-                    menuFrame.setScaleY(1f);
-                    updateHeaderWaveState();
+                    if (menuFrame != null) {
+                        menuFrame.setVisibility(View.GONE);
+                        menuFrame.setAlpha(1f);
+                        menuFrame.setScaleX(1f);
+                        menuFrame.setScaleY(1f);
+                    }
+                    if (!stopChecking && instance != null) {
+                        updateHeaderWaveState();
+                    }
                 }
             })
             .start();
@@ -1482,8 +1433,12 @@ Preferences.init(context);
             if (lp.height > maxH) { lp.height = maxH; changed = true; }
             if (changed) menuFrame.setLayoutParams(lp);
 
-            int vw = menuFrame.getVisibility() == View.VISIBLE ? lp.width : rootFrame.getWidth();
-            int vh = menuFrame.getVisibility() == View.VISIBLE ? lp.height : rootFrame.getHeight();
+            int vw = (menuFrame.getVisibility() == View.VISIBLE)
+                    ? lp.width
+                    : (rootFrame.getWidth() > 0 ? rootFrame.getWidth() : dp(87));
+            int vh = (menuFrame.getVisibility() == View.VISIBLE)
+                    ? lp.height
+                    : (rootFrame.getHeight() > 0 ? rootFrame.getHeight() : dp(87));
             int nx = Math.max(0, Math.min(vmParams.x, Math.max(0, sw - vw)));
             int ny = Math.max(0, Math.min(vmParams.y, Math.max(0, sh - vh)));
             if (changed || nx != vmParams.x || ny != vmParams.y) {
@@ -1495,6 +1450,7 @@ Preferences.init(context);
                 contentScrollView.post(new Runnable() {
                     @Override
                     public void run() {
+                        if (stopChecking || instance == null || isLoggedIn) return;
                         updateLoginOverflowScroll(false);
                     }
                 });
@@ -2237,6 +2193,7 @@ Preferences.init(context);
         rescaleAll();
         applyTabMetrics(tokens);
         applyModeCardsMetrics(tokens);
+        applyColorPickerMetrics(tokens);
         applyFirstCardSafeZone(tokens);
         updateHeaderWaveState();
     }
@@ -3385,6 +3342,11 @@ Preferences.init(context);
             if (sidebarDivider != null) sidebarDivider.setVisibility(View.GONE);
             if (mFocusToggleBtn != null) mFocusToggleBtn.setVisibility(View.GONE);
             if (mFocusMiniPill != null) mFocusMiniPill.setVisibility(View.GONE);
+            if (mHeaderView != null) {
+                ViewGroup.LayoutParams hlp = mHeaderView.getLayoutParams();
+                if (hlp != null) { hlp.height = WRAP_CONTENT; mHeaderView.setLayoutParams(hlp); }
+                mHeaderView.setAlpha(1f);
+            }
             if (mBottomBar != null) {
                 ViewGroup.LayoutParams blp = mBottomBar.getLayoutParams();
                 if (blp != null) { blp.height = WRAP_CONTENT; mBottomBar.setLayoutParams(blp); }
@@ -3565,6 +3527,7 @@ Preferences.init(context);
             contentScrollView.post(new Runnable() {
                 @Override
                 public void run() {
+                    if (stopChecking || instance == null) return;
                     if (contentScrollView != null) {
                         contentScrollView.scrollTo(0, savedScrollY);
                     }
@@ -4813,7 +4776,7 @@ Preferences.init(context);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setMinimumHeight(dp(48));
         row.setLayoutParams(rowLp(6, 4, 6, 4));
-        row.setPadding(dp(12), dp(9), dp(12), dp(9));
+        row.setPadding(dp(12), dp(12), dp(12), dp(12));
         row.setClickable(true);
         row.setFocusable(true);
         row.setBackground(ModxTheme.withInteractiveRipple(
@@ -4823,24 +4786,28 @@ Preferences.init(context);
         LinearLayout textCol = new LinearLayout(getContext);
         textCol.setOrientation(LinearLayout.VERTICAL);
         textCol.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
-        textCol.setPadding(0, 0, dp(10), 0);
+        textCol.setPadding(0, 0, dp(8), 0);
 
         TextView labelTv = new TextView(getContext);
         labelTv.setText("Reset layout");
         labelTv.setTextColor(ModxTheme.FG);
-        labelTv.setTypeface(fontMedium);
-        labelTv.setTextSize(12.5f);
+        labelTv.setTypeface(fontBold);
+        labelTv.setTextSize(14f);
         labelTv.setIncludeFontPadding(false);
-        labelTv.setMaxLines(2);
+        labelTv.setSingleLine(true);
+        labelTv.setMaxLines(1);
+        labelTv.setEllipsize(TextUtils.TruncateAt.END);
 
         TextView subTv = new TextView(getContext);
-        subTv.setText("Restore default tab & item order");
+        subTv.setText("Default tab & item order");
         subTv.setTextColor(ModxTheme.MUTED);
         subTv.setTypeface(fontRegular);
-        subTv.setTextSize(10.5f);
+        subTv.setTextSize(12f);
         subTv.setIncludeFontPadding(false);
-        subTv.setMaxLines(2);
-        subTv.setPadding(0, dp(3), 0, 0);
+        subTv.setSingleLine(true);
+        subTv.setMaxLines(1);
+        subTv.setEllipsize(TextUtils.TruncateAt.END);
+        subTv.setPadding(0, dp(2), 0, 0);
 
         textCol.addView(labelTv);
         textCol.addView(subTv);
@@ -4921,8 +4888,58 @@ Preferences.init(context);
         mResetSizeIcon = null;
         mResetTabOrderIcon = null;
         mMenuTeleportPad = null;
+        mFeatureNamesByNum.clear();
+        mSpinnerOptionsByNum.clear();
+        mInfoCardAccentViews.clear();
+        mModeDetailsBodyWrap = null;
+        mPendingWallHackNote = null;
+        mPendingPlayerTip = null;
         sidebarLayout.removeAllViews();
         contentLayout.removeAllViews();
+
+        // Pre-scan features[] so PresetItem labels and inline detail notes are available in any order
+        int preSubFeat = 0;
+        for (int i = 0; i < features.length; i++) {
+            String f = features[i];
+            if (f.contains("_True")) f = f.replaceFirst("_True", "");
+            if (f.contains("CollapseAdd_")) f = f.replaceFirst("CollapseAdd_", "");
+            String[] p = f.split("_");
+            int fn;
+            if (TextUtils.isDigitsOnly(p[0]) || p[0].matches("-[0-9]*")) {
+                fn = Integer.parseInt(p[0]);
+                f = f.replaceFirst(p[0] + "_", "");
+                preSubFeat++;
+            } else {
+                fn = i - preSubFeat;
+            }
+            String[] sp = f.split("_");
+            String tp = sp[0];
+            String fnName = sp.length > 1 ? sp[1] : "";
+            if ("Category".equals(tp) || "Collapse".equals(tp) || "RichTextView".equals(tp)
+                    || "SmallTextView".equals(tp) || "RichWebView".equals(tp)
+                    || "ButtonLink".equals(tp) || "TeleportPadWidget".equals(tp)) {
+                if ("SmallTextView".equals(tp)) {
+                    if (fn == 996) {
+                        mPendingWallHackNote = cleanDetailNoteText(fnName);
+                    } else if (fn == 993) {
+                        mPendingPlayerTip = cleanDetailNoteText(fnName);
+                    }
+                }
+                continue;
+            }
+            String displayName = fnName;
+            if ("InputValue".equals(tp) || "InputLValue".equals(tp)) {
+                displayName = (sp.length == 3) ? sp[2] : fnName;
+            } else if ("ButtonOnOff".equals(tp)) {
+                displayName = fnName.replace("OnOff_", "");
+            }
+            if (!TextUtils.isEmpty(displayName)) {
+                mFeatureNamesByNum.put(fn, displayName);
+            }
+            if ("Spinner".equals(tp) && sp.length > 2) {
+                mSpinnerOptionsByNum.put(fn, sp[2].split(","));
+            }
+        }
 
         String currentCategory = "Main";
         LinearLayout defaultLayout = newCategoryLayout();
@@ -4959,6 +4976,9 @@ Preferences.init(context);
                     categoryViewsMap.put(currentCategory, newCategoryLayout());
                 }
             } else {
+                if ("SmallTextView".equals(type) && (featNum == 996 || featNum == 993)) {
+                    continue;
+                }
                 LinearLayout targetLayout = (isCollapseAdd) ? mCollapse : categoryViewsMap.get(currentCategory);
                 if (targetLayout == null) targetLayout = categoryViewsMap.get("Main");
                 int prevChildCount = (!isCollapseAdd && targetLayout != null) ? targetLayout.getChildCount() : -1;
@@ -5001,6 +5021,21 @@ Preferences.init(context);
                     mItemDragMetaMap.put(addedView, new ItemDragMeta(featNum, dragGroup, currentCategory));
                 }
             }
+        }
+
+        if (!TextUtils.isEmpty(mPendingWallHackNote)) {
+            LinearLayout safetyLay = categoryViewsMap.get("Safety");
+            if (safetyLay != null) {
+                addCollapsibleDetailsCard(safetyLay, "Details", "Wall Hack note", mPendingWallHackNote, false);
+            }
+            mPendingWallHackNote = null;
+        }
+        if (!TextUtils.isEmpty(mPendingPlayerTip)) {
+            LinearLayout playerLay = categoryViewsMap.get("Player");
+            if (playerLay != null) {
+                addCollapsibleDetailsCard(playerLay, "Details", "Camera tip for Low Gravity", mPendingPlayerTip, true);
+            }
+            mPendingPlayerTip = null;
         }
 
         if (!categoryNames.contains("Power")) {
@@ -5068,6 +5103,7 @@ Preferences.init(context);
         rescaleAll();
         applyTabMetrics(tokens);
         applyModeCardsMetrics(tokens);
+        applyColorPickerMetrics(tokens);
         applyFirstCardSafeZone(tokens);
         updateHeaderWaveState();
         if (isLoggedIn) {
@@ -5088,12 +5124,15 @@ Preferences.init(context);
         diagChip.setTextSize(10.5f);
         diagChip.setTypeface(fontBold);
         diagChip.setGravity(Gravity.CENTER);
+        diagChip.setSingleLine(true);
+        diagChip.setMaxLines(1);
+        diagChip.setEllipsize(TextUtils.TruncateAt.END);
         diagChip.setMinHeight(dp(40));
-        diagChip.setPadding(dp(10), dp(6), dp(10), dp(6));
+        diagChip.setPadding(dp(8), dp(6), dp(8), dp(6));
         diagChip.setBackground(ModxTheme.pillBadgeBg(
                 getContext, ModxTheme.accentSoft(COLOR_ACCENT), ModxTheme.accentLine(COLOR_ACCENT)));
         LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f);
-        dLp.setMargins(0, 0, dp(6), 0);
+        dLp.setMargins(0, 0, dp(8), 0);
         diagChip.setLayoutParams(dLp);
         diagChip.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -5109,8 +5148,11 @@ Preferences.init(context);
         testChip.setTextSize(10.5f);
         testChip.setTypeface(fontBold);
         testChip.setGravity(Gravity.CENTER);
+        testChip.setSingleLine(true);
+        testChip.setMaxLines(1);
+        testChip.setEllipsize(TextUtils.TruncateAt.END);
         testChip.setMinHeight(dp(40));
-        testChip.setPadding(dp(10), dp(6), dp(10), dp(6));
+        testChip.setPadding(dp(8), dp(6), dp(8), dp(6));
         testChip.setBackground(ModxTheme.pillBadgeBg(
                 getContext, ModxTheme.badgeBg(ModxTheme.INFO), ModxTheme.badgeBorder(ModxTheme.INFO)));
         LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f);
@@ -5224,6 +5266,7 @@ Preferences.init(context);
                 contentScrollView.post(new Runnable() {
                     @Override
                     public void run() {
+                        if (stopChecking || instance == null) return;
                         if (contentScrollView != null) {
                             contentScrollView.scrollTo(0, restoreContentY);
                         }
@@ -5234,6 +5277,7 @@ Preferences.init(context);
                 sidebarScroll.post(new Runnable() {
                     @Override
                     public void run() {
+                        if (stopChecking || instance == null) return;
                         if (sidebarScroll != null) {
                             sidebarScroll.scrollTo(0, restoreSidebarY);
                         }
@@ -5330,6 +5374,35 @@ Preferences.init(context);
 
     public void ShowMenu() {
         rootFrame.addView(mRootContainer);
+        lastRootScreenW = screenW();
+        lastRootScreenH = screenH();
+        if (rootGlobalLayoutListener == null) {
+            rootGlobalLayoutListener = new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
+                @Override
+                public void onGlobalLayout() {
+                    if (stopChecking || instance == null || rootFrame == null) return;
+                    int sw = screenW();
+                    int sh = screenH();
+                    if (sw <= 0 || sh <= 0) return;
+                    if (sw != lastRootScreenW || sh != lastRootScreenH) {
+                        lastRootScreenW = sw;
+                        lastRootScreenH = sh;
+                        keepInsideScreen();
+                        if (isLoggedIn && menuFrame != null && menuFrame.getVisibility() == View.VISIBLE) {
+                            ViewGroup.LayoutParams mlp = menuFrame.getLayoutParams();
+                            int curW = (mlp != null && mlp.width > 0) ? mlp.width : menuFrame.getWidth();
+                            int curH = (mlp != null && mlp.height > 0) ? mlp.height : menuFrame.getHeight();
+                            if (curW > 0 && curH > 0) {
+                                applyResponsiveScale(curW, curH);
+                            }
+                        }
+                    }
+                }
+            };
+            try {
+                rootFrame.getViewTreeObserver().addOnGlobalLayoutListener(rootGlobalLayoutListener);
+            } catch (Exception ignored) { }
+        }
         if (showMenuRunnable != null) {
             mainHandler.removeCallbacks(showMenuRunnable);
         }
@@ -5525,6 +5598,7 @@ private void resetWindowSizeToDefault() {
         contentScrollView.post(new Runnable() {
             @Override
             public void run() {
+                if (stopChecking || instance == null || isLoggedIn) return;
                 applyComputedLoginDefaultHeight(false);
             }
         });
@@ -6348,11 +6422,35 @@ private void setWindowFocusable(boolean focusable) {
         if (mFocusPillHideProgress != null) {
             mFocusPillHideProgress.animate().cancel();
         }
+        if (mFocusToggleBtn != null) {
+            mFocusToggleBtn.animate().cancel();
+        }
+        if (mFocusMiniPill != null) {
+            mFocusMiniPill.animate().cancel();
+        }
+        if (contentLayout != null) {
+            contentLayout.animate().cancel();
+        }
+        if (menuFrame != null) {
+            menuFrame.animate().cancel();
+        }
+        if (mCollapsed != null) {
+            mCollapsed.animate().cancel();
+        }
         dismissAllTrackedDialogs();
         activeSessionToken = "";
         activeSessionUser = "";
         activeSessionDeviceId = "";
         detachLoginScrollListeners();
+        if (rootFrame != null && rootGlobalLayoutListener != null) {
+            try {
+                android.view.ViewTreeObserver vto = rootFrame.getViewTreeObserver();
+                if (vto.isAlive()) {
+                    vto.removeOnGlobalLayoutListener(rootGlobalLayoutListener);
+                }
+            } catch (Exception ignored) { }
+            rootGlobalLayoutListener = null;
+        }
         if (activeLoginHelper != null) {
             activeLoginHelper.cleanup();
             activeLoginHelper = null;
@@ -6558,9 +6656,9 @@ private void setWindowFocusable(boolean focusable) {
         final LinearLayout row = new LinearLayout(getContext);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setMinimumHeight(dp(44));
+        row.setMinimumHeight(dp(48));
         row.setLayoutParams(rowLp(6, 4, 6, 4));
-        row.setPadding(dp(12), dp(9), dp(12), dp(9));
+        row.setPadding(dp(12), dp(12), dp(12), dp(12));
         row.setBackground(ModxTheme.withInteractiveRipple(
                 getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
                 ModxTheme.withAlpha(ModxTheme.FG, 0x1A), ModxTheme.RADIUS_DP));
@@ -6569,10 +6667,13 @@ private void setWindowFocusable(boolean focusable) {
         TextView labelTv = new TextView(getContext);
         labelTv.setText(featName);
         labelTv.setTextColor(ModxTheme.FG);
-        labelTv.setTypeface(fontMedium);
-        labelTv.setTextSize(12.5f);
+        labelTv.setTypeface(fontBold);
+        labelTv.setTextSize(14f);
         labelTv.setIncludeFontPadding(false);
-        labelTv.setMaxLines(2);
+        labelTv.setSingleLine(true);
+        labelTv.setMaxLines(1);
+        labelTv.setEllipsize(TextUtils.TruncateAt.END);
+        labelTv.setPadding(0, 0, dp(8), 0);
         labelTv.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
 
         final TextView hexView = new TextView(getContext);
@@ -6580,10 +6681,11 @@ private void setWindowFocusable(boolean focusable) {
         hexView.setTextSize(11f);
         hexView.setTextColor(ModxTheme.MUTED);
         hexView.setIncludeFontPadding(false);
+        hexView.setSingleLine(true);
         hexView.setPadding(dp(7), dp(3), dp(7), dp(3));
         hexView.setBackground(ModxTheme.pillBadgeBg(getContext, ModxTheme.SURFACE, ModxTheme.LINE));
         LinearLayout.LayoutParams hxLp = new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
-        hxLp.setMargins(dp(8), 0, dp(8), 0);
+        hxLp.setMargins(0, 0, dp(8), 0);
         hexView.setLayoutParams(hxLp);
 
         final View dotView = new View(getContext);
@@ -6703,6 +6805,26 @@ private void setWindowFocusable(boolean focusable) {
         linLayout.addView(row);
     }
 
+    private void applyColorPickerMetrics(ModxTheme.MenuScaleTokens tokens) {
+        if (tokens == null) return;
+        boolean mini = (tokens.sizeClass == ModxTheme.SizeClass.MINI);
+        int dotSize = mini ? dp(16) : dp(20);
+        for (ColorPickerHolder cp : mColorPickers.values()) {
+            if (cp == null) continue;
+            if (cp.hexView != null) {
+                cp.hexView.setVisibility(mini ? View.GONE : View.VISIBLE);
+            }
+            if (cp.dotView != null) {
+                ViewGroup.LayoutParams dlp = cp.dotView.getLayoutParams();
+                if (dlp != null && (dlp.width != dotSize || dlp.height != dotSize)) {
+                    dlp.width = dotSize;
+                    dlp.height = dotSize;
+                    cp.dotView.setLayoutParams(dlp);
+                }
+            }
+        }
+    }
+
     private void applyColorButton(ColorPickerHolder holder, int color) {
         if (holder == null) return;
         if (holder.dotView != null) {
@@ -6753,12 +6875,21 @@ private void setWindowFocusable(boolean focusable) {
 
 
     private void Switch(LinearLayout linLayout, final int featNum, final String featName, boolean swiOn) {
-        final LinearLayout row = new LinearLayout(getContext);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setMinimumHeight(dp(44));
-        row.setLayoutParams(rowLp(6, 3, 6, 3));
-        row.setPadding(dp(12), dp(9), dp(10), dp(9));
+        final String inlineNote = (featNum == 131 && !TextUtils.isEmpty(mPendingWallHackNote))
+                ? mPendingWallHackNote : null;
+        if (inlineNote != null) {
+            mPendingWallHackNote = null;
+        }
+        final boolean hasDetail = (inlineNote != null);
+
+        final LinearLayout card = new LinearLayout(getContext);
+        card.setOrientation(hasDetail ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
+        if (!hasDetail) {
+            card.setGravity(Gravity.CENTER_VERTICAL);
+            card.setMinimumHeight(dp(48));
+            card.setPadding(dp(12), dp(12), dp(12), dp(12));
+        }
+        card.setLayoutParams(rowLp(6, 4, 6, 4));
 
         boolean initial = Preferences.readInitialBool(featName, featNum, swiOn);
         final GradientDrawable rowBg = ModxTheme.roundRect(
@@ -6767,36 +6898,59 @@ private void setWindowFocusable(boolean focusable) {
                 initial ? ModxTheme.accentLine(ToggleON) : ModxTheme.LINE,
                 1f,
                 ModxTheme.RADIUS_DP);
-        row.setBackground(ModxTheme.withInteractiveRipple(
-                getContext, rowBg, ModxTheme.withAlpha(COLOR_ACCENT, 0x1F), ModxTheme.RADIUS_DP));
+        if (hasDetail) {
+            card.setBackground(rowBg);
+        } else {
+            card.setBackground(ModxTheme.withInteractiveRipple(
+                    getContext, rowBg, ModxTheme.withAlpha(COLOR_ACCENT, 0x1F), ModxTheme.RADIUS_DP));
+        }
+
+        final LinearLayout topRow;
+        if (hasDetail) {
+            topRow = new LinearLayout(getContext);
+            topRow.setTag("first_card_safe_target");
+            topRow.setOrientation(LinearLayout.HORIZONTAL);
+            topRow.setGravity(Gravity.CENTER_VERTICAL);
+            topRow.setMinimumHeight(dp(48));
+            topRow.setPadding(dp(12), dp(12), dp(12), dp(12));
+            topRow.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
+            topRow.setBackground(ModxTheme.withInteractiveRipple(
+                    getContext,
+                    ModxTheme.roundRect(getContext, Color.TRANSPARENT, 0, 0f, ModxTheme.RADIUS_DP),
+                    ModxTheme.withAlpha(COLOR_ACCENT, 0x1F),
+                    ModxTheme.RADIUS_DP));
+        } else {
+            topRow = card;
+        }
 
         final boolean isSavePref = (featNum == -1);
         LinearLayout textCol = new LinearLayout(getContext);
         textCol.setOrientation(LinearLayout.VERTICAL);
         textCol.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
-        textCol.setPadding(0, 0, dp(6), 0);
+        textCol.setPadding(0, 0, dp(8), 0);
 
         TextView label = new TextView(getContext);
         label.setText(featName);
         label.setTextColor(ModxTheme.FG);
-        label.setTypeface(fontMedium);
-        label.setTextSize(12.5f);
-        label.setMaxLines(2);
-        if (!isSavePref) {
-            label.setEllipsize(TextUtils.TruncateAt.END);
-        }
+        label.setTypeface(fontBold);
+        label.setTextSize(14f);
+        label.setSingleLine(true);
+        label.setMaxLines(1);
+        label.setEllipsize(TextUtils.TruncateAt.END);
         label.setIncludeFontPadding(false);
         textCol.addView(label);
 
         if (isSavePref) {
             TextView sub = new TextView(getContext);
-            sub.setText("Remember toggles, sliders & theme across restarts");
+            sub.setText("Keep settings on restart");
             sub.setTextColor(ModxTheme.MUTED);
             sub.setTypeface(fontRegular);
-            sub.setTextSize(10.5f);
-            sub.setMaxLines(2);
+            sub.setTextSize(12f);
+            sub.setSingleLine(true);
+            sub.setMaxLines(1);
+            sub.setEllipsize(TextUtils.TruncateAt.END);
             sub.setIncludeFontPadding(false);
-            sub.setPadding(0, dp(3), 0, 0);
+            sub.setPadding(0, dp(2), 0, 0);
             textCol.addView(sub);
         }
 
@@ -6834,26 +6988,72 @@ private void setWindowFocusable(boolean focusable) {
             }
         });
 
-        row.setOnClickListener(new View.OnClickListener() {
+        topRow.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 ModxTheme.hapticTap(v);
                 toggle.toggle();
             }
         });
-        addPressAnim(row);
+        addPressAnim(topRow);
 
-        row.addView(textCol);
-        row.addView(toggle);
-        linLayout.addView(row);
+        topRow.addView(textCol);
+        if (hasDetail) {
+            final FrameLayout infoBtn = new FrameLayout(getContext);
+            mDragIgnoredViews.put(infoBtn, Boolean.TRUE);
+            LinearLayout.LayoutParams iBtnLp = new LinearLayout.LayoutParams(dp(26), dp(26));
+            iBtnLp.setMargins(0, 0, dp(8), 0);
+            infoBtn.setLayoutParams(iBtnLp);
+            infoBtn.setClickable(true);
+            infoBtn.setFocusable(true);
+            infoBtn.setContentDescription(featName + " details");
+            infoBtn.setBackground(ModxTheme.withInteractiveRipple(
+                    getContext,
+                    ModxTheme.roundRect(getContext, ModxTheme.badgeBg(ModxTheme.INFO), ModxTheme.badgeBorder(ModxTheme.INFO), 1f, ModxTheme.RADIUS_DP),
+                    ModxTheme.withAlpha(ModxTheme.INFO, 0x26),
+                    ModxTheme.RADIUS_DP));
+
+            ImageView infoIv = new ImageView(getContext);
+            infoIv.setImageDrawable(ModxIcons.info(ModxTheme.INFO, dp(14)));
+            infoIv.setLayoutParams(new FrameLayout.LayoutParams(dp(14), dp(14), Gravity.CENTER));
+            infoBtn.addView(infoIv);
+
+            final LinearLayout detailWrap = new LinearLayout(getContext);
+            mDragIgnoredViews.put(detailWrap, Boolean.TRUE);
+            detailWrap.setOrientation(LinearLayout.VERTICAL);
+            detailWrap.setVisibility(View.GONE);
+            detailWrap.setPadding(dp(12), 0, dp(12), dp(12));
+
+            View div = new View(getContext);
+            LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(MATCH_PARENT, Math.max(1, dp(1)));
+            dLp.setMargins(0, 0, 0, dp(8));
+            div.setLayoutParams(dLp);
+            div.setBackgroundColor(ModxTheme.HAIRLINE);
+            detailWrap.addView(div);
+            addBulletLine(detailWrap, inlineNote, ModxTheme.INFO);
+
+            infoBtn.setOnClickListener(new View.OnClickListener() {
+                boolean open = false;
+                @Override
+                public void onClick(View v) {
+                    ModxTheme.hapticTap(v);
+                    open = !open;
+                    animateSection(detailWrap, open);
+                }
+            });
+
+            topRow.addView(infoBtn);
+            topRow.addView(toggle);
+            card.addView(topRow);
+            card.addView(detailWrap);
+        } else {
+            topRow.addView(toggle);
+        }
+        linLayout.addView(card);
     }
 
     private void SeekBar(LinearLayout linLayout, final int featNum, final String featName, final int min, final int max) {
-        Integer def = SEEK_DEFAULTS.get(featNum);
-        int defVal = (def != null) ? def.intValue() : min;
-        if (defVal < min) defVal = min;
-        if (defVal > max) defVal = max;
-        final int defaultVal = defVal;
+        final int defaultVal = min;
 
         int startVal = Preferences.readInitialInt(featName, featNum, defaultVal);
         if (startVal < min) startVal = min;
@@ -6863,9 +7063,9 @@ private void setWindowFocusable(boolean focusable) {
         card.setOrientation(LinearLayout.VERTICAL);
         card.setClipChildren(false);
         card.setClipToPadding(false);
-        card.setLayoutParams(rowLp(6, 3, 6, 3));
+        card.setLayoutParams(rowLp(6, 4, 6, 4));
         card.setBackground(ModxTheme.cardSurface(getContext, ModxTheme.LINE));
-        card.setPadding(dp(12), dp(9), dp(12), dp(8));
+        card.setPadding(dp(12), dp(12), dp(12), dp(12));
 
         LinearLayout head = new LinearLayout(getContext);
         head.setTag("first_card_safe_target");
@@ -6878,9 +7078,10 @@ private void setWindowFocusable(boolean focusable) {
         label.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
         label.setText(featName);
         label.setTextColor(ModxTheme.FG);
-        label.setTypeface(fontMedium);
-        label.setTextSize(12.5f);
+        label.setTypeface(fontBold);
+        label.setTextSize(14f);
         label.setSingleLine(true);
+        label.setMaxLines(1);
         label.setEllipsize(TextUtils.TruncateAt.END);
         label.setIncludeFontPadding(false);
         label.setPadding(0, 0, dp(8), 0);
@@ -6906,7 +7107,7 @@ private void setWindowFocusable(boolean focusable) {
 
         final SeekBar seekBar = new SeekBar(getContext);
         LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
-        sbLp.setMargins(0, dp(4), 0, 0);
+        sbLp.setMargins(0, dp(8), 0, 0);
         seekBar.setLayoutParams(sbLp);
         seekBar.setPadding(dp(8), dp(2), dp(8), dp(2));
         seekBar.setMinimumHeight(dp(26));
@@ -7030,28 +7231,24 @@ private void setWindowFocusable(boolean focusable) {
         return core;
     }
 
-    private Drawable makeSeekThumb() {
-        return makeSeekThumbDrawable();
-    }
-
     private void Button(LinearLayout linLayout, final int featNum, final String featName) {
         final Button button = new Button(getContext);
-        button.setMinHeight(dp(42));
-        button.setMinimumHeight(dp(42));
+        button.setMinHeight(dp(44));
+        button.setMinimumHeight(dp(44));
         button.setLayoutParams(rowLp(6, 4, 6, 4));
         button.setAllCaps(false);
         button.setText(Html.fromHtml(featName));
         button.setTypeface(fontBold);
-        button.setTextSize(12.5f);
+        button.setTextSize(14f);
         button.setIncludeFontPadding(false);
-        button.setPadding(dp(12), dp(10), dp(12), dp(10));
+        button.setPadding(dp(12), dp(12), dp(12), dp(12));
+        button.setSingleLine(true);
+        button.setMaxLines(1);
+        button.setEllipsize(TextUtils.TruncateAt.END);
 
         if (featNum == -6) {
             button.setTextColor(ModxTheme.FG);
             button.setBackground(ModxTheme.secondaryButtonBg(getContext));
-            button.setSingleLine(false);
-            button.setMaxLines(2);
-            button.setEllipsize(null);
         } else {
             button.setTextColor(ModxTheme.onAccent(COLOR_ACCENT));
             button.setBackground(ModxTheme.primaryButtonBg(getContext, COLOR_ACCENT));
@@ -7091,27 +7288,29 @@ private void setWindowFocusable(boolean focusable) {
             final LinearLayout ghostBtn = new LinearLayout(getContext);
             ghostBtn.setOrientation(LinearLayout.HORIZONTAL);
             ghostBtn.setGravity(Gravity.CENTER);
-            ghostBtn.setMinimumHeight(dp(42));
+            ghostBtn.setMinimumHeight(dp(44));
             ghostBtn.setLayoutParams(rowLp(6, 4, 6, 4));
-            ghostBtn.setPadding(dp(12), dp(9), dp(12), dp(9));
+            ghostBtn.setPadding(dp(12), dp(12), dp(12), dp(12));
             ghostBtn.setClickable(true);
             ghostBtn.setFocusable(true);
             ghostBtn.setBackground(ModxTheme.ghostButtonBg(getContext));
 
             ImageView icon = new ImageView(getContext);
-            icon.setImageDrawable(ModxIcons.refreshCw(ModxTheme.MUTED, dp(15)));
+            icon.setImageDrawable(ModxIcons.refreshCw(ModxTheme.MUTED, dp(16)));
             icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            LinearLayout.LayoutParams iLp = new LinearLayout.LayoutParams(dp(15), dp(15));
+            LinearLayout.LayoutParams iLp = new LinearLayout.LayoutParams(dp(16), dp(16));
             iLp.setMargins(0, 0, dp(8), 0);
             icon.setLayoutParams(iLp);
 
             TextView labelTv = new TextView(getContext);
             labelTv.setText(label);
             labelTv.setTextColor(ModxTheme.FG);
-            labelTv.setTypeface(fontMedium);
-            labelTv.setTextSize(12.5f);
+            labelTv.setTypeface(fontBold);
+            labelTv.setTextSize(14f);
             labelTv.setIncludeFontPadding(false);
-            labelTv.setMaxLines(2);
+            labelTv.setSingleLine(true);
+            labelTv.setMaxLines(1);
+            labelTv.setEllipsize(TextUtils.TruncateAt.END);
 
             ghostBtn.addView(icon);
             ghostBtn.addView(labelTv);
@@ -7131,7 +7330,7 @@ private void setWindowFocusable(boolean focusable) {
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setMinimumHeight(dp(48));
         row.setLayoutParams(rowLp(6, 4, 6, 4));
-        row.setPadding(dp(12), dp(9), dp(12), dp(9));
+        row.setPadding(dp(12), dp(12), dp(12), dp(12));
         row.setClickable(true);
         row.setFocusable(true);
         row.setBackground(ModxTheme.withInteractiveRipple(
@@ -7141,28 +7340,33 @@ private void setWindowFocusable(boolean focusable) {
         LinearLayout textCol = new LinearLayout(getContext);
         textCol.setOrientation(LinearLayout.VERTICAL);
         textCol.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
-        textCol.setPadding(0, 0, dp(10), 0);
+        textCol.setPadding(0, 0, dp(8), 0);
 
         TextView labelTv = new TextView(getContext);
         labelTv.setText(label);
         labelTv.setTextColor(ModxTheme.FG);
-        labelTv.setTypeface(fontMedium);
-        labelTv.setTextSize(12.5f);
+        labelTv.setTypeface(fontBold);
+        labelTv.setTextSize(14f);
         labelTv.setIncludeFontPadding(false);
-        labelTv.setMaxLines(2);
+        labelTv.setSingleLine(true);
+        labelTv.setMaxLines(1);
+        labelTv.setEllipsize(TextUtils.TruncateAt.END);
 
         TextView hexTv = new TextView(getContext);
         hexTv.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-        hexTv.setTextSize(10.5f);
+        hexTv.setTextSize(12f);
         hexTv.setTextColor(ModxTheme.MUTED);
         hexTv.setIncludeFontPadding(false);
-        hexTv.setPadding(0, dp(3), 0, 0);
+        hexTv.setSingleLine(true);
+        hexTv.setMaxLines(1);
+        hexTv.setEllipsize(TextUtils.TruncateAt.END);
+        hexTv.setPadding(0, dp(2), 0, 0);
 
         textCol.addView(labelTv);
         textCol.addView(hexTv);
 
         View dot = new View(getContext);
-        dot.setLayoutParams(new LinearLayout.LayoutParams(dp(28), dp(28)));
+        dot.setLayoutParams(new LinearLayout.LayoutParams(dp(26), dp(26)));
 
         row.addView(textCol);
         row.addView(dot);
@@ -7206,7 +7410,7 @@ private void setWindowFocusable(boolean focusable) {
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setMinimumHeight(dp(48));
         row.setLayoutParams(rowLp(6, 4, 6, 4));
-        row.setPadding(dp(12), dp(9), dp(12), dp(9));
+        row.setPadding(dp(12), dp(12), dp(12), dp(12));
         row.setClickable(true);
         row.setFocusable(true);
         row.setBackground(ModxTheme.withInteractiveRipple(
@@ -7216,24 +7420,28 @@ private void setWindowFocusable(boolean focusable) {
         LinearLayout textCol = new LinearLayout(getContext);
         textCol.setOrientation(LinearLayout.VERTICAL);
         textCol.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
-        textCol.setPadding(0, 0, dp(10), 0);
+        textCol.setPadding(0, 0, dp(8), 0);
 
         TextView labelTv = new TextView(getContext);
         labelTv.setText("Reset size");
         labelTv.setTextColor(ModxTheme.FG);
-        labelTv.setTypeface(fontMedium);
-        labelTv.setTextSize(12.5f);
+        labelTv.setTypeface(fontBold);
+        labelTv.setTextSize(14f);
         labelTv.setIncludeFontPadding(false);
-        labelTv.setMaxLines(2);
+        labelTv.setSingleLine(true);
+        labelTv.setMaxLines(1);
+        labelTv.setEllipsize(TextUtils.TruncateAt.END);
 
         TextView subTv = new TextView(getContext);
-        subTv.setText("Restore default window width & height");
+        subTv.setText("Default width & height");
         subTv.setTextColor(ModxTheme.MUTED);
         subTv.setTypeface(fontRegular);
-        subTv.setTextSize(10.5f);
+        subTv.setTextSize(12f);
         subTv.setIncludeFontPadding(false);
-        subTv.setMaxLines(2);
-        subTv.setPadding(0, dp(3), 0, 0);
+        subTv.setSingleLine(true);
+        subTv.setMaxLines(1);
+        subTv.setEllipsize(TextUtils.TruncateAt.END);
+        subTv.setPadding(0, dp(2), 0, 0);
 
         textCol.addView(labelTv);
         textCol.addView(subTv);
@@ -7261,17 +7469,20 @@ private void setWindowFocusable(boolean focusable) {
 
     private void ButtonLink(LinearLayout linLayout, final String featName, final String url) {
         final Button button = new Button(getContext);
-        button.setMinHeight(dp(42));
-        button.setMinimumHeight(dp(42));
+        button.setMinHeight(dp(44));
+        button.setMinimumHeight(dp(44));
         button.setLayoutParams(rowLp(6, 4, 6, 4));
         button.setAllCaps(false);
         button.setTextColor(COLOR_ACCENT);
         button.setText(featName);
-        button.setTypeface(fontMedium);
-        button.setTextSize(12.5f);
+        button.setTypeface(fontBold);
+        button.setTextSize(14f);
         button.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
         button.setIncludeFontPadding(false);
-        button.setPadding(dp(12), dp(10), dp(12), dp(10));
+        button.setSingleLine(true);
+        button.setMaxLines(1);
+        button.setEllipsize(TextUtils.TruncateAt.END);
+        button.setPadding(dp(12), dp(12), dp(12), dp(12));
         button.setBackground(ModxTheme.withInteractiveRipple(
                 getContext,
                 ModxTheme.pillBadgeBg(getContext, ModxTheme.accentSoft(COLOR_ACCENT), ModxTheme.accentLine(COLOR_ACCENT)),
@@ -7313,9 +7524,9 @@ private void setWindowFocusable(boolean focusable) {
     }
 
     private String modeSummaryFor(int featNum) {
-        if (featNum == MODE_SIMPLE) return "Auto Revive · Unlimited Coins & Shop · Jump 35";
-        if (featNum == MODE_MAX)    return "Simple + God Mode · Max Jump · Powerup · Fast Lane";
-        if (featNum == MODE_ULTRA)  return "Max + Chams · Low Gravity · Follow Cam · Wall Hack";
+        if (featNum == MODE_SIMPLE) return "Auto Revive \u00B7 Coins \u2026";
+        if (featNum == MODE_MAX)    return "Simple + God Mode \u2026";
+        if (featNum == MODE_ULTRA)  return "Max + Chams \u2026";
         return "";
     }
 
@@ -7344,12 +7555,12 @@ private void setWindowFocusable(boolean focusable) {
             }
             return;
         }
-        // Pre-O fallback: measure width against available title space
+        // Pre-O fallback: measure width against single-line available title space
         int innerW = estimateModeRowInnerWidthPx(h, tokens);
-        int checkReserve = tokens.modeCheckSizePx + dp(10);
+        int checkReserve = tokens.modeCheckSizePx + dp(8);
         int badgeReserve = (h.badgeView != null && h.badgeView.getVisibility() == View.VISIBLE)
                 ? dp(54) : 0;
-        int availW = Math.max(dp(72), innerW - checkReserve - badgeReserve);
+        int availW = Math.max(dp(64), innerW - checkReserve - badgeReserve);
         CharSequence cs = h.titleView.getText();
         String text = (cs != null) ? cs.toString() : "";
         float chosenSp = tokens.modeTitleMaxSp;
@@ -7357,17 +7568,9 @@ private void setWindowFocusable(boolean focusable) {
             android.text.TextPaint tp = new android.text.TextPaint(h.titleView.getPaint());
             float dens = safeDisplayMetrics(getContext).scaledDensity;
             if (dens <= 0f) dens = safeDisplayMetrics(getContext).density;
-            String[] words = text.split("\\s+");
             for (float sp = tokens.modeTitleMaxSp; sp >= tokens.modeTitleMinSp; sp -= 0.5f) {
                 tp.setTextSize(sp * dens);
-                boolean wordOver = false;
-                for (int i = 0; i < words.length; i++) {
-                    if (tp.measureText(words[i]) > availW) {
-                        wordOver = true;
-                        break;
-                    }
-                }
-                if (!wordOver && tp.measureText(text) <= availW * 1.85f) {
+                if (tp.measureText(text) <= availW) {
                     chosenSp = sp;
                     break;
                 }
@@ -7385,9 +7588,9 @@ private void setWindowFocusable(boolean focusable) {
             return;
         }
         int innerW = estimateModeRowInnerWidthPx(h, tokens);
-        int textColW = innerW - tokens.modeCheckSizePx - dp(10);
+        int textColW = innerW - tokens.modeCheckSizePx - dp(8);
         android.text.TextPaint badgePaint = new android.text.TextPaint(h.badgeView.getPaint());
-        int badgeW = Math.round(badgePaint.measureText("Active")) + dp(14) + dp(6);
+        int badgeW = Math.round(badgePaint.measureText("Active")) + dp(14) + dp(8);
         int availForTitle = textColW - badgeW;
         if (availForTitle <= dp(60)) {
             h.badgeView.setVisibility(View.GONE);
@@ -7399,14 +7602,7 @@ private void setWindowFocusable(boolean focusable) {
         float dens = safeDisplayMetrics(getContext).scaledDensity;
         if (dens <= 0f) dens = safeDisplayMetrics(getContext).density;
         titlePaint.setTextSize(tokens.modeTitleMinSp * dens);
-        String[] words = title.split("\\s+");
-        for (int i = 0; i < words.length; i++) {
-            if (titlePaint.measureText(words[i]) > availForTitle) {
-                h.badgeView.setVisibility(View.GONE);
-                return;
-            }
-        }
-        if (titlePaint.measureText(title) > availForTitle * 1.85f) {
+        if (titlePaint.measureText(title) > availForTitle) {
             h.badgeView.setVisibility(View.GONE);
             return;
         }
@@ -7485,7 +7681,7 @@ private void setWindowFocusable(boolean focusable) {
             h.titleView.setTextColor(ModxTheme.FG);
         }
         if (h.summaryView != null) {
-            h.summaryView.setTextColor(on ? ModxTheme.FG : ModxTheme.MUTED);
+            h.summaryView.setTextColor(ModxTheme.MUTED);
         }
         updateModeBadgeFit(h, tokens);
         fitModeTitle(h, tokens);
@@ -7502,7 +7698,7 @@ private void setWindowFocusable(boolean focusable) {
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setMinimumHeight(tokens.modeCardMinHeightPx);
-            row.setLayoutParams(rowLp(6, 3, 6, 3));
+            row.setLayoutParams(rowLp(6, 4, 6, 4));
             row.setPadding(tokens.modeCardPadHPx, tokens.modeCardPadVPx,
                     tokens.modeCardPadHPx, tokens.modeCardPadVPx);
             row.setClickable(true);
@@ -7512,7 +7708,7 @@ private void setWindowFocusable(boolean focusable) {
             FrameLayout checkCircle = new FrameLayout(getContext);
             LinearLayout.LayoutParams ccLp = new LinearLayout.LayoutParams(
                     tokens.modeCheckSizePx, tokens.modeCheckSizePx);
-            ccLp.setMargins(0, 0, dp(10), 0);
+            ccLp.setMargins(0, 0, dp(8), 0);
             checkCircle.setLayoutParams(ccLp);
 
             ImageView checkGlyph = new ImageView(getContext);
@@ -7537,8 +7733,9 @@ private void setWindowFocusable(boolean focusable) {
             titleView.setTextColor(ModxTheme.FG);
             titleView.setTypeface(fontBold);
             titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, tokens.modeTitleMaxSp);
-            titleView.setMaxLines(2);
-            titleView.setEllipsize(null);
+            titleView.setSingleLine(true);
+            titleView.setMaxLines(1);
+            titleView.setEllipsize(TextUtils.TruncateAt.END);
             titleView.setIncludeFontPadding(false);
             titleView.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
 
@@ -7551,7 +7748,7 @@ private void setWindowFocusable(boolean focusable) {
             badgeView.setGravity(Gravity.CENTER);
             badgeView.setPadding(dp(7), dp(2), dp(7), dp(2));
             LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
-            bLp.setMargins(dp(6), 0, 0, 0);
+            bLp.setMargins(dp(8), 0, 0, 0);
             badgeView.setLayoutParams(bLp);
             badgeView.setVisibility(View.GONE);
 
@@ -7564,10 +7761,11 @@ private void setWindowFocusable(boolean focusable) {
             summaryView.setTextColor(ModxTheme.MUTED);
             summaryView.setTypeface(fontRegular);
             summaryView.setTextSize(TypedValue.COMPLEX_UNIT_SP, tokens.modeDescSp);
-            summaryView.setMaxLines(2);
+            summaryView.setSingleLine(true);
+            summaryView.setMaxLines(1);
             summaryView.setEllipsize(TextUtils.TruncateAt.END);
             summaryView.setIncludeFontPadding(false);
-            summaryView.setPadding(0, dp(3), 0, 0);
+            summaryView.setPadding(0, dp(2), 0, 0);
 
             textCol.addView(titleRow);
             textCol.addView(summaryView);
@@ -7620,8 +7818,8 @@ private void setWindowFocusable(boolean focusable) {
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setMinimumHeight(dp(48));
-            row.setLayoutParams(rowLp(6, 5, 6, 4));
-            row.setPadding(dp(11), dp(9), dp(11), dp(9));
+            row.setLayoutParams(rowLp(6, 4, 6, 4));
+            row.setPadding(dp(12), dp(12), dp(12), dp(12));
             row.setClickable(true);
             row.setFocusable(true);
             row.setBackground(ModxTheme.withInteractiveRipple(
@@ -7631,7 +7829,7 @@ private void setWindowFocusable(boolean focusable) {
 
             final ImageView iconView = new ImageView(getContext);
             LinearLayout.LayoutParams iLp = new LinearLayout.LayoutParams(dp(18), dp(18));
-            iLp.setMargins(0, 0, dp(9), 0);
+            iLp.setMargins(0, 0, dp(8), 0);
             iconView.setLayoutParams(iLp);
             iconView.setImageDrawable(ModxIcons.refreshCw(ModxTheme.MUTED, dp(18)));
 
@@ -7643,16 +7841,19 @@ private void setWindowFocusable(boolean focusable) {
             titleView.setText(finalfeatName);
             titleView.setTextColor(ModxTheme.FG);
             titleView.setTypeface(fontBold);
-            titleView.setTextSize(12.5f);
-            titleView.setMaxLines(2);
+            titleView.setTextSize(14f);
+            titleView.setSingleLine(true);
+            titleView.setMaxLines(1);
+            titleView.setEllipsize(TextUtils.TruncateAt.END);
             titleView.setIncludeFontPadding(false);
 
             final TextView subView = new TextView(getContext);
-            subView.setText("Tap to reset (undo available for 8s)");
+            subView.setText("Tap to reset \u00B7 8s undo");
             subView.setTextColor(ModxTheme.MUTED);
             subView.setTypeface(fontRegular);
-            subView.setTextSize(10.5f);
-            subView.setMaxLines(2);
+            subView.setTextSize(12f);
+            subView.setSingleLine(true);
+            subView.setMaxLines(1);
             subView.setEllipsize(TextUtils.TruncateAt.END);
             subView.setIncludeFontPadding(false);
             subView.setPadding(0, dp(2), 0, 0);
@@ -7672,7 +7873,7 @@ private void setWindowFocusable(boolean focusable) {
                                 ModxTheme.withAlpha(ModxTheme.FG, 0x1A), ModxTheme.RADIUS_DP));
                         titleView.setText(finalfeatName);
                         titleView.setTextColor(ModxTheme.FG);
-                        subView.setText("Tap to reset (undo available for 8s)");
+                        subView.setText("Tap to reset \u00B7 8s undo");
                         iconView.setImageDrawable(ModxIcons.refreshCw(ModxTheme.MUTED, dp(18)));
                     }
                 }
@@ -7690,15 +7891,18 @@ private void setWindowFocusable(boolean focusable) {
         }
 
         final Button button = new Button(getContext);
-        button.setMinHeight(dp(42));
-        button.setMinimumHeight(dp(42));
+        button.setMinHeight(dp(44));
+        button.setMinimumHeight(dp(44));
         button.setLayoutParams(rowLp(6, 4, 6, 4));
         button.setTextColor(ModxTheme.FG);
         button.setAllCaps(false);
-        button.setTypeface(fontMedium);
-        button.setTextSize(12.5f);
+        button.setTypeface(fontBold);
+        button.setTextSize(14f);
         button.setIncludeFontPadding(false);
-        button.setPadding(dp(12), dp(10), dp(12), dp(10));
+        button.setSingleLine(true);
+        button.setMaxLines(1);
+        button.setEllipsize(TextUtils.TruncateAt.END);
+        button.setPadding(dp(12), dp(12), dp(12), dp(12));
         flatten(button);
         addPressAnim(button);
 
@@ -7825,12 +8029,6 @@ private void setWindowFocusable(boolean focusable) {
         }
     }
 
-    private void resetAllFeaturesAction(final LinearLayout resetRow, final TextView titleView,
-                                        final TextView subView, final ImageView iconView,
-                                        final String resetName, final Runnable revertRunnable) {
-        resetAllFeaturesActionWithUndo(resetRow, titleView, subView, iconView, resetName, revertRunnable, true);
-    }
-
     private void resetAllFeaturesActionWithUndo(final LinearLayout resetRow, final TextView titleView,
                                                 final TextView subView, final ImageView iconView,
                                                 final String resetName, final Runnable revertRunnable,
@@ -7935,7 +8133,7 @@ private void setWindowFocusable(boolean focusable) {
                         titleView.setTextColor(ModxTheme.SUCCESS);
                     }
                     if (subView != null) {
-                        subView.setText("All features restored to defaults");
+                        subView.setText("Defaults restored");
                     }
                     if (iconView != null) {
                         iconView.setImageDrawable(ModxIcons.checkCircle(ModxTheme.SUCCESS, dp(18)));
@@ -7955,7 +8153,7 @@ private void setWindowFocusable(boolean focusable) {
         row.setGravity(Gravity.CENTER);
         row.setMinimumHeight(dp(44));
         row.setLayoutParams(rowLp(6, 4, 6, 4));
-        row.setPadding(dp(12), dp(8), dp(12), dp(8));
+        row.setPadding(dp(12), dp(12), dp(12), dp(12));
         row.setClickable(true);
         row.setFocusable(true);
         row.setBackground(ModxTheme.telegramButtonBg(getContext));
@@ -7972,14 +8170,15 @@ private void setWindowFocusable(boolean focusable) {
         tv.setText(label);
         tv.setTextColor(ModxTheme.FG);
         tv.setTypeface(fontBold);
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
         tv.setSingleLine(true);
-        tv.setEllipsize(null);
+        tv.setMaxLines(1);
+        tv.setEllipsize(TextUtils.TruncateAt.END);
         tv.setIncludeFontPadding(false);
         tv.setGravity(Gravity.CENTER_VERTICAL);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             tv.setAutoSizeTextTypeUniformWithConfiguration(
-                    9, 13, 1, TypedValue.COMPLEX_UNIT_SP);
+                    9, 14, 1, TypedValue.COMPLEX_UNIT_SP);
         } else {
             row.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
                 @Override
@@ -7991,7 +8190,7 @@ private void setWindowFocusable(boolean focusable) {
                     float dens = safeDisplayMetrics(getContext).scaledDensity;
                     if (dens <= 0f) dens = safeDisplayMetrics(getContext).density;
                     float chosen = 9f;
-                    for (float sp = 12.5f; sp >= 9f; sp -= 0.5f) {
+                    for (float sp = 14f; sp >= 9f; sp -= 0.5f) {
                         tp.setTextSize(sp * dens);
                         if (tp.measureText(label) <= w) {
                             chosen = sp;
@@ -8176,7 +8375,7 @@ private void setWindowFocusable(boolean focusable) {
                 TextView t = (TextView) child;
                 if (j == clamped) {
                     t.setTextColor(COLOR_ACCENT);
-                    t.setBackground(ModxTheme.roundRect(getContext, ModxTheme.accentSoft(COLOR_ACCENT), 0, 0f, 4f));
+                    t.setBackground(ModxTheme.roundRect(getContext, ModxTheme.accentSoft(COLOR_ACCENT), 0, 0f, ModxTheme.RADIUS_DP));
                 } else {
                     t.setTextColor(ModxTheme.FG);
                     t.setBackground(null);
@@ -8288,7 +8487,7 @@ private void setWindowFocusable(boolean focusable) {
 
         final LinearLayout container = new LinearLayout(ctx);
         container.setOrientation(LinearLayout.VERTICAL);
-        container.setLayoutParams(rowLp(6, 3, 6, 3));
+        container.setLayoutParams(rowLp(6, 4, 6, 4));
 
         final LinearLayout spinnerRow = new LinearLayout(ctx);
         spinnerRow.setTag("first_card_safe_target");
@@ -8296,17 +8495,19 @@ private void setWindowFocusable(boolean focusable) {
                 ctx, ModxTheme.cardSurface(ctx, ModxTheme.LINE),
                 ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
         spinnerRow.setGravity(Gravity.CENTER_VERTICAL);
-        spinnerRow.setMinimumHeight(dp(42));
-        spinnerRow.setPadding(dp(12), dp(10), dp(12), dp(10));
+        spinnerRow.setMinimumHeight(dp(48));
+        spinnerRow.setPadding(dp(12), dp(12), dp(12), dp(12));
         spinnerRow.setOrientation(LinearLayout.HORIZONTAL);
 
         final TextView tvName = new TextView(ctx);
         tvName.setTextColor(ModxTheme.FG);
-        tvName.setTypeface(fontMedium);
-        tvName.setTextSize(12.5f);
+        tvName.setTypeface(fontBold);
+        tvName.setTextSize(14f);
         tvName.setIncludeFontPadding(false);
+        tvName.setSingleLine(true);
         tvName.setMaxLines(1);
         tvName.setEllipsize(TextUtils.TruncateAt.END);
+        tvName.setPadding(0, 0, dp(8), 0);
         tvName.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
 
         final ImageView arrowIv = new ImageView(ctx);
@@ -8341,13 +8542,16 @@ private void setWindowFocusable(boolean focusable) {
             tv.setTypeface(fontMedium);
             tv.setTextSize(12f);
             tv.setIncludeFontPadding(false);
+            tv.setSingleLine(true);
+            tv.setMaxLines(1);
+            tv.setEllipsize(TextUtils.TruncateAt.END);
             tv.setGravity(Gravity.CENTER_VERTICAL);
             tv.setMinimumHeight(dp(40));
             tv.setPadding(dp(12), dp(9), dp(12), dp(9));
 
             if (index == initIdx) {
                 tv.setTextColor(COLOR_ACCENT);
-                tv.setBackground(ModxTheme.roundRect(ctx, ModxTheme.accentSoft(COLOR_ACCENT), 0, 0f, 4f));
+                tv.setBackground(ModxTheme.roundRect(ctx, ModxTheme.accentSoft(COLOR_ACCENT), 0, 0f, ModxTheme.RADIUS_DP));
             }
 
             tv.setOnClickListener(new View.OnClickListener() {
@@ -8395,16 +8599,19 @@ private void setWindowFocusable(boolean focusable) {
 
     private void InputNum(LinearLayout linLayout, final int featNum, final String featName, final int maxValue) {
         final Button button = new Button(getContext);
-        button.setMinHeight(dp(42));
-        button.setMinimumHeight(dp(42));
+        button.setMinHeight(dp(44));
+        button.setMinimumHeight(dp(44));
         int num = Preferences.readInitialInt(featName, featNum, 0);
         button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>" + num + "</font>"));
         button.setAllCaps(false);
         button.setLayoutParams(rowLp(6, 4, 6, 4));
-        button.setTypeface(fontMedium);
-        button.setTextSize(12.5f);
+        button.setTypeface(fontBold);
+        button.setTextSize(14f);
+        button.setSingleLine(true);
+        button.setMaxLines(1);
+        button.setEllipsize(TextUtils.TruncateAt.END);
         button.setIncludeFontPadding(false);
-        button.setPadding(dp(12), dp(10), dp(12), dp(10));
+        button.setPadding(dp(12), dp(12), dp(12), dp(12));
         button.setBackground(ModxTheme.withInteractiveRipple(
                 getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
                 ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
@@ -8465,16 +8672,19 @@ private void setWindowFocusable(boolean focusable) {
 
     private void InputLNum(LinearLayout linLayout, final int featNum, final String featName, final long maxValue) {
         final Button button = new Button(getContext);
-        button.setMinHeight(dp(42));
-        button.setMinimumHeight(dp(42));
+        button.setMinHeight(dp(44));
+        button.setMinimumHeight(dp(44));
         long num = Preferences.readInitialLong(featName, featNum, 0L);
         button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>" + num + "</font>"));
         button.setAllCaps(false);
         button.setLayoutParams(rowLp(6, 4, 6, 4));
-        button.setTypeface(fontMedium);
-        button.setTextSize(12.5f);
+        button.setTypeface(fontBold);
+        button.setTextSize(14f);
+        button.setSingleLine(true);
+        button.setMaxLines(1);
+        button.setEllipsize(TextUtils.TruncateAt.END);
         button.setIncludeFontPadding(false);
-        button.setPadding(dp(12), dp(10), dp(12), dp(10));
+        button.setPadding(dp(12), dp(12), dp(12), dp(12));
         button.setBackground(ModxTheme.withInteractiveRipple(
                 getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
                 ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
@@ -8535,18 +8745,21 @@ private void setWindowFocusable(boolean focusable) {
 
     private void InputText(LinearLayout linLayout, final int featNum, final String featName) {
         final Button button = new Button(getContext);
-        button.setMinHeight(dp(42));
-        button.setMinimumHeight(dp(42));
+        button.setMinHeight(dp(44));
+        button.setMinimumHeight(dp(44));
         String string = Preferences.readInitialString(featName, featNum, "");
         String safeText = (string != null) ? string : "";
         button.setText(Html.fromHtml(featName + ": <font color='" + NumberTxtColor + "'>"
                 + TextUtils.htmlEncode(safeText) + "</font>"));
         button.setAllCaps(false);
         button.setLayoutParams(rowLp(6, 4, 6, 4));
-        button.setTypeface(fontMedium);
-        button.setTextSize(12.5f);
+        button.setTypeface(fontBold);
+        button.setTextSize(14f);
+        button.setSingleLine(true);
+        button.setMaxLines(1);
+        button.setEllipsize(TextUtils.TruncateAt.END);
         button.setIncludeFontPadding(false);
-        button.setPadding(dp(12), dp(10), dp(12), dp(10));
+        button.setPadding(dp(12), dp(12), dp(12), dp(12));
         button.setBackground(ModxTheme.withInteractiveRipple(
                 getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
                 ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
@@ -8591,15 +8804,18 @@ private void setWindowFocusable(boolean focusable) {
                 getContext, ModxTheme.CARD,
                 initial ? ModxTheme.accentLine(CheckBoxColor) : ModxTheme.LINE,
                 1f, ModxTheme.RADIUS_DP);
-        checkBox.setLayoutParams(rowLp(6, 3, 6, 3));
+        checkBox.setLayoutParams(rowLp(6, 4, 6, 4));
         checkBox.setBackground(ModxTheme.withInteractiveRipple(
                 getContext, cbBg, ModxTheme.withAlpha(CheckBoxColor, 0x1A), ModxTheme.RADIUS_DP));
         checkBox.setText(featName);
         checkBox.setTextColor(ModxTheme.FG);
-        checkBox.setTypeface(fontMedium);
-        checkBox.setTextSize(12.5f);
-        checkBox.setMinimumHeight(dp(42));
-        checkBox.setPadding(dp(10), dp(9), dp(10), dp(9));
+        checkBox.setTypeface(fontBold);
+        checkBox.setTextSize(14f);
+        checkBox.setSingleLine(true);
+        checkBox.setMaxLines(1);
+        checkBox.setEllipsize(TextUtils.TruncateAt.END);
+        checkBox.setMinimumHeight(dp(44));
+        checkBox.setPadding(dp(12), dp(12), dp(12), dp(12));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) checkBox.setButtonTintList(ColorStateList.valueOf(CheckBoxColor));
         checkBox.setChecked(initial);
 
@@ -8632,12 +8848,15 @@ private void setWindowFocusable(boolean focusable) {
         textView.setText(featName + ":");
         textView.setTextColor(ModxTheme.FG);
         textView.setTypeface(fontBold);
-        textView.setTextSize(12.5f);
-        textView.setPadding(0, dp(2), 0, dp(4));
+        textView.setTextSize(14f);
+        textView.setSingleLine(true);
+        textView.setMaxLines(1);
+        textView.setEllipsize(TextUtils.TruncateAt.END);
+        textView.setPadding(0, 0, 0, dp(4));
         final RadioGroup radioGroup = new RadioGroup(getContext);
-        radioGroup.setLayoutParams(rowLp(6, 3, 6, 3));
+        radioGroup.setLayoutParams(rowLp(6, 4, 6, 4));
         radioGroup.setBackground(ModxTheme.cardSurface(getContext, ModxTheme.LINE));
-        radioGroup.setPadding(dp(12), dp(8), dp(12), dp(8));
+        radioGroup.setPadding(dp(12), dp(12), dp(12), dp(12));
         radioGroup.setOrientation(LinearLayout.VERTICAL);
         radioGroup.addView(textView);
         final RadioGroupHolder rgHolder = new RadioGroupHolder();
@@ -8666,6 +8885,9 @@ private void setWindowFocusable(boolean focusable) {
             Radioo.setTextColor(ModxTheme.MUTED);
             Radioo.setTypeface(fontRegular);
             Radioo.setTextSize(12f);
+            Radioo.setSingleLine(true);
+            Radioo.setMaxLines(1);
+            Radioo.setEllipsize(TextUtils.TruncateAt.END);
             Radioo.setMinimumHeight(dp(40));
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) Radioo.setButtonTintList(ColorStateList.valueOf(RadioColor));
             Radioo.setOnClickListener(rl);
@@ -8735,7 +8957,7 @@ private void setWindowFocusable(boolean focusable) {
     }
 
     private void Collapse(LinearLayout linLayout, final String text, final boolean expanded) {
-        LinearLayout.LayoutParams llp = rowLp(6, 5, 6, 3);
+        LinearLayout.LayoutParams llp = rowLp(6, 4, 6, 4);
         LinearLayout collapse = new LinearLayout(getContext);
         collapse.setLayoutParams(llp);
         collapse.setOrientation(LinearLayout.VERTICAL);
@@ -8749,7 +8971,8 @@ private void setWindowFocusable(boolean focusable) {
         LinearLayout headRow = new LinearLayout(getContext);
         headRow.setOrientation(LinearLayout.HORIZONTAL);
         headRow.setGravity(Gravity.CENTER_VERTICAL);
-        headRow.setMinimumHeight(dp(42));
+        headRow.setMinimumHeight(dp(48));
+        headRow.setPadding(dp(12), dp(12), dp(12), dp(12));
         headRow.setBackground(ModxTheme.withInteractiveRipple(
                 getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
                 ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
@@ -8760,15 +8983,17 @@ private void setWindowFocusable(boolean focusable) {
         textView.setGravity(Gravity.CENTER_VERTICAL);
         textView.setTextColor(ModxTheme.FG);
         textView.setTypeface(fontBold);
-        textView.setTextSize(12.5f);
+        textView.setTextSize(14f);
+        textView.setSingleLine(true);
+        textView.setMaxLines(1);
+        textView.setEllipsize(TextUtils.TruncateAt.END);
         textView.setIncludeFontPadding(false);
-        textView.setPadding(dp(12), dp(11), dp(6), dp(11));
+        textView.setPadding(0, 0, dp(8), 0);
 
         final ImageView chevron = new ImageView(getContext);
         SvgIcon chevIcon = ModxIcons.chevronDown(COLOR_ACCENT, dp(18));
         chevron.setImageDrawable(chevIcon);
         LinearLayout.LayoutParams chLp = new LinearLayout.LayoutParams(dp(18), dp(18));
-        chLp.setMargins(0, 0, dp(10), 0);
         chevron.setLayoutParams(chLp);
 
         if (expanded) {
@@ -8804,7 +9029,7 @@ private void setWindowFocusable(boolean focusable) {
     private void Category(LinearLayout linLayout, String text) {
         LinearLayout wrap = new LinearLayout(getContext);
         wrap.setOrientation(LinearLayout.VERTICAL);
-        wrap.setLayoutParams(rowLp(6, 4, 6, 2));
+        wrap.setLayoutParams(rowLp(6, 4, 6, 4));
 
         TextView textView = new TextView(getContext);
         String plain = Html.fromHtml(text).toString().trim().toUpperCase(java.util.Locale.US);
@@ -8813,6 +9038,9 @@ private void setWindowFocusable(boolean focusable) {
         textView.setTextColor(ModxTheme.SUBTLE);
         textView.setTypeface(fontBold);
         textView.setTextSize(10.5f);
+        textView.setSingleLine(true);
+        textView.setMaxLines(1);
+        textView.setEllipsize(TextUtils.TruncateAt.END);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             textView.setLetterSpacing(0.06f);
         }
@@ -8830,6 +9058,242 @@ private void setWindowFocusable(boolean focusable) {
         linLayout.addView(wrap);
     }
 
+    private String cleanDetailNoteText(String raw) {
+        if (raw == null) return "";
+        String plain = Html.fromHtml(raw).toString();
+        plain = plain.replace("\u26A0", "").replace("Click here", "").trim();
+        while (plain.endsWith(".") && plain.contains("Use 'Follow Camera'")) {
+            break;
+        }
+        return plain.replaceAll("\\s+", " ").trim();
+    }
+
+    private String formatPresetItemDetail(PresetItem item) {
+        if (item == null) return "";
+        String name = mFeatureNamesByNum.get(item.featNum);
+        if (TextUtils.isEmpty(name)) {
+            name = "Feature #" + item.featNum;
+        }
+        if (item.type == PRESET_SEEKBAR) {
+            int dispVal = (item.featNum == 103) ? (item.onValue + 30) : item.onValue;
+            return name + " (" + dispVal + ")";
+        }
+        if (item.type == PRESET_SPINNER) {
+            String[] opts = mSpinnerOptionsByNum.get(item.featNum);
+            if (opts != null && item.onValue >= 0 && item.onValue < opts.length) {
+                return name + " (" + opts[item.onValue].trim() + ")";
+            }
+            return name;
+        }
+        if (item.type == PRESET_COLOR) {
+            return name + " (" + ModxTheme.hex6(item.onValue) + ")";
+        }
+        return name;
+    }
+
+    private void addBulletLine(LinearLayout parent, String text, int bulletColor) {
+        if (parent == null || TextUtils.isEmpty(text)) return;
+        LinearLayout line = new LinearLayout(getContext);
+        line.setOrientation(LinearLayout.HORIZONTAL);
+        line.setGravity(Gravity.TOP);
+        line.setPadding(0, dp(2), 0, dp(2));
+
+        TextView bulletTv = new TextView(getContext);
+        bulletTv.setText("\u2022 ");
+        bulletTv.setTextColor(bulletColor);
+        bulletTv.setTypeface(fontBold);
+        bulletTv.setTextSize(12f);
+        bulletTv.setIncludeFontPadding(false);
+
+        TextView msgTv = new TextView(getContext);
+        msgTv.setText(text);
+        msgTv.setTextColor(ModxTheme.MUTED);
+        msgTv.setTypeface(fontRegular);
+        msgTv.setTextSize(12f);
+        msgTv.setIncludeFontPadding(false);
+        msgTv.setLineSpacing(dpf(1.5f), 1.0f);
+        msgTv.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
+
+        line.addView(bulletTv);
+        line.addView(msgTv);
+        parent.addView(line);
+    }
+
+    private void addModeDetailSection(LinearLayout parent, String modeTitle, String includesNote,
+                                      PresetItem[] items, boolean topMargin) {
+        TextView titleTv = new TextView(getContext);
+        titleTv.setText(modeTitle);
+        titleTv.setTextColor(ModxTheme.FG);
+        titleTv.setTypeface(fontBold);
+        titleTv.setTextSize(12.5f);
+        titleTv.setIncludeFontPadding(false);
+        titleTv.setPadding(0, topMargin ? dp(10) : 0, 0, dp(3));
+        parent.addView(titleTv);
+
+        if (!TextUtils.isEmpty(includesNote)) {
+            TextView noteTv = new TextView(getContext);
+            noteTv.setText(includesNote);
+            noteTv.setTextColor(ModxTheme.MUTED);
+            noteTv.setTypeface(fontRegular);
+            noteTv.setTextSize(12f);
+            noteTv.setIncludeFontPadding(false);
+            noteTv.setPadding(0, 0, 0, dp(3));
+            parent.addView(noteTv);
+        }
+
+        if (items != null) {
+            for (int i = 0; i < items.length; i++) {
+                addBulletLine(parent, formatPresetItemDetail(items[i]), COLOR_ACCENT);
+            }
+        }
+    }
+
+    private void rebuildModeDetailsBody(LinearLayout bodyWrap) {
+        if (bodyWrap == null) return;
+        bodyWrap.removeAllViews();
+
+        View div = new View(getContext);
+        LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(MATCH_PARENT, Math.max(1, dp(1)));
+        dLp.setMargins(0, 0, 0, dp(8));
+        div.setLayoutParams(dLp);
+        div.setBackgroundColor(ModxTheme.HAIRLINE);
+        bodyWrap.addView(div);
+
+        addModeDetailSection(bodyWrap, "Simple Mode", null, SIMPLE_PRESET_ITEMS, false);
+        addModeDetailSection(bodyWrap, "Max Mode", "Includes everything in Simple Mode, plus:", MAX_EXTRA_ITEMS, true);
+        addModeDetailSection(bodyWrap, "Ultra Max Mode", "Includes everything in Max Mode, plus:", ULTRA_EXTRA_ITEMS, true);
+
+        if (Math.abs(currentScale - 1.0f) >= 0.01f) {
+            scaleTextViewsIn(bodyWrap);
+        }
+    }
+
+    private void addCollapsibleDetailsCard(LinearLayout linLayout, String title, String subtitle,
+                                           String detailText, boolean showCameraShortcut) {
+        if (linLayout == null || TextUtils.isEmpty(detailText)) return;
+        LinearLayout accordion = new LinearLayout(getContext);
+        accordion.setOrientation(LinearLayout.VERTICAL);
+        accordion.setLayoutParams(rowLp(6, 4, 6, 4));
+        accordion.setBackground(ModxTheme.cardSurface(getContext, ModxTheme.LINE));
+
+        LinearLayout headRow = new LinearLayout(getContext);
+        headRow.setOrientation(LinearLayout.HORIZONTAL);
+        headRow.setGravity(Gravity.CENTER_VERTICAL);
+        headRow.setMinimumHeight(dp(48));
+        headRow.setPadding(dp(12), dp(12), dp(12), dp(12));
+        headRow.setBackground(ModxTheme.withInteractiveRipple(
+                getContext,
+                ModxTheme.roundRect(getContext, Color.TRANSPARENT, 0, 0f, ModxTheme.RADIUS_DP),
+                ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
+
+        ImageView infoIv = new ImageView(getContext);
+        infoIv.setImageDrawable(ModxIcons.info(ModxTheme.INFO, dp(16)));
+        LinearLayout.LayoutParams iLp = new LinearLayout.LayoutParams(dp(16), dp(16));
+        iLp.setMargins(0, 0, dp(8), 0);
+        infoIv.setLayoutParams(iLp);
+
+        LinearLayout textCol = new LinearLayout(getContext);
+        textCol.setOrientation(LinearLayout.VERTICAL);
+        textCol.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
+        textCol.setPadding(0, 0, dp(8), 0);
+
+        TextView headTitle = new TextView(getContext);
+        headTitle.setText(title);
+        headTitle.setTextColor(ModxTheme.FG);
+        headTitle.setTypeface(fontBold);
+        headTitle.setTextSize(14f);
+        headTitle.setSingleLine(true);
+        headTitle.setMaxLines(1);
+        headTitle.setEllipsize(TextUtils.TruncateAt.END);
+        headTitle.setIncludeFontPadding(false);
+        textCol.addView(headTitle);
+
+        if (!TextUtils.isEmpty(subtitle)) {
+            TextView headSub = new TextView(getContext);
+            headSub.setText(subtitle);
+            headSub.setTextColor(ModxTheme.MUTED);
+            headSub.setTypeface(fontRegular);
+            headSub.setTextSize(12f);
+            headSub.setSingleLine(true);
+            headSub.setMaxLines(1);
+            headSub.setEllipsize(TextUtils.TruncateAt.END);
+            headSub.setIncludeFontPadding(false);
+            headSub.setPadding(0, dp(2), 0, 0);
+            textCol.addView(headSub);
+        }
+
+        final ImageView chevIv = new ImageView(getContext);
+        chevIv.setImageDrawable(ModxIcons.chevronDown(ModxTheme.SUBTLE, dp(16)));
+        chevIv.setLayoutParams(new LinearLayout.LayoutParams(dp(16), dp(16)));
+
+        headRow.addView(infoIv);
+        headRow.addView(textCol);
+        headRow.addView(chevIv);
+
+        final LinearLayout bodyWrap = new LinearLayout(getContext);
+        mDragIgnoredViews.put(bodyWrap, Boolean.TRUE);
+        bodyWrap.setOrientation(LinearLayout.VERTICAL);
+        bodyWrap.setVisibility(View.GONE);
+        bodyWrap.setPadding(dp(12), 0, dp(12), dp(12));
+
+        View div = new View(getContext);
+        LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(MATCH_PARENT, Math.max(1, dp(1)));
+        dLp.setMargins(0, 0, 0, dp(8));
+        div.setLayoutParams(dLp);
+        div.setBackgroundColor(ModxTheme.HAIRLINE);
+        bodyWrap.addView(div);
+
+        addBulletLine(bodyWrap, detailText, ModxTheme.INFO);
+
+        if (showCameraShortcut) {
+            TextView camBtn = new TextView(getContext);
+            mDragIgnoredViews.put(camBtn, Boolean.TRUE);
+            mInfoCardAccentViews.add(camBtn);
+            camBtn.setText("Open Camera tab");
+            camBtn.setTextColor(COLOR_ACCENT);
+            camBtn.setTypeface(fontBold);
+            camBtn.setTextSize(12f);
+            camBtn.setSingleLine(true);
+            camBtn.setMaxLines(1);
+            camBtn.setEllipsize(TextUtils.TruncateAt.END);
+            camBtn.setGravity(Gravity.CENTER);
+            camBtn.setMinHeight(dp(34));
+            camBtn.setPadding(dp(10), dp(6), dp(10), dp(6));
+            camBtn.setBackground(ModxTheme.withInteractiveRipple(
+                    getContext,
+                    ModxTheme.pillBadgeBg(getContext, ModxTheme.accentSoft(COLOR_ACCENT), ModxTheme.accentLine(COLOR_ACCENT)),
+                    ModxTheme.withAlpha(COLOR_ACCENT, 0x24),
+                    ModxTheme.RADIUS_DP));
+            LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
+            cLp.setMargins(0, dp(8), 0, 0);
+            camBtn.setLayoutParams(cLp);
+            camBtn.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    ModxTheme.hapticTap(v);
+                    selectTabByName("Camera");
+                }
+            });
+            bodyWrap.addView(camBtn);
+        }
+
+        addPressAnim(headRow);
+        headRow.setOnClickListener(new View.OnClickListener() {
+            boolean open = false;
+            @Override
+            public void onClick(View v) {
+                ModxTheme.hapticTap(v);
+                open = !open;
+                chevIv.animate().rotation(open ? 180f : 0f).setDuration(200).start();
+                animateSection(bodyWrap, open);
+            }
+        });
+
+        accordion.addView(headRow);
+        accordion.addView(bodyWrap);
+        linLayout.addView(accordion);
+    }
+
     private void TextView(LinearLayout linLayout, String text) {
         TextView(linLayout, -1, text, false);
     }
@@ -8838,51 +9302,69 @@ private void setWindowFocusable(boolean focusable) {
         if (featNum == 992) {
             LinearLayout accordion = new LinearLayout(getContext);
             accordion.setOrientation(LinearLayout.VERTICAL);
-            accordion.setLayoutParams(rowLp(6, 6, 6, 4));
+            accordion.setLayoutParams(rowLp(6, 4, 6, 4));
             accordion.setBackground(ModxTheme.cardSurface(getContext, ModxTheme.LINE));
 
             LinearLayout headRow = new LinearLayout(getContext);
             headRow.setOrientation(LinearLayout.HORIZONTAL);
             headRow.setGravity(Gravity.CENTER_VERTICAL);
-            headRow.setMinimumHeight(dp(40));
-            headRow.setPadding(dp(11), dp(8), dp(10), dp(8));
+            headRow.setMinimumHeight(dp(48));
+            headRow.setPadding(dp(12), dp(12), dp(12), dp(12));
+            headRow.setBackground(ModxTheme.withInteractiveRipple(
+                    getContext,
+                    ModxTheme.roundRect(getContext, Color.TRANSPARENT, 0, 0f, ModxTheme.RADIUS_DP),
+                    ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
 
             ImageView infoIv = new ImageView(getContext);
-            infoIv.setImageDrawable(ModxIcons.info(ModxTheme.INFO, dp(15)));
-            LinearLayout.LayoutParams iLp = new LinearLayout.LayoutParams(dp(15), dp(15));
+            infoIv.setImageDrawable(ModxIcons.info(ModxTheme.INFO, dp(16)));
+            LinearLayout.LayoutParams iLp = new LinearLayout.LayoutParams(dp(16), dp(16));
             iLp.setMargins(0, 0, dp(8), 0);
             infoIv.setLayoutParams(iLp);
 
+            LinearLayout textCol = new LinearLayout(getContext);
+            textCol.setOrientation(LinearLayout.VERTICAL);
+            textCol.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
+            textCol.setPadding(0, 0, dp(8), 0);
+
             TextView headTitle = new TextView(getContext);
             headTitle.setText("What do the modes do?");
-            headTitle.setTextColor(ModxTheme.MUTED);
-            headTitle.setTypeface(fontMedium);
-            headTitle.setTextSize(11.5f);
+            headTitle.setTextColor(ModxTheme.FG);
+            headTitle.setTypeface(fontBold);
+            headTitle.setTextSize(14f);
+            headTitle.setSingleLine(true);
+            headTitle.setMaxLines(1);
+            headTitle.setEllipsize(TextUtils.TruncateAt.END);
             headTitle.setIncludeFontPadding(false);
-            headTitle.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
+
+            TextView headSub = new TextView(getContext);
+            headSub.setText("Simple, Max & Ultra Max features");
+            headSub.setTextColor(ModxTheme.MUTED);
+            headSub.setTypeface(fontRegular);
+            headSub.setTextSize(12f);
+            headSub.setSingleLine(true);
+            headSub.setMaxLines(1);
+            headSub.setEllipsize(TextUtils.TruncateAt.END);
+            headSub.setIncludeFontPadding(false);
+            headSub.setPadding(0, dp(2), 0, 0);
+
+            textCol.addView(headTitle);
+            textCol.addView(headSub);
 
             final ImageView chevIv = new ImageView(getContext);
             chevIv.setImageDrawable(ModxIcons.chevronDown(ModxTheme.SUBTLE, dp(16)));
             chevIv.setLayoutParams(new LinearLayout.LayoutParams(dp(16), dp(16)));
 
             headRow.addView(infoIv);
-            headRow.addView(headTitle);
+            headRow.addView(textCol);
             headRow.addView(chevIv);
 
             final LinearLayout bodyWrap = new LinearLayout(getContext);
+            mDragIgnoredViews.put(bodyWrap, Boolean.TRUE);
+            mModeDetailsBodyWrap = bodyWrap;
             bodyWrap.setOrientation(LinearLayout.VERTICAL);
             bodyWrap.setVisibility(View.GONE);
-            bodyWrap.setPadding(dp(11), 0, dp(11), dp(10));
-
-            String cleaned = text == null ? "" : text.replaceFirst("^(<br\\s*/?>\\s*)+", "");
-            cleaned = cleaned.replace("#3DDB87", ModxTheme.hex6(COLOR_ACCENT));
-            TextView bodyTv = new TextView(getContext);
-            bodyTv.setText(Html.fromHtml(cleaned));
-            bodyTv.setTextColor(ModxTheme.MUTED);
-            bodyTv.setTypeface(fontRegular);
-            bodyTv.setTextSize(10.5f);
-            bodyTv.setLineSpacing(dpf(2f), 1.0f);
-            bodyWrap.addView(bodyTv);
+            bodyWrap.setPadding(dp(12), 0, dp(12), dp(12));
+            rebuildModeDetailsBody(bodyWrap);
 
             addPressAnim(headRow);
             headRow.setOnClickListener(new View.OnClickListener() {
@@ -8903,50 +9385,7 @@ private void setWindowFocusable(boolean focusable) {
         }
 
         if (featNum == 993 || featNum == 996) {
-            final boolean isInfo = (featNum == 993);
-            int tone = isInfo ? ModxTheme.INFO : ModxTheme.WARNING;
-
-            LinearLayout strip = new LinearLayout(getContext);
-            strip.setOrientation(LinearLayout.HORIZONTAL);
-            strip.setGravity(Gravity.CENTER_VERTICAL);
-            strip.setLayoutParams(rowLp(6, 4, 6, 4));
-            strip.setPadding(dp(10), dp(8), dp(10), dp(8));
-            strip.setBackground(ModxTheme.withInteractiveRipple(
-                    getContext,
-                    ModxTheme.pillBadgeBg(getContext, ModxTheme.badgeBg(tone), ModxTheme.badgeBorder(tone)),
-                    ModxTheme.withAlpha(tone, 0x22), ModxTheme.RADIUS_DP));
-
-            ImageView iconIv = new ImageView(getContext);
-            iconIv.setImageDrawable(isInfo ? ModxIcons.info(tone, dp(15)) : ModxIcons.alertCircle(tone, dp(15)));
-            LinearLayout.LayoutParams iLp = new LinearLayout.LayoutParams(dp(15), dp(15));
-            iLp.setMargins(0, 0, dp(8), 0);
-            iconIv.setLayoutParams(iLp);
-
-            String cleaned = text == null ? "" : text.replace("⚠ ", "").replace("⚠", "");
-            cleaned = cleaned.replace("#3DDB87", ModxTheme.hex6(COLOR_ACCENT));
-            cleaned = cleaned.replace("#8D8F99", ModxTheme.hex6(ModxTheme.MUTED));
-            TextView tv = new TextView(getContext);
-            tv.setText(Html.fromHtml(cleaned));
-            tv.setTextColor(ModxTheme.FG);
-            tv.setTypeface(fontRegular);
-            tv.setTextSize(10.5f);
-            tv.setLineSpacing(dpf(1.5f), 1.0f);
-            tv.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
-
-            strip.addView(iconIv);
-            strip.addView(tv);
-
-            if (isInfo) {
-                addPressAnim(strip);
-                strip.setOnClickListener(new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        ModxTheme.hapticTap(v);
-                        selectTabByName("Camera");
-                    }
-                });
-            }
-            linLayout.addView(strip);
+            addCollapsibleDetailsCard(linLayout, "Details", null, cleanDetailNoteText(text), featNum == 993);
             return;
         }
 
@@ -8954,8 +9393,11 @@ private void setWindowFocusable(boolean focusable) {
         textView.setText(Html.fromHtml(text));
         textView.setTextColor(ModxTheme.MUTED);
         textView.setTypeface(fontRegular);
-        textView.setTextSize(small ? 10.5f : 12f);
-        textView.setPadding(dp(10), dp(5), dp(10), dp(5));
+        textView.setTextSize(small ? 12f : 14f);
+        textView.setSingleLine(true);
+        textView.setMaxLines(1);
+        textView.setEllipsize(TextUtils.TruncateAt.END);
+        textView.setPadding(dp(12), dp(6), dp(12), dp(6));
         linLayout.addView(textView);
     }
 
@@ -8979,37 +9421,6 @@ private void setWindowFocusable(boolean focusable) {
         wView.setPadding(0, dp(4), 0, dp(4));
         wView.getSettings().setCacheMode(WebSettings.LOAD_NO_CACHE);
         linLayout.addView(wView);
-    }
-
-    static String actionName(int a) {
-        switch (a) {
-            case MotionEvent.ACTION_DOWN:    return "DOWN";
-            case MotionEvent.ACTION_UP:      return "UP";
-            case MotionEvent.ACTION_MOVE:    return "MOVE";
-            case MotionEvent.ACTION_CANCEL:  return "CANCEL";
-            case MotionEvent.ACTION_OUTSIDE: return "OUTSIDE";
-            default: return "OTHER_" + a;
-        }
-    }
-
-    private static int darken(int color, float factor) {
-        int r = (int)(Color.red(color) * factor);
-        int g = (int)(Color.green(color) * factor);
-        int b = (int)(Color.blue(color) * factor);
-        return Color.argb(Color.alpha(color),
-            Math.max(0, Math.min(255, r)),
-            Math.max(0, Math.min(255, g)),
-            Math.max(0, Math.min(255, b)));
-    }
-
-    private static int lighten(int color, float factor) {
-        int r = Color.red(color) + (int)((255 - Color.red(color)) * factor);
-        int g = Color.green(color) + (int)((255 - Color.green(color)) * factor);
-        int b = Color.blue(color) + (int)((255 - Color.blue(color)) * factor);
-        return Color.argb(Color.alpha(color),
-            Math.max(0, Math.min(255, r)),
-            Math.max(0, Math.min(255, g)),
-            Math.max(0, Math.min(255, b)));
     }
 
     /**
@@ -9094,7 +9505,7 @@ private void setWindowFocusable(boolean focusable) {
                         TextView tv = (TextView) child;
                         if (j == sp.currentIdx) {
                             tv.setTextColor(COLOR_ACCENT);
-                            tv.setBackground(ModxTheme.roundRect(getContext, ModxTheme.accentSoft(COLOR_ACCENT), 0, 0f, 4f));
+                            tv.setBackground(ModxTheme.roundRect(getContext, ModxTheme.accentSoft(COLOR_ACCENT), 0, 0f, ModxTheme.RADIUS_DP));
                         } else {
                             tv.setTextColor(ModxTheme.FG);
                             tv.setBackground(null);
@@ -9164,6 +9575,19 @@ private void setWindowFocusable(boolean focusable) {
                         ModxTheme.RADIUS_DP));
                 lb.setCompoundDrawablesWithIntrinsicBounds(
                         null, null, ModxIcons.externalLink(COLOR_ACCENT, dp(15)), null);
+            }
+        }
+        if (mModeDetailsBodyWrap != null) {
+            rebuildModeDetailsBody(mModeDetailsBodyWrap);
+        }
+        for (TextView btn : mInfoCardAccentViews) {
+            if (btn != null) {
+                btn.setTextColor(COLOR_ACCENT);
+                btn.setBackground(ModxTheme.withInteractiveRipple(
+                        getContext,
+                        ModxTheme.pillBadgeBg(getContext, ModxTheme.accentSoft(COLOR_ACCENT), ModxTheme.accentLine(COLOR_ACCENT)),
+                        ModxTheme.withAlpha(COLOR_ACCENT, 0x24),
+                        ModxTheme.RADIUS_DP));
             }
         }
         if (mMenuTeleportPad != null) {
@@ -9278,7 +9702,7 @@ private void setWindowFocusable(boolean focusable) {
         }
 
         if (mMinimizeBtn != null) {
-            mMinimizeBtn.setBackground(ModxTheme.secondaryButtonBg(getContext));
+            mMinimizeBtn.setBackground(ModxTheme.cardButtonBg(getContext));
         }
         if (mMinimizeLabel != null) {
             mMinimizeLabel.setTextColor(ModxTheme.FG);
@@ -9288,7 +9712,7 @@ private void setWindowFocusable(boolean focusable) {
         }
 
         if (mHideBtn != null) {
-            mHideBtn.setBackground(ModxTheme.secondaryButtonBg(getContext));
+            mHideBtn.setBackground(ModxTheme.cardButtonBg(getContext));
         }
         if (mHideLabel != null) {
             mHideLabel.setTextColor(ModxTheme.FG);
@@ -10671,23 +11095,92 @@ private static final int PAD_H_DP = 100;    // ★ 23% ছোট
 }
 }
 private void TeleportPad(LinearLayout linLayout) {
-    // Helper text
-    TextView hint = new TextView(getContext);
-    hint.setText("Tap inside -> teleport to safe spot\nDrag top bar to move floating pad");
-    hint.setTextColor(ModxTheme.MUTED);
-    hint.setTextSize(10f);
-    hint.setTypeface(fontRegular);
-    hint.setPadding(dp(8), dp(2), dp(8), dp(6));
-    linLayout.addView(hint);
+    LinearLayout card = new LinearLayout(getContext);
+    card.setOrientation(LinearLayout.VERTICAL);
+    card.setLayoutParams(rowLp(6, 4, 6, 4));
+    card.setPadding(dp(12), dp(12), dp(12), dp(12));
+    card.setBackground(ModxTheme.cardSurface(getContext, ModxTheme.LINE));
 
-    // Menu version
+    LinearLayout headRow = new LinearLayout(getContext);
+    headRow.setOrientation(LinearLayout.HORIZONTAL);
+    headRow.setGravity(Gravity.CENTER_VERTICAL);
+    headRow.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
+
+    LinearLayout textCol = new LinearLayout(getContext);
+    textCol.setOrientation(LinearLayout.VERTICAL);
+    textCol.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
+    textCol.setPadding(0, 0, dp(8), 0);
+
+    TextView titleTv = new TextView(getContext);
+    titleTv.setText("Teleport Pad");
+    titleTv.setTextColor(ModxTheme.FG);
+    titleTv.setTypeface(fontBold);
+    titleTv.setTextSize(14f);
+    titleTv.setSingleLine(true);
+    titleTv.setMaxLines(1);
+    titleTv.setEllipsize(TextUtils.TruncateAt.END);
+    titleTv.setIncludeFontPadding(false);
+
+    TextView subTv = new TextView(getContext);
+    subTv.setText("Tap inside to teleport");
+    subTv.setTextColor(ModxTheme.MUTED);
+    subTv.setTypeface(fontRegular);
+    subTv.setTextSize(12f);
+    subTv.setSingleLine(true);
+    subTv.setMaxLines(1);
+    subTv.setEllipsize(TextUtils.TruncateAt.END);
+    subTv.setIncludeFontPadding(false);
+    subTv.setPadding(0, dp(2), 0, 0);
+
+    textCol.addView(titleTv);
+    textCol.addView(subTv);
+
+    FrameLayout infoBtn = new FrameLayout(getContext);
+    mDragIgnoredViews.put(infoBtn, Boolean.TRUE);
+    infoBtn.setLayoutParams(new LinearLayout.LayoutParams(dp(26), dp(26)));
+    infoBtn.setClickable(true);
+    infoBtn.setFocusable(true);
+    infoBtn.setContentDescription("Teleport pad details");
+    infoBtn.setBackground(ModxTheme.withInteractiveRipple(
+            getContext,
+            ModxTheme.roundRect(getContext, ModxTheme.badgeBg(ModxTheme.INFO), ModxTheme.badgeBorder(ModxTheme.INFO), 1f, ModxTheme.RADIUS_DP),
+            ModxTheme.withAlpha(ModxTheme.INFO, 0x26),
+            ModxTheme.RADIUS_DP));
+
+    ImageView infoIv = new ImageView(getContext);
+    infoIv.setImageDrawable(ModxIcons.info(ModxTheme.INFO, dp(14)));
+    infoIv.setLayoutParams(new FrameLayout.LayoutParams(dp(14), dp(14), Gravity.CENTER));
+    infoBtn.addView(infoIv);
+
+    headRow.addView(textCol);
+    headRow.addView(infoBtn);
+    card.addView(headRow);
+
+    final LinearLayout tipWrap = new LinearLayout(getContext);
+    mDragIgnoredViews.put(tipWrap, Boolean.TRUE);
+    tipWrap.setOrientation(LinearLayout.VERTICAL);
+    tipWrap.setVisibility(View.GONE);
+    tipWrap.setPadding(0, dp(8), 0, 0);
+    addBulletLine(tipWrap, "Drag the floating pad top bar to move it.", ModxTheme.INFO);
+    card.addView(tipWrap);
+
+    infoBtn.setOnClickListener(new View.OnClickListener() {
+        boolean open = false;
+        @Override
+        public void onClick(View v) {
+            ModxTheme.hapticTap(v);
+            open = !open;
+            animateSection(tipWrap, open);
+        }
+    });
+
     TeleportPadView pad = new TeleportPadView(getContext);
-    LinearLayout.LayoutParams lp =
-            new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
-    lp.setMargins(dp(6), dp(4), dp(6), dp(6));
+    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
+    lp.setMargins(0, dp(8), 0, 0);
     pad.setLayoutParams(lp);
     mMenuTeleportPad = pad;
-    linLayout.addView(pad);
+    card.addView(pad);
+    linLayout.addView(card);
 }
 
 private class TeleportPadView extends View {

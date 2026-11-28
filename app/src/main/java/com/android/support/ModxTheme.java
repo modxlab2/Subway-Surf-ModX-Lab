@@ -65,13 +65,7 @@ public final class ModxTheme {
     public static final int TELEGRAM        = 0xFF229ED9; // #229ED9
     public static final int TELEGRAM_DEEP   = 0xFF1A7EB0; // #1A7EB0
 
-    // System FloatingToolbar fallback tokens (used only when device theme attr is absent)
-    public static final int TOOLBAR_DARK_BG         = 0xFF2D2E30;
-    public static final int TOOLBAR_LIGHT_BG        = 0xFFFFFFFF;
-    public static final int TOOLBAR_DARK_FG         = 0xFFF1F3F4;
-    public static final int TOOLBAR_LIGHT_FG        = 0xFF1F1F1F;
-    public static final int TOOLBAR_DARK_HIGHLIGHT  = 0x33FFFFFF;
-    public static final int TOOLBAR_LIGHT_HIGHLIGHT = 0x1F000000;
+    // System FloatingToolbar ripple mask fallback
     public static final int TOOLBAR_RIPPLE_MASK     = 0xFFFFFFFF;
 
     // Geometry
@@ -394,6 +388,27 @@ public final class ModxTheme {
         return withInteractiveRipple(ctx, states, 0x1AFFFFFF, RADIUS_DP);
     }
 
+    public static Drawable cardButtonBg(Context ctx) {
+        float r = dpf(ctx, RADIUS_DP);
+        int b = Math.max(1, dp(ctx, 1f));
+
+        GradientDrawable normal = new GradientDrawable();
+        normal.setColor(CARD);
+        normal.setStroke(b, LINE_STRONG);
+        normal.setCornerRadius(r);
+
+        GradientDrawable pressed = new GradientDrawable();
+        pressed.setColor(CARD_HOVER);
+        pressed.setStroke(b, LINE_HOVER);
+        pressed.setCornerRadius(r);
+
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[]{android.R.attr.state_pressed}, pressed);
+        states.addState(new int[0], normal);
+
+        return withInteractiveRipple(ctx, states, 0x1AFFFFFF, RADIUS_DP);
+    }
+
     public static Drawable ghostButtonBg(Context ctx) {
         float r = dpf(ctx, RADIUS_DP);
         int b = Math.max(1, dp(ctx, 1f));
@@ -596,8 +611,8 @@ public final class ModxTheme {
                 this.modeCheckSizePx = dp(ctx, 16f);
                 this.modeCheckIconPx = dp(ctx, 10f);
                 this.modeTitleMaxSp = 12f;
-                this.modeTitleMinSp = 11f;
-                this.modeDescSp = 9.5f;
+                this.modeTitleMinSp = 10f;
+                this.modeDescSp = 10f;
                 this.modeAllowActiveTag = false;
 
                 this.gripTouchPx = dp(ctx, 20f);
@@ -640,12 +655,12 @@ public final class ModxTheme {
 
                 this.modeCardMinHeightPx = dp(ctx, 48f);
                 this.modeCardPadHPx = dp(ctx, 10f);
-                this.modeCardPadVPx = dp(ctx, 8f);
+                this.modeCardPadVPx = dp(ctx, 10f);
                 this.modeCheckSizePx = dp(ctx, 18f);
                 this.modeCheckIconPx = dp(ctx, 12f);
-                this.modeTitleMaxSp = clamp(13f * s, 11.5f, 13f);
-                this.modeTitleMinSp = 11f;
-                this.modeDescSp = clamp(10.5f * s, 9.5f, 10.5f);
+                this.modeTitleMaxSp = clamp(13.5f * s, 11.5f, 13.5f);
+                this.modeTitleMinSp = 10.5f;
+                this.modeDescSp = clamp(11.5f * s, 10f, 11.5f);
                 this.modeAllowActiveTag = true;
 
                 this.gripTouchPx = dp(ctx, 22f);
@@ -683,14 +698,14 @@ public final class ModxTheme {
                 this.tabIndicatorWpx = dp(ctx, 3f);
                 this.tabIndicatorHpx = Math.max(dp(ctx, 16f), Math.round(dp(ctx, 18f) * s));
 
-                this.modeCardMinHeightPx = Math.max(dp(ctx, 50f), Math.round(dp(ctx, 56f) * s));
-                this.modeCardPadHPx = dp(ctx, clamp(12f * s, 10f, 16f));
-                this.modeCardPadVPx = dp(ctx, clamp(10f * s, 8f, 12f));
+                this.modeCardMinHeightPx = Math.max(dp(ctx, 52f), Math.round(dp(ctx, 56f) * s));
+                this.modeCardPadHPx = dp(ctx, clamp(12f * s, 10f, 14f));
+                this.modeCardPadVPx = dp(ctx, clamp(12f * s, 9f, 14f));
                 this.modeCheckSizePx = Math.max(dp(ctx, 18f), Math.round(dp(ctx, 20f) * s));
                 this.modeCheckIconPx = Math.max(dp(ctx, 11f), Math.round(dp(ctx, 13f) * s));
-                this.modeTitleMaxSp = clamp(13f * s, 11.5f, 14.5f);
+                this.modeTitleMaxSp = clamp(14f * s, 12f, 15f);
                 this.modeTitleMinSp = 11f;
-                this.modeDescSp = clamp(10.5f * s, 9.5f, 12f);
+                this.modeDescSp = clamp(12f * s, 10.5f, 13f);
                 this.modeAllowActiveTag = true;
 
                 this.gripTouchPx = dp(ctx, 22f);
