@@ -44,6 +44,7 @@ public final class FeatureStateStore {
     private static final String KEY_MENU_ACCENT         = "menu_accent_color";
     private static final String KEY_RECENT_MENU_COLORS  = "recent_menu_colors";
     private static final String KEY_TAB_ORDER           = "tab_order";
+    private static final String KEY_TAB_ITEM_ORDERS     = "tab_item_orders";
     private static final String KEY_FOCUS_MODE          = "focus_mode";
     private static final String KEY_MIGRATED_V2         = "mxl_migrated_v2";
     private static final String KEY_SNAPSHOT_USER       = "snapshot_user";
@@ -71,6 +72,8 @@ public final class FeatureStateStore {
     private static int menuAccentColor = DEFAULT_MENU_COLOR;
     private static final ArrayList<Integer> recentMenuColors = new ArrayList<Integer>();
     private static final ArrayList<String> tabOrder = new ArrayList<String>();
+    private static final LinkedHashMap<String, ArrayList<Integer>> tabItemOrders =
+            new LinkedHashMap<String, ArrayList<Integer>>();
     private static boolean focusMode = false;
 
     private static final LinkedHashMap<Integer, Boolean> bools   = new LinkedHashMap<Integer, Boolean>();
@@ -183,6 +186,7 @@ public final class FeatureStateStore {
             menuAccentColor = (savedAccent != 0) ? (0xFF000000 | savedAccent) : DEFAULT_MENU_COLOR;
             loadRecentMenuColorsLocked(prefs.getString(KEY_RECENT_MENU_COLORS, ""));
             loadTabOrderLocked(prefs.getString(KEY_TAB_ORDER, ""));
+            loadTabItemOrdersLocked(prefs.getString(KEY_TAB_ITEM_ORDERS, ""));
             focusMode = prefs.getBoolean(KEY_FOCUS_MODE, false);
             normalizeActiveModeLocked();
         } else {
@@ -192,6 +196,7 @@ public final class FeatureStateStore {
             menuAccentColor = DEFAULT_MENU_COLOR;
             recentMenuColors.clear();
             tabOrder.clear();
+            tabItemOrders.clear();
             focusMode = false;
             clearSnapshotKeysOnDiskLocked(false);
         }
@@ -322,6 +327,7 @@ public final class FeatureStateStore {
             menuAccentColor = DEFAULT_MENU_COLOR;
             recentMenuColors.clear();
             tabOrder.clear();
+            tabItemOrders.clear();
             focusMode = false;
             snapshotUser = newUser;
             clearSnapshotKeysOnDiskLocked(true);
@@ -397,6 +403,11 @@ public final class FeatureStateStore {
             ed.putString(KEY_TAB_ORDER, serializeTabOrderLocked());
         } else {
             ed.remove(KEY_TAB_ORDER);
+        }
+        if (!tabItemOrders.isEmpty()) {
+            ed.putString(KEY_TAB_ITEM_ORDERS, serializeTabItemOrdersLocked());
+        } else {
+            ed.remove(KEY_TAB_ITEM_ORDERS);
         }
         ed.putBoolean(KEY_FOCUS_MODE, focusMode);
 
@@ -670,6 +681,77 @@ public final class FeatureStateStore {
         }
     }
 
+    public static synchronized List<Integer> getTabItemOrder(String tabName) {
+        if (tabName == null || tabName.isEmpty()) {
+            return new ArrayList<Integer>();
+        }
+        ArrayList<Integer> list = tabItemOrders.get(tabName);
+        return (list != null) ? new ArrayList<Integer>(list) : new ArrayList<Integer>();
+    }
+
+    public static synchronized void setTabItemOrder(Context ctx, String tabName, List<Integer> order) {
+        ensureInit(ctx);
+        if (tabName == null || tabName.isEmpty()) return;
+        ArrayList<Integer> clean = new ArrayList<Integer>();
+        if (order != null) {
+            for (int i = 0; i < order.size(); i++) {
+                Integer fn = order.get(i);
+                if (fn != null && !clean.contains(fn)) {
+                    clean.add(fn);
+                }
+            }
+        }
+        if (clean.isEmpty()) {
+            tabItemOrders.remove(tabName);
+        } else {
+            tabItemOrders.put(tabName, clean);
+        }
+        if (saveEnabled && prefs != null) {
+            if (batchDepth == 0) {
+                SharedPreferences.Editor ed = prefs.edit();
+                if (tabItemOrders.isEmpty()) {
+                    ed.remove(KEY_TAB_ITEM_ORDERS);
+                } else {
+                    ed.putString(KEY_TAB_ITEM_ORDERS, serializeTabItemOrdersLocked());
+                }
+                boolean ok = ed.commit();
+                dirty = !ok;
+            } else {
+                dirty = true;
+            }
+        }
+    }
+
+    public static synchronized void resetTabItemOrders(Context ctx) {
+        ensureInit(ctx);
+        tabItemOrders.clear();
+        if (saveEnabled && prefs != null) {
+            if (batchDepth == 0) {
+                boolean ok = prefs.edit().remove(KEY_TAB_ITEM_ORDERS).commit();
+                dirty = !ok;
+            } else {
+                dirty = true;
+            }
+        }
+    }
+
+    public static synchronized void resetLayout(Context ctx) {
+        ensureInit(ctx);
+        tabOrder.clear();
+        tabItemOrders.clear();
+        if (saveEnabled && prefs != null) {
+            if (batchDepth == 0) {
+                boolean ok = prefs.edit()
+                        .remove(KEY_TAB_ORDER)
+                        .remove(KEY_TAB_ITEM_ORDERS)
+                        .commit();
+                dirty = !ok;
+            } else {
+                dirty = true;
+            }
+        }
+    }
+
     public static synchronized boolean isFocusMode() {
         return focusMode;
     }
@@ -709,6 +791,52 @@ public final class FeatureStateStore {
             arr.put(tabOrder.get(i));
         }
         return arr.toString();
+    }
+
+    private static void loadTabItemOrdersLocked(String raw) {
+        tabItemOrders.clear();
+        if (raw == null || raw.isEmpty()) return;
+        try {
+            org.json.JSONObject obj = new org.json.JSONObject(raw);
+            java.util.Iterator<String> keys = obj.keys();
+            while (keys.hasNext()) {
+                String tab = keys.next();
+                if (tab == null || tab.isEmpty()) continue;
+                org.json.JSONArray arr = obj.optJSONArray(tab);
+                if (arr == null) continue;
+                ArrayList<Integer> list = new ArrayList<Integer>();
+                for (int i = 0; i < arr.length(); i++) {
+                    Object val = arr.opt(i);
+                    if (val instanceof Number) {
+                        int fn = ((Number) val).intValue();
+                        if (!list.contains(fn)) {
+                            list.add(fn);
+                        }
+                    }
+                }
+                if (!list.isEmpty()) {
+                    tabItemOrders.put(tab, list);
+                }
+            }
+        } catch (Exception ignored) { }
+    }
+
+    private static String serializeTabItemOrdersLocked() {
+        if (tabItemOrders.isEmpty()) return "";
+        org.json.JSONObject obj = new org.json.JSONObject();
+        try {
+            for (Map.Entry<String, ArrayList<Integer>> e : tabItemOrders.entrySet()) {
+                String tab = e.getKey();
+                ArrayList<Integer> list = e.getValue();
+                if (tab == null || tab.isEmpty() || list == null || list.isEmpty()) continue;
+                org.json.JSONArray arr = new org.json.JSONArray();
+                for (int i = 0; i < list.size(); i++) {
+                    arr.put(list.get(i));
+                }
+                obj.put(tab, arr);
+            }
+        } catch (Exception ignored) { }
+        return obj.toString();
     }
 
     // =========================================================================
@@ -1225,6 +1353,8 @@ public final class FeatureStateStore {
         final int menuAccentColor;
         final boolean focusMode;
         final ArrayList<String> tabOrder = new ArrayList<String>();
+        final LinkedHashMap<String, ArrayList<Integer>> tabItemOrders =
+                new LinkedHashMap<String, ArrayList<Integer>>();
         final ArrayList<Integer> recentColors = new ArrayList<Integer>();
         final LinkedHashMap<Integer, Boolean> bools = new LinkedHashMap<Integer, Boolean>();
         final LinkedHashMap<Integer, Integer> ints = new LinkedHashMap<Integer, Integer>();
@@ -1251,6 +1381,9 @@ public final class FeatureStateStore {
                 saveEnabled, sessionRestoredFromDisk, pendingNativeRestore,
                 snapshotUser, menuAccentColor, focusMode);
         snap.tabOrder.addAll(tabOrder);
+        for (Map.Entry<String, ArrayList<Integer>> e : tabItemOrders.entrySet()) {
+            snap.tabItemOrders.put(e.getKey(), new ArrayList<Integer>(e.getValue()));
+        }
         snap.recentColors.addAll(recentMenuColors);
         snap.bools.putAll(bools);
         snap.ints.putAll(ints);
@@ -1277,6 +1410,10 @@ public final class FeatureStateStore {
         focusMode = snap.focusMode;
         tabOrder.clear();
         tabOrder.addAll(snap.tabOrder);
+        tabItemOrders.clear();
+        for (Map.Entry<String, ArrayList<Integer>> e : snap.tabItemOrders.entrySet()) {
+            tabItemOrders.put(e.getKey(), new ArrayList<Integer>(e.getValue()));
+        }
         recentMenuColors.clear();
         recentMenuColors.addAll(snap.recentColors);
 

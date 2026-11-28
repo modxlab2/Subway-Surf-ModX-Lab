@@ -96,6 +96,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.WeakHashMap;
 import android.os.Looper;
 
@@ -214,21 +215,29 @@ public class Menu {
     private Runnable mMenuToastHideRunnable = null;
     private int mColorPickerOriginalColor = 0;
 
-    // ===== Feature A: Tab reorder (long-press + drag) =====
+    // ===== Feature A: Tab & Item reorder (long-press + drag) =====
+    private static final int ITEM_DRAG_GROUP_FIXED   = 0;
+    private static final int ITEM_DRAG_GROUP_MODE    = 1;
+    private static final int ITEM_DRAG_GROUP_FEATURE = 2;
+
+    private static final class ItemDragMeta {
+        final int featNum;
+        final int dragGroup;
+        final String tabName;
+
+        ItemDragMeta(int featNum, int dragGroup, String tabName) {
+            this.featNum = featNum;
+            this.dragGroup = dragGroup;
+            this.tabName = tabName;
+        }
+    }
+
     private ImageView mResetTabOrderIcon = null;
-    private boolean tabDragActive = false;
-    private TabHolder tabDragCandidate = null;
-    private TabHolder tabDragTarget = null;
-    private int tabDragOrigIndex = -1;
-    private int tabDragCurIndex = -1;
-    private float tabDragDownRawX = 0f;
-    private float tabDragDownRawY = 0f;
-    private float tabDragStartProxyY = 0f;
-    private View tabDragProxy = null;
-    private View tabDragPlaceholder = null;
-    private int tabDragAutoScrollDir = 0;
-    private Runnable tabDragLongPressRunnable = null;
-    private Runnable tabDragAutoScrollRunnable = null;
+    private DragReorderController tabReorderController = null;
+    private DragReorderController itemReorderController = null;
+    private final HashMap<View, ItemDragMeta> mItemDragMetaMap = new HashMap<View, ItemDragMeta>();
+    private final WeakHashMap<View, Boolean> mDragIgnoredViews = new WeakHashMap<View, Boolean>();
+    private final HashMap<String, ArrayList<View>> defaultCategoryItemViews = new HashMap<String, ArrayList<View>>();
     private boolean sidebarWinDragActive = false;
     private float sidebarWinDownRawX = 0f;
     private float sidebarWinDownRawY = 0f;
@@ -880,6 +889,7 @@ Preferences.init(context);
         contentScrollView.addView(contentLayout);
         contentStage.addView(contentScrollView);
 
+        initDragReorderControllers();
         buildFocusOverlayControls(context);
         buildUndoSnackbar(context);
 
@@ -1366,6 +1376,7 @@ Preferences.init(context);
     // Expand / collapse with animation
     // ================================================================
     private void expandMenu() {
+        cancelAllDrags();
         menuFrame.animate().cancel();
         mCollapsed.setVisibility(View.GONE);
         menuFrame.setVisibility(View.VISIBLE);
@@ -1404,7 +1415,7 @@ Preferences.init(context);
     }
 
     private void collapseMenu(float iconAlpha) {
-        cancelTabDrag();
+        cancelAllDrags();
         Preferences.flush("menu_collapse");
         if (mTitleTitanic != null) {
             mTitleTitanic.setPaused(true);
@@ -2010,7 +2021,7 @@ Preferences.init(context);
         public boolean onTouch(View v, MotionEvent event) {
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN: {
-                        cancelTabDrag();
+                        cancelAllDrags();
                         startW = menuFrame.getWidth();
                         startH = menuFrame.getHeight();
                         if (startW <= 0) startW = Menu.this.dp(MENU_WIDTH);
@@ -2584,7 +2595,7 @@ Preferences.init(context);
                 if (vmParams == null) return true;
                 switch (motionEvent.getActionMasked()) {
                     case MotionEvent.ACTION_DOWN:
-                        cancelTabDrag();
+                        cancelAllDrags();
                         setAncestorsDisallowIntercept(view, true);
                         initialX = vmParams.x;
                         initialY = vmParams.y;
@@ -2639,11 +2650,13 @@ Preferences.init(context);
 
     // ================================================================
     // Focus mini-pill expanded grip touch container (>= 40dp x 40dp hit rect)
+    // + Feature item long-press drag reorder
     // ================================================================
     private final class ContentStageFrameLayout extends FrameLayout {
         private final Rect tmpRect = new Rect();
         private final Rect hitRect = new Rect();
         private boolean gripDragActive = false;
+        private boolean itemDragTracking = false;
 
         ContentStageFrameLayout(Context ctx) {
             super(ctx);
@@ -2667,12 +2680,13 @@ Preferences.init(context);
             int action = ev.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN) {
                 gripDragActive = false;
+                itemDragTracking = false;
+                int fx = Math.round(ev.getX());
+                int fy = Math.round(ev.getY());
                 if (isLoggedIn && focusMode
                         && mFocusMiniPill != null && mFocusMiniPill.getVisibility() == View.VISIBLE
                         && mFocusPillGripWrap != null && mFocusPillGripWrap.getVisibility() == View.VISIBLE
                         && mFocusPillDragListener != null) {
-                    int fx = Math.round(ev.getX());
-                    int fy = Math.round(ev.getY());
                     boolean onActionBtn = isPointInChild(mFocusPillExitBtn, fx, fy)
                             || isPointInChild(mFocusPillMinBtn, fx, fy)
                             || isPointInChild(mFocusPillHideBtn, fx, fy);
@@ -2697,6 +2711,15 @@ Preferences.init(context);
                         } catch (IllegalArgumentException ignored) { }
                     }
                 }
+                boolean onFloatingOverlay = isPointInChild(mFocusToggleBtn, fx, fy)
+                        || isPointInChild(mFocusMiniPill, fx, fy)
+                        || isPointInChild(mUndoSnackbar, fx, fy);
+                if (!onFloatingOverlay && itemReorderController != null) {
+                    itemDragTracking = true;
+                    if (itemReorderController.dispatchTouchEvent(ev)) {
+                        return true;
+                    }
+                }
                 return super.dispatchTouchEvent(ev);
             }
 
@@ -2715,6 +2738,16 @@ Preferences.init(context);
                 }
                 return handled;
             }
+
+            if (itemDragTracking && itemReorderController != null) {
+                boolean consumed = itemReorderController.dispatchTouchEvent(ev);
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    itemDragTracking = false;
+                }
+                if (consumed) {
+                    return true;
+                }
+            }
             return super.dispatchTouchEvent(ev);
         }
     }
@@ -2726,7 +2759,6 @@ Preferences.init(context);
     // ================================================================
     private final class SidebarDragFrameLayout extends FrameLayout {
         private final int touchSlop;
-        private float lastFrameTouchY = 0f;
 
         SidebarDragFrameLayout(Context ctx) {
             super(ctx);
@@ -2734,7 +2766,8 @@ Preferences.init(context);
         }
 
         private void startSidebarWindowDrag() {
-            if (!isLoggedIn || tabDragActive || vmParams == null) return;
+            boolean tabDragRunning = (tabReorderController != null && tabReorderController.isDragActive());
+            if (!isLoggedIn || tabDragRunning || vmParams == null) return;
             sidebarWinDragActive = true;
             sidebarWinStartX = vmParams.x;
             sidebarWinStartY = vmParams.y;
@@ -2754,37 +2787,27 @@ Preferences.init(context);
         @Override
         public boolean dispatchTouchEvent(MotionEvent ev) {
             int action = ev.getActionMasked();
-            lastFrameTouchY = ev.getY();
             switch (action) {
                 case MotionEvent.ACTION_DOWN: {
-                    cancelPendingTabLongPress();
                     cancelPendingSidebarWindowDrag();
-                    if (isLoggedIn && !tabDragActive && !sidebarWinDragActive) {
-                        final TabHolder cand = findTabAtFramePoint(ev.getX(), ev.getY());
-                        if (cand != null) {
-                            if (countDraggableTabs() >= 2 && !"Settings".equals(cand.name)) {
-                                tabDragDownRawX = ev.getRawX();
-                                tabDragDownRawY = ev.getRawY();
-                                tabDragCandidate = cand;
-                                tabDragLongPressRunnable = new Runnable() {
-                                    @Override
-                                    public void run() {
-                                        tabDragLongPressRunnable = null;
-                                        if (tabDragCandidate == cand && !tabDragActive && !sidebarWinDragActive) {
-                                            startTabDrag(cand);
-                                        }
-                                    }
-                                };
-                                mainHandler.postDelayed(tabDragLongPressRunnable, 350L);
-                            }
-                        } else if (isPointInSidebarWindowDragZone(ev.getY())) {
+                    if (isLoggedIn && !sidebarWinDragActive) {
+                        if (tabReorderController != null) {
+                            tabReorderController.dispatchTouchEvent(ev);
+                        }
+                        boolean tabTracked = (tabReorderController != null
+                                && (tabReorderController.isDragActive() || tabReorderController.hasPendingLongPress()));
+                        View touchedTab = (tabReorderController != null)
+                                ? tabReorderController.findItemAtHostPoint(ev.getX(), ev.getY()) : null;
+                        if (!tabTracked && touchedTab == null && isPointInSidebarWindowDragZone(ev.getY())) {
                             sidebarWinDownRawX = ev.getRawX();
                             sidebarWinDownRawY = ev.getRawY();
                             sidebarWinDragLongPressRunnable = new Runnable() {
                                 @Override
                                 public void run() {
                                     sidebarWinDragLongPressRunnable = null;
-                                    if (!tabDragActive && !sidebarWinDragActive) {
+                                    boolean tabBusy = (tabReorderController != null
+                                            && (tabReorderController.isDragActive() || tabReorderController.hasPendingLongPress()));
+                                    if (!tabBusy && !sidebarWinDragActive) {
                                         startSidebarWindowDrag();
                                     }
                                 }
@@ -2802,32 +2825,9 @@ Preferences.init(context);
                         moveWindow(sidebarWinStartX + (int) dx, sidebarWinStartY + (int) dy);
                         return true;
                     }
-                    if (tabDragActive) {
-                        float dy = ev.getRawY() - tabDragDownRawY;
-                        if (tabDragProxy != null) {
-                            float maxTy = Math.max(0f, getHeight() - tabDragProxy.getHeight());
-                            float nextTy = Math.max(0f, Math.min(maxTy, tabDragStartProxyY + dy));
-                            tabDragProxy.setTranslationY(nextTy);
-                            updateTabDragDropPosition(nextTy + tabDragProxy.getHeight() * 0.5f);
-                        } else {
-                            updateTabDragDropPosition(ev.getY());
-                        }
-                        int edgePx = dp(26);
-                        int nextDir = 0;
-                        if (ev.getY() < edgePx) {
-                            nextDir = -1;
-                        } else if (ev.getY() > getHeight() - edgePx) {
-                            nextDir = 1;
-                        }
-                        setTabDragAutoScrollDir(nextDir);
+                    if (tabReorderController != null && tabReorderController.dispatchTouchEvent(ev)) {
+                        cancelPendingSidebarWindowDrag();
                         return true;
-                    }
-                    if (tabDragCandidate != null && tabDragLongPressRunnable != null) {
-                        float dx = ev.getRawX() - tabDragDownRawX;
-                        float dy = ev.getRawY() - tabDragDownRawY;
-                        if (Math.hypot(dx, dy) > touchSlop) {
-                            cancelPendingTabLongPress();
-                        }
                     }
                     if (sidebarWinDragLongPressRunnable != null) {
                         float dx = ev.getRawX() - sidebarWinDownRawX;
@@ -2839,26 +2839,8 @@ Preferences.init(context);
                     return super.dispatchTouchEvent(ev);
                 }
 
-                case MotionEvent.ACTION_UP: {
-                    cancelPendingTabLongPress();
-                    cancelPendingSidebarWindowDrag();
-                    if (sidebarWinDragActive) {
-                        sidebarWinDragActive = false;
-                        if (menuFrame != null) menuFrame.setAlpha(1f);
-                        if (sidebarScroll != null) {
-                            sidebarScroll.requestDisallowInterceptTouchEvent(false);
-                        }
-                        return true;
-                    }
-                    if (tabDragActive) {
-                        finishTabDrag();
-                        return true;
-                    }
-                    return super.dispatchTouchEvent(ev);
-                }
-
+                case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL: {
-                    cancelPendingTabLongPress();
                     cancelPendingSidebarWindowDrag();
                     if (sidebarWinDragActive) {
                         sidebarWinDragActive = false;
@@ -2868,8 +2850,7 @@ Preferences.init(context);
                         }
                         return true;
                     }
-                    if (tabDragActive) {
-                        cancelTabDrag();
+                    if (tabReorderController != null && tabReorderController.dispatchTouchEvent(ev)) {
                         return true;
                     }
                     return super.dispatchTouchEvent(ev);
@@ -3384,7 +3365,7 @@ Preferences.init(context);
     }
 
     private void setFocusModeEnabled(final boolean enabled, boolean animate) {
-        cancelTabDrag();
+        cancelAllDrags();
         if (!isLoggedIn) {
             focusMode = false;
             if (focusAnimator != null) {
@@ -3973,56 +3954,698 @@ Preferences.init(context);
     }
 
     // ================================================================
-    // Feature A helpers: Long-press + drag reorder + Reset tab order
+    // Generalized Drag-and-Drop Reorder Controller (Tabs + Feature Items)
     // ================================================================
-    private int countDraggableTabs() {
-        int count = 0;
-        for (int i = 0; i < tabHolders.size(); i++) {
-            if (!"Settings".equals(tabHolders.get(i).name)) count++;
-        }
-        return count;
+    private interface DragReorderDelegate {
+        boolean isEnabled();
+        LinearLayout getListLayout();
+        int getDragGroup(View itemView);
+        boolean isInteractiveSubTarget(View itemRoot, float frameX, float frameY);
+        void onShouldCancelOtherGestures();
+        void onDragLifted(View itemView);
+        void onDragRestored(View itemView);
+        void onDragCommitted(LinearLayout listLayout, int dragGroup, int origIndex, int dropIndex);
+        void onDragCancelled(LinearLayout listLayout);
     }
 
-    private int getMaxDraggableTabIndex() {
-        if (tabHolders.isEmpty()) return -1;
-        int last = tabHolders.size() - 1;
-        if ("Settings".equals(tabHolders.get(last).name)) {
-            return last - 1;
-        }
-        return last;
-    }
+    private final class DragReorderController {
+        private final FrameLayout overlayHost;
+        private final ScrollView scrollView;
+        private final float liftedScale;
+        private final float liftedAlpha;
+        private final int liftedElevationDp;
+        private final DragReorderDelegate delegate;
+        private final int touchSlop;
+        private final Rect tmpRect = new Rect();
 
-    private TabHolder findTabAtFramePoint(float frameX, float frameY) {
-        if (sidebarFrame == null) return null;
-        Rect r = new Rect();
-        int fx = Math.round(frameX);
-        int fy = Math.round(frameY);
-        for (int i = 0; i < tabHolders.size(); i++) {
-            TabHolder t = tabHolders.get(i);
-            if (t.root == null || t.root.getParent() == null || t.root.getVisibility() != View.VISIBLE) continue;
-            try {
-                r.set(0, 0, t.root.getWidth(), t.root.getHeight());
-                sidebarFrame.offsetDescendantRectToMyCoords(t.root, r);
-                if (r.contains(fx, fy)) {
-                    return t;
+        private boolean active = false;
+        private int activeGroup = 0;
+        private View candidateView = null;
+        private View draggedView = null;
+        private View placeholder = null;
+        private LinearLayout activeList = null;
+        private ViewGroup.LayoutParams origLayoutParams = null;
+        private float origElevation = 0f;
+        private int origIndex = -1;
+        private int curIndex = -1;
+        private float downRawX = 0f;
+        private float downRawY = 0f;
+        private float startProxyY = 0f;
+        private int autoScrollDir = 0;
+        private Runnable longPressRunnable = null;
+        private Runnable autoScrollRunnable = null;
+
+        DragReorderController(FrameLayout overlayHost, ScrollView scrollView,
+                              float liftedScale, float liftedAlpha, int liftedElevationDp,
+                              DragReorderDelegate delegate) {
+            this.overlayHost = overlayHost;
+            this.scrollView = scrollView;
+            this.liftedScale = liftedScale;
+            this.liftedAlpha = liftedAlpha;
+            this.liftedElevationDp = liftedElevationDp;
+            this.delegate = delegate;
+            this.touchSlop = ViewConfiguration.get(overlayHost.getContext()).getScaledTouchSlop();
+        }
+
+        boolean isDragActive() {
+            return active;
+        }
+
+        boolean hasPendingLongPress() {
+            return longPressRunnable != null && candidateView != null;
+        }
+
+        View findItemAtHostPoint(float frameX, float frameY) {
+            LinearLayout list = delegate.getListLayout();
+            if (overlayHost == null || list == null) return null;
+            int fx = Math.round(frameX);
+            int fy = Math.round(frameY);
+            for (int i = 0; i < list.getChildCount(); i++) {
+                View child = list.getChildAt(i);
+                if (child == null || child == placeholder || child.getVisibility() != View.VISIBLE) {
+                    continue;
                 }
-            } catch (IllegalArgumentException ignored) { }
+                try {
+                    tmpRect.set(0, 0, child.getWidth(), child.getHeight());
+                    overlayHost.offsetDescendantRectToMyCoords(child, tmpRect);
+                    if (tmpRect.contains(fx, fy)) {
+                        return child;
+                    }
+                } catch (IllegalArgumentException ignored) { }
+            }
+            return null;
         }
-        return null;
+
+        private int countItemsInGroup(LinearLayout list, int group) {
+            if (list == null || group <= 0) return 0;
+            int count = 0;
+            for (int i = 0; i < list.getChildCount(); i++) {
+                View child = list.getChildAt(i);
+                if (child != null && child.getVisibility() != View.GONE && delegate.getDragGroup(child) == group) {
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        private void cancelPendingLongPress() {
+            if (longPressRunnable != null) {
+                mainHandler.removeCallbacks(longPressRunnable);
+                longPressRunnable = null;
+            }
+            candidateView = null;
+        }
+
+        private void setAutoScrollDir(int dir) {
+            if (autoScrollDir == dir) return;
+            autoScrollDir = dir;
+            if (dir == 0) {
+                if (autoScrollRunnable != null && overlayHost != null) {
+                    overlayHost.removeCallbacks(autoScrollRunnable);
+                }
+                autoScrollRunnable = null;
+            } else if (autoScrollRunnable == null && overlayHost != null) {
+                autoScrollRunnable = new Runnable() {
+                    @Override
+                    public void run() {
+                        if (!active || autoScrollDir == 0 || scrollView == null || overlayHost == null) {
+                            autoScrollRunnable = null;
+                            return;
+                        }
+                        int step = autoScrollDir * dp(6);
+                        int prevY = scrollView.getScrollY();
+                        scrollView.scrollBy(0, step);
+                        if (scrollView.getScrollY() != prevY && draggedView != null) {
+                            updateDropPosition(draggedView.getTranslationY() + draggedView.getHeight() * 0.5f);
+                        }
+                        overlayHost.postOnAnimation(this);
+                    }
+                };
+                overlayHost.postOnAnimation(autoScrollRunnable);
+            }
+        }
+
+        boolean dispatchTouchEvent(MotionEvent ev) {
+            int action = ev.getActionMasked();
+            switch (action) {
+                case MotionEvent.ACTION_DOWN: {
+                    cancelPendingLongPress();
+                    if (!active && delegate.isEnabled()) {
+                        final View cand = findItemAtHostPoint(ev.getX(), ev.getY());
+                        if (cand != null) {
+                            final LinearLayout list = delegate.getListLayout();
+                            final int group = delegate.getDragGroup(cand);
+                            if (group > 0 && countItemsInGroup(list, group) >= 2
+                                    && !delegate.isInteractiveSubTarget(cand, ev.getX(), ev.getY())) {
+                                delegate.onShouldCancelOtherGestures();
+                                downRawX = ev.getRawX();
+                                downRawY = ev.getRawY();
+                                candidateView = cand;
+                                longPressRunnable = new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        longPressRunnable = null;
+                                        if (candidateView == cand && !active && delegate.isEnabled()) {
+                                            startDrag(cand, list, group);
+                                        }
+                                    }
+                                };
+                                mainHandler.postDelayed(longPressRunnable, 350L);
+                            }
+                        }
+                    }
+                    return false;
+                }
+
+                case MotionEvent.ACTION_MOVE: {
+                    if (active) {
+                        float dy = ev.getRawY() - downRawY;
+                        if (draggedView != null) {
+                            float maxTy = Math.max(0f, overlayHost.getHeight() - draggedView.getHeight());
+                            float nextTy = Math.max(0f, Math.min(maxTy, startProxyY + dy));
+                            draggedView.setTranslationY(nextTy);
+                            updateDropPosition(nextTy + draggedView.getHeight() * 0.5f);
+                        } else {
+                            updateDropPosition(ev.getY());
+                        }
+                        int hostH = overlayHost.getHeight();
+                        int edgePx = Math.min(dp(26), Math.max(dp(14), hostH / 5));
+                        int nextDir = 0;
+                        if (ev.getY() < edgePx) {
+                            nextDir = -1;
+                        } else if (ev.getY() > hostH - edgePx) {
+                            nextDir = 1;
+                        }
+                        setAutoScrollDir(nextDir);
+                        return true;
+                    }
+                    if (candidateView != null && longPressRunnable != null) {
+                        float dx = ev.getRawX() - downRawX;
+                        float dy = ev.getRawY() - downRawY;
+                        if (Math.hypot(dx, dy) > touchSlop) {
+                            cancelPendingLongPress();
+                        }
+                    }
+                    return false;
+                }
+
+                case MotionEvent.ACTION_UP: {
+                    cancelPendingLongPress();
+                    if (active) {
+                        finishDrag();
+                        return true;
+                    }
+                    return false;
+                }
+
+                case MotionEvent.ACTION_CANCEL: {
+                    cancelPendingLongPress();
+                    if (active) {
+                        cancel();
+                        return true;
+                    }
+                    return false;
+                }
+            }
+            return false;
+        }
+
+        private void startDrag(View cand, LinearLayout list, int group) {
+            if (cand == null || list == null || overlayHost == null || scrollView == null) return;
+            if (delegate.getDragGroup(cand) != group || countItemsInGroup(list, group) < 2) return;
+            int idx = list.indexOfChild(cand);
+            if (idx < 0) return;
+
+            tmpRect.set(0, 0, cand.getWidth(), cand.getHeight());
+            try {
+                overlayHost.offsetDescendantRectToMyCoords(cand, tmpRect);
+            } catch (IllegalArgumentException e) {
+                return;
+            }
+            if (tmpRect.width() <= 0 || tmpRect.height() <= 0) return;
+
+            active = true;
+            activeGroup = group;
+            activeList = list;
+            draggedView = cand;
+            origIndex = idx;
+            curIndex = idx;
+            startProxyY = tmpRect.top;
+            origLayoutParams = cand.getLayoutParams();
+            origElevation = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) ? cand.getElevation() : 0f;
+
+            ModxTheme.hapticTap(overlayHost);
+
+            long now = android.os.SystemClock.uptimeMillis();
+            MotionEvent cancelEv = MotionEvent.obtain(now, now, MotionEvent.ACTION_CANCEL, 0f, 0f, 0);
+            scrollView.dispatchTouchEvent(cancelEv);
+            cancelEv.recycle();
+            scrollView.requestDisallowInterceptTouchEvent(true);
+
+            cand.animate().cancel();
+            cand.setPressed(false);
+            cand.cancelLongPress();
+            cand.setScaleX(1f);
+            cand.setScaleY(1f);
+
+            View ph = new View(getContext);
+            LinearLayout.LayoutParams phLp;
+            if (origLayoutParams instanceof LinearLayout.LayoutParams) {
+                LinearLayout.LayoutParams srcLp = (LinearLayout.LayoutParams) origLayoutParams;
+                phLp = new LinearLayout.LayoutParams(
+                        srcLp.width == MATCH_PARENT ? MATCH_PARENT : tmpRect.width(),
+                        tmpRect.height());
+                phLp.gravity = srcLp.gravity;
+                phLp.setMargins(srcLp.leftMargin, srcLp.topMargin, srcLp.rightMargin, srcLp.bottomMargin);
+            } else {
+                phLp = new LinearLayout.LayoutParams(MATCH_PARENT, tmpRect.height());
+            }
+            ph.setLayoutParams(phLp);
+            ph.setBackground(ModxTheme.roundRect(
+                    getContext, ModxTheme.accentSoft(COLOR_ACCENT), ModxTheme.accentLine(COLOR_ACCENT),
+                    1f, ModxTheme.RADIUS_DP));
+            placeholder = ph;
+
+            list.removeViewAt(idx);
+            list.addView(ph, idx);
+
+            FrameLayout.LayoutParams pxLp = new FrameLayout.LayoutParams(tmpRect.width(), tmpRect.height());
+            pxLp.setMargins(tmpRect.left, 0, 0, 0);
+            cand.setLayoutParams(pxLp);
+            cand.setTranslationY(tmpRect.top);
+            cand.setScaleX(1f);
+            cand.setScaleY(1f);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                cand.setElevation(dp(liftedElevationDp));
+            }
+            overlayHost.addView(cand);
+            delegate.onDragLifted(cand);
+            cand.animate().scaleX(liftedScale).scaleY(liftedScale).alpha(liftedAlpha).setDuration(110)
+                    .setInterpolator(new DecelerateInterpolator()).start();
+        }
+
+        private int effectiveDragGroup(View child) {
+            if (child == placeholder) return activeGroup;
+            return delegate.getDragGroup(child);
+        }
+
+        private void updateDropPosition(float frameCenterY) {
+            if (!active || placeholder == null || activeList == null || overlayHost == null) {
+                return;
+            }
+            tmpRect.set(0, 0, 1, 1);
+            try {
+                overlayHost.offsetDescendantRectToMyCoords(activeList, tmpRect);
+            } catch (IllegalArgumentException e) {
+                return;
+            }
+            float contentY = frameCenterY - tmpRect.top;
+            int targetIdx = curIndex;
+            int n = activeList.getChildCount();
+
+            for (int i = 0; i < n; i++) {
+                View child = activeList.getChildAt(i);
+                if (child == null || child == placeholder || child.getVisibility() == View.GONE) continue;
+                if (effectiveDragGroup(child) != activeGroup) continue;
+                float mid = (child.getTop() + child.getBottom()) * 0.5f;
+                if (i < curIndex && contentY < mid) {
+                    targetIdx = i;
+                    break;
+                } else if (i > curIndex && contentY > mid) {
+                    targetIdx = i;
+                }
+            }
+
+            if (targetIdx == curIndex) return;
+            if (moveGroupSlot(activeList, activeGroup, curIndex, targetIdx, true)) {
+                curIndex = targetIdx;
+                ModxTheme.hapticTick(overlayHost);
+            }
+        }
+
+        private boolean moveGroupSlot(final LinearLayout list, int group, int fromIdx, int toIdx, boolean animate) {
+            if (list == null || fromIdx == toIdx) return false;
+            final ArrayList<Integer> slots = new ArrayList<Integer>();
+            final ArrayList<View> groupViews = new ArrayList<View>();
+            int fromPos = -1;
+            int toPos = -1;
+            int childCount = list.getChildCount();
+            for (int i = 0; i < childCount; i++) {
+                View child = list.getChildAt(i);
+                if (effectiveDragGroup(child) == group) {
+                    if (i == fromIdx) fromPos = groupViews.size();
+                    if (i == toIdx) toPos = groupViews.size();
+                    slots.add(i);
+                    groupViews.add(child);
+                }
+            }
+            if (fromPos < 0 || toPos < 0 || fromPos == toPos) return false;
+
+            final HashMap<View, Integer> oldTops = new HashMap<View, Integer>();
+            if (animate) {
+                for (int i = 0; i < childCount; i++) {
+                    View child = list.getChildAt(i);
+                    if (child != placeholder) {
+                        oldTops.put(child, child.getTop());
+                    }
+                }
+            }
+
+            View movedView = groupViews.remove(fromPos);
+            groupViews.add(toPos, movedView);
+
+            for (int i = slots.size() - 1; i >= 0; i--) {
+                list.removeViewAt(slots.get(i));
+            }
+            for (int i = 0; i < slots.size(); i++) {
+                list.addView(groupViews.get(i), slots.get(i));
+            }
+
+            if (animate) {
+                list.getViewTreeObserver().addOnPreDrawListener(
+                        new android.view.ViewTreeObserver.OnPreDrawListener() {
+                            @Override
+                            public boolean onPreDraw() {
+                                list.getViewTreeObserver().removeOnPreDrawListener(this);
+                                for (int i = 0; i < list.getChildCount(); i++) {
+                                    View child = list.getChildAt(i);
+                                    if (child == placeholder) continue;
+                                    Integer oldTop = oldTops.get(child);
+                                    if (oldTop != null) {
+                                        int dy = oldTop - child.getTop();
+                                        if (dy != 0) {
+                                            child.animate().cancel();
+                                            child.setTranslationY(dy);
+                                            child.animate().translationY(0f).setDuration(150)
+                                                    .setInterpolator(new DecelerateInterpolator()).start();
+                                        }
+                                    }
+                                }
+                                return true;
+                            }
+                        });
+            }
+            return true;
+        }
+
+        private void restoreDraggedViewToList(LinearLayout list, int targetIdx) {
+            if (draggedView == null) return;
+            draggedView.animate().cancel();
+            if (overlayHost != null && draggedView.getParent() == overlayHost) {
+                overlayHost.removeView(draggedView);
+            } else if (draggedView.getParent() instanceof ViewGroup) {
+                ((ViewGroup) draggedView.getParent()).removeView(draggedView);
+            }
+
+            if (list != null) {
+                int insertAt = targetIdx;
+                if (placeholder != null && placeholder.getParent() == list) {
+                    int phIdx = list.indexOfChild(placeholder);
+                    list.removeView(placeholder);
+                    if (phIdx >= 0) insertAt = phIdx;
+                }
+                insertAt = Math.max(0, Math.min(insertAt, list.getChildCount()));
+                if (origLayoutParams != null) {
+                    draggedView.setLayoutParams(origLayoutParams);
+                }
+                draggedView.setScaleX(1f);
+                draggedView.setScaleY(1f);
+                draggedView.setTranslationY(0f);
+                draggedView.setAlpha(1f);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    draggedView.setElevation(origElevation);
+                }
+                list.addView(draggedView, insertAt);
+                delegate.onDragRestored(draggedView);
+            } else if (placeholder != null && placeholder.getParent() instanceof ViewGroup) {
+                ((ViewGroup) placeholder.getParent()).removeView(placeholder);
+            }
+        }
+
+        private void finishDrag() {
+            setAutoScrollDir(0);
+            cancelPendingLongPress();
+            if (!active) return;
+
+            LinearLayout list = activeList;
+            int group = activeGroup;
+            int startIdx = origIndex;
+            int dropIdx = curIndex;
+            boolean moved = (dropIdx != startIdx);
+
+            restoreDraggedViewToList(list, dropIdx);
+            if (scrollView != null) {
+                scrollView.requestDisallowInterceptTouchEvent(false);
+            }
+            resetState();
+
+            if (moved) {
+                delegate.onDragCommitted(list, group, startIdx, dropIdx);
+            }
+        }
+
+        void cancel() {
+            setAutoScrollDir(0);
+            cancelPendingLongPress();
+            if (!active) return;
+
+            LinearLayout list = activeList;
+            if (list != null && placeholder != null && placeholder.getParent() == list && curIndex != origIndex) {
+                moveGroupSlot(list, activeGroup, curIndex, origIndex, false);
+            }
+            restoreDraggedViewToList(list, origIndex);
+            if (scrollView != null) {
+                scrollView.requestDisallowInterceptTouchEvent(false);
+            }
+            resetState();
+            delegate.onDragCancelled(list);
+        }
+
+        private void resetState() {
+            active = false;
+            activeGroup = 0;
+            draggedView = null;
+            placeholder = null;
+            activeList = null;
+            origLayoutParams = null;
+            origElevation = 0f;
+            origIndex = -1;
+            curIndex = -1;
+        }
     }
 
-    private void cancelPendingTabLongPress() {
-        if (tabDragLongPressRunnable != null) {
-            mainHandler.removeCallbacks(tabDragLongPressRunnable);
-            tabDragLongPressRunnable = null;
+    private LinearLayout getCurrentActiveCategoryLayout() {
+        if (contentLayout == null || contentLayout.getChildCount() == 0) return null;
+        View first = contentLayout.getChildAt(0);
+        return (first instanceof LinearLayout) ? (LinearLayout) first : null;
+    }
+
+    private void syncTabHoldersFromLayout() {
+        if (sidebarLayout == null) return;
+        ArrayList<TabHolder> synced = new ArrayList<TabHolder>();
+        for (int i = 0; i < sidebarLayout.getChildCount(); i++) {
+            Object tag = sidebarLayout.getChildAt(i).getTag();
+            if (tag instanceof TabHolder) {
+                synced.add((TabHolder) tag);
+            }
         }
-        tabDragCandidate = null;
+        tabHolders.clear();
+        tabHolders.addAll(synced);
+    }
+
+    private boolean isDescendantInteractiveForDrag(View itemRoot, View cur, int fx, int fy, Rect r) {
+        if (cur == null || cur.getVisibility() != View.VISIBLE) return false;
+        if (cur != itemRoot) {
+            boolean isIgnored = (cur instanceof SeekBar)
+                    || (cur instanceof EditText)
+                    || (cur instanceof RadioButton)
+                    || (cur instanceof ToggleView)
+                    || mDragIgnoredViews.containsKey(cur);
+            if (isIgnored) {
+                try {
+                    r.set(0, 0, cur.getWidth(), cur.getHeight());
+                    contentStage.offsetDescendantRectToMyCoords(cur, r);
+                    if (cur instanceof SeekBar) {
+                        r.inset(-dp(2), -dp(6));
+                    }
+                    if (r.contains(fx, fy)) {
+                        return true;
+                    }
+                } catch (IllegalArgumentException ignored) { }
+            }
+        }
+        if (cur instanceof ViewGroup) {
+            ViewGroup vg = (ViewGroup) cur;
+            for (int i = 0; i < vg.getChildCount(); i++) {
+                if (isDescendantInteractiveForDrag(itemRoot, vg.getChildAt(i), fx, fy, r)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private void initDragReorderControllers() {
+        if (sidebarFrame != null && sidebarScroll != null) {
+            tabReorderController = new DragReorderController(
+                    sidebarFrame, sidebarScroll, 1.04f, 0.94f, 8,
+                    new DragReorderDelegate() {
+                        @Override
+                        public boolean isEnabled() {
+                            return isLoggedIn && !sidebarWinDragActive;
+                        }
+
+                        @Override
+                        public LinearLayout getListLayout() {
+                            return sidebarLayout;
+                        }
+
+                        @Override
+                        public int getDragGroup(View itemView) {
+                            if (itemView != null && itemView.getTag() instanceof TabHolder) {
+                                TabHolder h = (TabHolder) itemView.getTag();
+                                return "Settings".equals(h.name) ? 0 : 1;
+                            }
+                            return 0;
+                        }
+
+                        @Override
+                        public boolean isInteractiveSubTarget(View itemRoot, float frameX, float frameY) {
+                            return false;
+                        }
+
+                        @Override
+                        public void onShouldCancelOtherGestures() {
+                            cancelPendingSidebarWindowDrag();
+                        }
+
+                        @Override
+                        public void onDragLifted(View itemView) {
+                            itemView.setBackground(ModxTheme.roundRect(
+                                    getContext, ModxTheme.CARD_HOVER, COLOR_ACCENT, 1.5f, ModxTheme.RADIUS_DP));
+                        }
+
+                        @Override
+                        public void onDragRestored(View itemView) {
+                            if (itemView.getTag() instanceof TabHolder) {
+                                TabHolder h = (TabHolder) itemView.getTag();
+                                styleTab(h, isTabSelected(h), false);
+                            }
+                        }
+
+                        @Override
+                        public void onDragCommitted(LinearLayout listLayout, int dragGroup, int origIndex, int dropIndex) {
+                            syncTabHoldersFromLayout();
+                            categoryNames.clear();
+                            for (int i = 0; i < tabHolders.size(); i++) {
+                                categoryNames.add(tabHolders.get(i).name);
+                            }
+                            Preferences.setTabOrder(categoryNames);
+                            showMenuToast(Preferences.isSaveEnabled() ? "Tab order saved" : "Tab order updated");
+                        }
+
+                        @Override
+                        public void onDragCancelled(LinearLayout listLayout) {
+                            syncTabHoldersFromLayout();
+                        }
+                    });
+        }
+
+        if (contentStage != null && contentScrollView != null) {
+            final Rect hitTmp = new Rect();
+            itemReorderController = new DragReorderController(
+                    contentStage, contentScrollView, 1.03f, 0.90f, 7,
+                    new DragReorderDelegate() {
+                        @Override
+                        public boolean isEnabled() {
+                            return isLoggedIn && !mItemDragMetaMap.isEmpty();
+                        }
+
+                        @Override
+                        public LinearLayout getListLayout() {
+                            return getCurrentActiveCategoryLayout();
+                        }
+
+                        @Override
+                        public int getDragGroup(View itemView) {
+                            ItemDragMeta meta = mItemDragMetaMap.get(itemView);
+                            if (meta == null || "Settings".equals(meta.tabName)) {
+                                return ITEM_DRAG_GROUP_FIXED;
+                            }
+                            return meta.dragGroup;
+                        }
+
+                        @Override
+                        public boolean isInteractiveSubTarget(View itemRoot, float frameX, float frameY) {
+                            if (contentStage == null || itemRoot == null) return false;
+                            return isDescendantInteractiveForDrag(
+                                    itemRoot, itemRoot, Math.round(frameX), Math.round(frameY), hitTmp);
+                        }
+
+                        @Override
+                        public void onShouldCancelOtherGestures() {
+                        }
+
+                        @Override
+                        public void onDragLifted(View itemView) {
+                        }
+
+                        @Override
+                        public void onDragRestored(View itemView) {
+                        }
+
+                        @Override
+                        public void onDragCommitted(LinearLayout listLayout, int dragGroup, int origIndex, int dropIndex) {
+                            String tabName = null;
+                            if (listLayout != null) {
+                                for (int i = 0; i < listLayout.getChildCount(); i++) {
+                                    ItemDragMeta meta = mItemDragMetaMap.get(listLayout.getChildAt(i));
+                                    if (meta != null && meta.tabName != null) {
+                                        tabName = meta.tabName;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (tabName == null) tabName = getCurrentSelectedTabName();
+                            if (tabName != null && listLayout != null) {
+                                ArrayList<Integer> newOrder = collectTabItemOrder(listLayout);
+                                Preferences.setTabItemOrder(tabName, newOrder);
+                            }
+                            clearFirstCardSafeZone();
+                            applyFirstCardSafeZone(ensureScaleTokens());
+                            showMenuToast(Preferences.isSaveEnabled() ? "Item order saved" : "Item order updated");
+                        }
+
+                        @Override
+                        public void onDragCancelled(LinearLayout listLayout) {
+                            clearFirstCardSafeZone();
+                            applyFirstCardSafeZone(ensureScaleTokens());
+                        }
+                    });
+        }
     }
 
     private void cancelPendingSidebarWindowDrag() {
         if (sidebarWinDragLongPressRunnable != null) {
             mainHandler.removeCallbacks(sidebarWinDragLongPressRunnable);
             sidebarWinDragLongPressRunnable = null;
+        }
+    }
+
+    private void cancelAllDrags() {
+        cancelPendingSidebarWindowDrag();
+        if (sidebarWinDragActive) {
+            sidebarWinDragActive = false;
+            if (menuFrame != null) menuFrame.setAlpha(1f);
+            if (sidebarScroll != null) {
+                sidebarScroll.requestDisallowInterceptTouchEvent(false);
+            }
+        }
+        if (tabReorderController != null) {
+            tabReorderController.cancel();
+        }
+        if (itemReorderController != null) {
+            itemReorderController.cancel();
         }
     }
 
@@ -4047,328 +4670,6 @@ Preferences.init(context);
             return true;
         }
         return frameY < minTop || frameY > maxBottom;
-    }
-
-    private void setTabDragAutoScrollDir(int dir) {
-        if (tabDragAutoScrollDir == dir) return;
-        tabDragAutoScrollDir = dir;
-        if (dir == 0) {
-            if (tabDragAutoScrollRunnable != null && sidebarFrame != null) {
-                sidebarFrame.removeCallbacks(tabDragAutoScrollRunnable);
-            }
-            tabDragAutoScrollRunnable = null;
-        } else if (tabDragAutoScrollRunnable == null && sidebarFrame != null) {
-            tabDragAutoScrollRunnable = new Runnable() {
-                @Override
-                public void run() {
-                    if (!tabDragActive || tabDragAutoScrollDir == 0 || sidebarScroll == null || sidebarFrame == null) {
-                        tabDragAutoScrollRunnable = null;
-                        return;
-                    }
-                    int step = tabDragAutoScrollDir * dp(6);
-                    int prevY = sidebarScroll.getScrollY();
-                    sidebarScroll.scrollBy(0, step);
-                    if (sidebarScroll.getScrollY() != prevY && tabDragProxy != null) {
-                        updateTabDragDropPosition(tabDragProxy.getTranslationY() + tabDragProxy.getHeight() * 0.5f);
-                    }
-                    sidebarFrame.postOnAnimation(this);
-                }
-            };
-            sidebarFrame.postOnAnimation(tabDragAutoScrollRunnable);
-        }
-    }
-
-    private void startTabDrag(TabHolder cand) {
-        if (cand == null || cand.root == null || sidebarFrame == null || sidebarLayout == null || sidebarScroll == null) {
-            return;
-        }
-        if ("Settings".equals(cand.name)) return;
-        int origIdx = tabHolders.indexOf(cand);
-        int maxIdx = getMaxDraggableTabIndex();
-        if (origIdx < 0 || origIdx > maxIdx || countDraggableTabs() < 2) return;
-
-        Rect r = new Rect(0, 0, cand.root.getWidth(), cand.root.getHeight());
-        try {
-            sidebarFrame.offsetDescendantRectToMyCoords(cand.root, r);
-        } catch (IllegalArgumentException e) {
-            return;
-        }
-        if (r.width() <= 0 || r.height() <= 0) return;
-
-        tabDragActive = true;
-        tabDragTarget = cand;
-        tabDragOrigIndex = origIdx;
-        tabDragCurIndex = origIdx;
-        tabDragStartProxyY = r.top;
-
-        ModxTheme.hapticTick(sidebarFrame);
-
-        long now = android.os.SystemClock.uptimeMillis();
-        MotionEvent cancelEv = MotionEvent.obtain(now, now, MotionEvent.ACTION_CANCEL, 0f, 0f, 0);
-        sidebarScroll.dispatchTouchEvent(cancelEv);
-        cancelEv.recycle();
-        sidebarScroll.requestDisallowInterceptTouchEvent(true);
-
-        cand.root.animate().cancel();
-        cand.root.setScaleX(1f);
-        cand.root.setScaleY(1f);
-
-        // Replace actual tab in sidebarLayout with tinted placeholder
-        ModxTheme.MenuScaleTokens tokens = ensureScaleTokens();
-        boolean iconOnly = SHOW_TAB_ICONS && (tokens.sidebarIconOnly || (isLoggedIn && focusMode)) && cand.icon != null;
-        boolean selected = isTabSelected(cand);
-
-        View placeholder = new View(getContext);
-        LinearLayout.LayoutParams phLp = new LinearLayout.LayoutParams(iconOnly ? r.width() : MATCH_PARENT, r.height());
-        if (iconOnly) {
-            phLp.gravity = Gravity.CENTER_HORIZONTAL;
-        }
-        phLp.setMargins(0, dp(2), 0, dp(2));
-        placeholder.setLayoutParams(phLp);
-        placeholder.setBackground(ModxTheme.roundRect(
-                getContext, ModxTheme.accentSoft(COLOR_ACCENT), ModxTheme.accentLine(COLOR_ACCENT),
-                1f, ModxTheme.RADIUS_DP));
-        tabDragPlaceholder = placeholder;
-
-        sidebarLayout.removeView(cand.root);
-        sidebarLayout.addView(placeholder, origIdx);
-
-        // Floating proxy card inside sidebarFrame
-        LinearLayout proxy = new LinearLayout(getContext);
-        proxy.setOrientation(LinearLayout.HORIZONTAL);
-        proxy.setGravity(iconOnly ? Gravity.CENTER : Gravity.CENTER_VERTICAL);
-        if (iconOnly) {
-            proxy.setPadding(0, 0, 0, 0);
-        } else {
-            proxy.setPadding(tokens.tabPadHPx, tokens.tabPadVPx, tokens.tabPadHPx, tokens.tabPadVPx);
-        }
-        proxy.setBackground(ModxTheme.roundRect(
-                getContext, ModxTheme.CARD_HOVER, COLOR_ACCENT, 1.5f, ModxTheme.RADIUS_DP));
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            proxy.setElevation(dp(8));
-        }
-
-        if (cand.indicator != null && !iconOnly) {
-            View pInd = new View(getContext);
-            LinearLayout.LayoutParams indLp = new LinearLayout.LayoutParams(
-                    tokens.tabIndicatorWpx, tokens.tabIndicatorHpx);
-            indLp.setMargins(0, 0, dp(6), 0);
-            pInd.setLayoutParams(indLp);
-            pInd.setBackground(ModxTheme.roundRect(getContext, COLOR_ACCENT, 0, 0f, 2f));
-            pInd.setAlpha(selected ? 1f : 0f);
-            proxy.addView(pInd);
-        }
-        if (SHOW_TAB_ICONS && cand.icon != null) {
-            int iconSizePx = iconOnly
-                    ? Math.min(tokens.tabIconPx, Math.max(dp(12), r.width() - dp(10)))
-                    : tokens.tabIconPx;
-            ImageView pIcon = new ImageView(getContext);
-            pIcon.setLayoutParams(new LinearLayout.LayoutParams(iconSizePx, iconSizePx));
-            pIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            pIcon.setImageDrawable(ModxIcons.tabIconFor(
-                    getContext, cand.name, selected ? COLOR_ACCENT : ModxTheme.FG,
-                    Math.max(12, Math.round(iconSizePx / Math.max(1f, safeDisplayMetrics(getContext).density)))));
-            proxy.addView(pIcon);
-        }
-        if (!iconOnly) {
-            TextView pLbl = new TextView(getContext);
-            pLbl.setTag("no_scale");
-            pLbl.setText(cand.name);
-            pLbl.setTextColor(ModxTheme.FG);
-            pLbl.setTextSize(TypedValue.COMPLEX_UNIT_SP, tokens.tabFontSp);
-            pLbl.setTypeface(fontBold);
-            pLbl.setSingleLine(true);
-            pLbl.setEllipsize(TextUtils.TruncateAt.END);
-            pLbl.setIncludeFontPadding(false);
-            pLbl.setGravity(Gravity.CENTER_VERTICAL);
-            LinearLayout.LayoutParams lpText = new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f);
-            lpText.setMargins(SHOW_TAB_ICONS ? dp(7) : 0, 0, 0, 0);
-            pLbl.setLayoutParams(lpText);
-            proxy.addView(pLbl);
-        }
-
-        FrameLayout.LayoutParams pxLp = new FrameLayout.LayoutParams(r.width(), r.height());
-        pxLp.setMargins(r.left, 0, 0, 0);
-        proxy.setLayoutParams(pxLp);
-        proxy.setTranslationY(r.top);
-        proxy.setScaleX(1f);
-        proxy.setScaleY(1f);
-        proxy.animate().scaleX(1.04f).scaleY(1.04f).setDuration(110)
-                .setInterpolator(new DecelerateInterpolator()).start();
-
-        tabDragProxy = proxy;
-        sidebarFrame.addView(proxy);
-    }
-
-    private void updateTabDragDropPosition(float frameY) {
-        if (!tabDragActive || tabDragPlaceholder == null || sidebarLayout == null || sidebarScroll == null) {
-            return;
-        }
-        int maxIdx = getMaxDraggableTabIndex();
-        if (maxIdx <= 0) return;
-
-        float contentY = frameY + sidebarScroll.getScrollY() - sidebarLayout.getTop();
-        int targetIdx = tabDragCurIndex;
-
-        for (int i = 0; i <= maxIdx && i < sidebarLayout.getChildCount(); i++) {
-            View child = sidebarLayout.getChildAt(i);
-            if (child == tabDragPlaceholder) continue;
-            float mid = (child.getTop() + child.getBottom()) * 0.5f;
-            if (i < tabDragCurIndex && contentY < mid) {
-                targetIdx = i;
-                break;
-            } else if (i > tabDragCurIndex && contentY > mid) {
-                targetIdx = i;
-            }
-        }
-        if (targetIdx < 0) targetIdx = 0;
-        if (targetIdx > maxIdx) targetIdx = maxIdx;
-        if (targetIdx == tabDragCurIndex) return;
-
-        final HashMap<View, Integer> oldTops = new HashMap<View, Integer>();
-        for (int i = 0; i < sidebarLayout.getChildCount(); i++) {
-            View child = sidebarLayout.getChildAt(i);
-            if (child != tabDragPlaceholder) {
-                oldTops.put(child, child.getTop());
-            }
-        }
-
-        TabHolder moved = tabHolders.remove(tabDragCurIndex);
-        tabHolders.add(targetIdx, moved);
-        sidebarLayout.removeView(tabDragPlaceholder);
-        sidebarLayout.addView(tabDragPlaceholder, targetIdx);
-        tabDragCurIndex = targetIdx;
-        ModxTheme.hapticTick(sidebarFrame);
-
-        sidebarLayout.getViewTreeObserver().addOnPreDrawListener(
-                new android.view.ViewTreeObserver.OnPreDrawListener() {
-                    @Override
-                    public boolean onPreDraw() {
-                        sidebarLayout.getViewTreeObserver().removeOnPreDrawListener(this);
-                        for (int i = 0; i < sidebarLayout.getChildCount(); i++) {
-                            View child = sidebarLayout.getChildAt(i);
-                            if (child == tabDragPlaceholder) continue;
-                            Integer oldTop = oldTops.get(child);
-                            if (oldTop != null) {
-                                int dy = oldTop - child.getTop();
-                                if (dy != 0) {
-                                    child.animate().cancel();
-                                    child.setTranslationY(dy);
-                                    child.animate().translationY(0f).setDuration(150)
-                                            .setInterpolator(new DecelerateInterpolator()).start();
-                                }
-                            }
-                        }
-                        return true;
-                    }
-                });
-    }
-
-    private void finishTabDrag() {
-        setTabDragAutoScrollDir(0);
-        cancelPendingTabLongPress();
-        if (!tabDragActive) return;
-
-        TabHolder dragged = tabDragTarget;
-        int dropIdx = tabDragCurIndex;
-        boolean moved = (dropIdx != tabDragOrigIndex);
-
-        if (sidebarLayout != null && tabDragPlaceholder != null) {
-            int phIdx = sidebarLayout.indexOfChild(tabDragPlaceholder);
-            sidebarLayout.removeView(tabDragPlaceholder);
-            if (dragged != null && dragged.root != null) {
-                if (dragged.root.getParent() instanceof ViewGroup) {
-                    ((ViewGroup) dragged.root.getParent()).removeView(dragged.root);
-                }
-                int insertAt = (phIdx >= 0) ? phIdx : Math.max(0, Math.min(dropIdx, sidebarLayout.getChildCount()));
-                sidebarLayout.addView(dragged.root, insertAt);
-                dragged.root.setScaleX(1f);
-                dragged.root.setScaleY(1f);
-                dragged.root.setTranslationY(0f);
-                dragged.root.setAlpha(1f);
-            }
-        }
-        if (sidebarFrame != null && tabDragProxy != null) {
-            tabDragProxy.animate().cancel();
-            sidebarFrame.removeView(tabDragProxy);
-        }
-        if (sidebarScroll != null) {
-            sidebarScroll.requestDisallowInterceptTouchEvent(false);
-        }
-
-        tabDragActive = false;
-        tabDragTarget = null;
-        tabDragProxy = null;
-        tabDragPlaceholder = null;
-        tabDragOrigIndex = -1;
-        tabDragCurIndex = -1;
-
-        if (moved) {
-            categoryNames.clear();
-            for (int i = 0; i < tabHolders.size(); i++) {
-                categoryNames.add(tabHolders.get(i).name);
-            }
-            Preferences.setTabOrder(categoryNames);
-            showMenuToast(Preferences.isSaveEnabled() ? "Tab order saved" : "Tab order updated");
-        }
-    }
-
-    private void cancelTabDrag() {
-        setTabDragAutoScrollDir(0);
-        cancelPendingTabLongPress();
-        cancelPendingSidebarWindowDrag();
-        if (sidebarWinDragActive) {
-            sidebarWinDragActive = false;
-            if (menuFrame != null) menuFrame.setAlpha(1f);
-            if (sidebarScroll != null) {
-                sidebarScroll.requestDisallowInterceptTouchEvent(false);
-            }
-        }
-        if (!tabDragActive) return;
-
-        TabHolder dragged = tabDragTarget;
-        int curIdx = tabDragCurIndex;
-        int origIdx = tabDragOrigIndex;
-
-        if (sidebarLayout != null && tabDragPlaceholder != null) {
-            sidebarLayout.removeView(tabDragPlaceholder);
-        }
-        if (dragged != null) {
-            if (curIdx >= 0 && curIdx < tabHolders.size() && tabHolders.get(curIdx) == dragged) {
-                tabHolders.remove(curIdx);
-            } else {
-                tabHolders.remove(dragged);
-            }
-            int safeOrig = Math.max(0, Math.min(origIdx, tabHolders.size()));
-            tabHolders.add(safeOrig, dragged);
-
-            if (sidebarLayout != null && dragged.root != null) {
-                if (dragged.root.getParent() instanceof ViewGroup) {
-                    ((ViewGroup) dragged.root.getParent()).removeView(dragged.root);
-                }
-                int safeViewIdx = Math.max(0, Math.min(safeOrig, sidebarLayout.getChildCount()));
-                sidebarLayout.addView(dragged.root, safeViewIdx);
-                dragged.root.animate().cancel();
-                dragged.root.setScaleX(1f);
-                dragged.root.setScaleY(1f);
-                dragged.root.setTranslationY(0f);
-                dragged.root.setAlpha(1f);
-            }
-        }
-        if (sidebarFrame != null && tabDragProxy != null) {
-            tabDragProxy.animate().cancel();
-            sidebarFrame.removeView(tabDragProxy);
-        }
-        if (sidebarScroll != null) {
-            sidebarScroll.requestDisallowInterceptTouchEvent(false);
-        }
-
-        tabDragActive = false;
-        tabDragTarget = null;
-        tabDragProxy = null;
-        tabDragPlaceholder = null;
-        tabDragOrigIndex = -1;
-        tabDragCurIndex = -1;
     }
 
     private void applySavedTabOrder(ArrayList<String> order) {
@@ -4398,7 +4699,7 @@ Preferences.init(context);
 
     private void reorderTabsPreservingSelection(ArrayList<String> targetOrder) {
         if (targetOrder == null || targetOrder.isEmpty()) return;
-        cancelTabDrag();
+        cancelAllDrags();
         String currentTab = getCurrentSelectedTabName();
         int curContentY = (contentScrollView != null) ? contentScrollView.getScrollY() : 0;
 
@@ -4425,6 +4726,87 @@ Preferences.init(context);
         applyTabMetrics(ensureScaleTokens());
     }
 
+    private ArrayList<Integer> collectTabItemOrder(LinearLayout catLayout) {
+        ArrayList<Integer> order = new ArrayList<Integer>();
+        if (catLayout == null) return order;
+        for (int i = 0; i < catLayout.getChildCount(); i++) {
+            ItemDragMeta meta = mItemDragMetaMap.get(catLayout.getChildAt(i));
+            if (meta != null && meta.dragGroup > ITEM_DRAG_GROUP_FIXED) {
+                order.add(meta.featNum);
+            }
+        }
+        return order;
+    }
+
+    private void applySavedOrderForGroup(LinearLayout catLayout, int group, List<Integer> savedFeatNums) {
+        if (catLayout == null || group <= ITEM_DRAG_GROUP_FIXED || savedFeatNums == null || savedFeatNums.isEmpty()) {
+            return;
+        }
+        ArrayList<Integer> slots = new ArrayList<Integer>();
+        ArrayList<View> currentViews = new ArrayList<View>();
+        HashMap<Integer, View> byFeatNum = new HashMap<Integer, View>();
+
+        for (int i = 0; i < catLayout.getChildCount(); i++) {
+            View child = catLayout.getChildAt(i);
+            ItemDragMeta meta = mItemDragMetaMap.get(child);
+            if (meta != null && meta.dragGroup == group) {
+                slots.add(i);
+                currentViews.add(child);
+                if (!byFeatNum.containsKey(meta.featNum)) {
+                    byFeatNum.put(meta.featNum, child);
+                }
+            }
+        }
+        if (slots.size() < 2) return;
+
+        ArrayList<View> ordered = new ArrayList<View>();
+        for (int i = 0; i < savedFeatNums.size(); i++) {
+            View v = byFeatNum.get(savedFeatNums.get(i));
+            if (v != null && !ordered.contains(v)) {
+                ordered.add(v);
+            }
+        }
+        for (int i = 0; i < currentViews.size(); i++) {
+            View v = currentViews.get(i);
+            if (!ordered.contains(v)) {
+                ordered.add(v);
+            }
+        }
+        for (int i = slots.size() - 1; i >= 0; i--) {
+            catLayout.removeViewAt(slots.get(i));
+        }
+        for (int i = 0; i < slots.size(); i++) {
+            catLayout.addView(ordered.get(i), slots.get(i));
+        }
+    }
+
+    private void applySavedTabItemOrder(String tabName, LinearLayout catLayout) {
+        if (tabName == null || "Settings".equals(tabName) || catLayout == null) return;
+        List<Integer> saved = Preferences.getTabItemOrder(tabName);
+        if (saved == null || saved.isEmpty()) return;
+        applySavedOrderForGroup(catLayout, ITEM_DRAG_GROUP_MODE, saved);
+        applySavedOrderForGroup(catLayout, ITEM_DRAG_GROUP_FEATURE, saved);
+    }
+
+    private void resetAllCategoryItemOrdersToDefault() {
+        cancelAllDrags();
+        for (Map.Entry<String, ArrayList<View>> entry : defaultCategoryItemViews.entrySet()) {
+            String tabName = entry.getKey();
+            if ("Settings".equals(tabName)) continue;
+            LinearLayout catLayout = categoryViewsMap.get(tabName);
+            ArrayList<View> defViews = entry.getValue();
+            if (catLayout == null || defViews == null || defViews.isEmpty()) continue;
+            catLayout.removeAllViews();
+            for (int i = 0; i < defViews.size(); i++) {
+                View v = defViews.get(i);
+                if (v.getParent() instanceof ViewGroup) {
+                    ((ViewGroup) v.getParent()).removeView(v);
+                }
+                catLayout.addView(v);
+            }
+        }
+    }
+
     private LinearLayout makeResetTabOrderButton() {
         LinearLayout row = new LinearLayout(getContext);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -4444,7 +4826,7 @@ Preferences.init(context);
         textCol.setPadding(0, 0, dp(10), 0);
 
         TextView labelTv = new TextView(getContext);
-        labelTv.setText("Reset tab order");
+        labelTv.setText("Reset layout");
         labelTv.setTextColor(ModxTheme.FG);
         labelTv.setTypeface(fontMedium);
         labelTv.setTextSize(12.5f);
@@ -4452,7 +4834,7 @@ Preferences.init(context);
         labelTv.setMaxLines(2);
 
         TextView subTv = new TextView(getContext);
-        subTv.setText("Restore default sidebar tab sequence");
+        subTv.setText("Restore default tab & item order");
         subTv.setTextColor(ModxTheme.MUTED);
         subTv.setTypeface(fontRegular);
         subTv.setTextSize(10.5f);
@@ -4477,9 +4859,12 @@ Preferences.init(context);
             @Override
             public void onClick(View v) {
                 ModxTheme.hapticTap(v);
-                Preferences.resetTabOrder();
+                Preferences.resetLayout();
                 reorderTabsPreservingSelection(defaultCategoryOrder);
-                showMenuToast("Tab order reset");
+                resetAllCategoryItemOrdersToDefault();
+                clearFirstCardSafeZone();
+                applyFirstCardSafeZone(ensureScaleTokens());
+                showMenuToast("Layout reset");
             }
         });
         return row;
@@ -4499,7 +4884,7 @@ Preferences.init(context);
     }
 
     private void buildFeaturesAndCategories(String[] features) {
-        cancelTabDrag();
+        cancelAllDrags();
         final String prevTabName = getCurrentSelectedTabName();
         final int prevContentScrollY = (contentScrollView != null) ? contentScrollView.getScrollY() : 0;
         final int prevSidebarScrollY = (sidebarScroll != null) ? sidebarScroll.getScrollY() : 0;
@@ -4510,6 +4895,9 @@ Preferences.init(context);
         categoryViewsMap.clear();
         categoryNames.clear();
         defaultCategoryOrder.clear();
+        defaultCategoryItemViews.clear();
+        mItemDragMetaMap.clear();
+        mDragIgnoredViews.clear();
         tabHolders.clear();
         spinnerAdapters.clear();
         mModeButtons.clear();
@@ -4573,6 +4961,7 @@ Preferences.init(context);
             } else {
                 LinearLayout targetLayout = (isCollapseAdd) ? mCollapse : categoryViewsMap.get(currentCategory);
                 if (targetLayout == null) targetLayout = categoryViewsMap.get("Main");
+                int prevChildCount = (!isCollapseAdd && targetLayout != null) ? targetLayout.getChildCount() : -1;
 
                 switch (type) {
                     case "Toggle": Switch(targetLayout, featNum, featName, switchedOn); break;
@@ -4592,6 +4981,24 @@ Preferences.init(context);
                     case "RichWebView": WebTextView(targetLayout, featName); break;
                     case "ColorPicker": ColorPicker(targetLayout, featNum, featName, strSplit.length > 2 ? strSplit[2] : ModxTheme.hex6(ModxTheme.ACCENT)); break;
                     case "TeleportPadWidget": TeleportPad(targetLayout); break;
+                }
+
+                if (!isCollapseAdd && targetLayout != null && targetLayout.getChildCount() > prevChildCount) {
+                    View addedView = targetLayout.getChildAt(targetLayout.getChildCount() - 1);
+                    int dragGroup = ITEM_DRAG_GROUP_FIXED;
+                    if (!"Settings".equals(currentCategory)) {
+                        if (featNum == MODE_SIMPLE || featNum == MODE_MAX || featNum == MODE_ULTRA) {
+                            dragGroup = ITEM_DRAG_GROUP_MODE;
+                        } else if (featNum != MODE_RESET && featNum >= 0
+                                && ("Toggle".equals(type) || "SeekBar".equals(type) || "Button".equals(type)
+                                || "ButtonOnOff".equals(type) || "Spinner".equals(type) || "InputText".equals(type)
+                                || "InputValue".equals(type) || "InputLValue".equals(type)
+                                || "CheckBox".equals(type) || "RadioButton".equals(type)
+                                || "ColorPicker".equals(type))) {
+                            dragGroup = ITEM_DRAG_GROUP_FEATURE;
+                        }
+                    }
+                    mItemDragMetaMap.put(addedView, new ItemDragMeta(featNum, dragGroup, currentCategory));
                 }
             }
         }
@@ -4635,6 +5042,17 @@ Preferences.init(context);
                     "https://t.me/kayesahmmedpro");
 
             Button(settingsLay, -6, "Close Settings");
+        }
+        for (Map.Entry<String, LinearLayout> entry : categoryViewsMap.entrySet()) {
+            String tabName = entry.getKey();
+            LinearLayout catLay = entry.getValue();
+            if (catLay == null || "Settings".equals(tabName)) continue;
+            ArrayList<View> defViews = new ArrayList<View>();
+            for (int c = 0; c < catLay.getChildCount(); c++) {
+                defViews.add(catLay.getChildAt(c));
+            }
+            defaultCategoryItemViews.put(tabName, defViews);
+            applySavedTabItemOrder(tabName, catLay);
         }
         defaultCategoryOrder.addAll(categoryNames);
         applySavedTabOrder(categoryNames);
@@ -4785,7 +5203,7 @@ Preferences.init(context);
             tab.setOnClickListener(new View.OnClickListener() {
                     @Override
                     public void onClick(View v) {
-                        if (tabDragActive) return;
+                        if (tabReorderController != null && tabReorderController.isDragActive()) return;
                         ModxTheme.hapticTap(v);
                         selectTab(h);
                     }
@@ -4874,6 +5292,7 @@ Preferences.init(context);
     }
 
     private void selectTab(TabHolder selected, boolean animate) {
+        cancelAllDrags();
         for (TabHolder t : tabHolders) styleTab(t, t == selected, animate);
 
         contentLayout.removeAllViews();
@@ -5307,7 +5726,7 @@ private void forceLogoutToLogin(final String reason) {
         @Override
         public void run() {
             stopPeriodicSessionCheck();
-            cancelTabDrag();
+            cancelAllDrags();
             dismissUndoSnackbar(true);
             dismissAllTrackedDialogs();
             activeSessionToken = "";
@@ -5334,7 +5753,7 @@ private void showLoginScreen() {
 private void showLoginScreen(final String forcedLogoutReason) {
     if (isLoggedIn) return;
 
-    cancelTabDrag();
+    cancelAllDrags();
     dismissUndoSnackbar(true);
     setFocusModeEnabled(false, false);
     detachLoginScrollListeners();
@@ -5917,7 +6336,7 @@ private void setWindowFocusable(boolean focusable) {
             mainHandler.removeCallbacks(mMenuToastHideRunnable);
             mMenuToastHideRunnable = null;
         }
-        cancelTabDrag();
+        cancelAllDrags();
         dismissUndoSnackbar(true);
         if (focusAnimator != null) {
             focusAnimator.cancel();
@@ -6467,6 +6886,7 @@ private void setWindowFocusable(boolean focusable) {
         label.setPadding(0, 0, dp(8), 0);
 
         final TextView chip = new TextView(getContext);
+        mDragIgnoredViews.put(chip, Boolean.TRUE);
         chip.setTag("no_scale");
         chip.setLayoutParams(new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT));
         int displayStart = (featNum == 103) ? (startVal + 30) : startVal;
@@ -7902,6 +8322,7 @@ private void setWindowFocusable(boolean focusable) {
         tvName.setText(featName + ": " + lists.get(initIdx));
 
         final LinearLayout dropdownList = new LinearLayout(ctx);
+        mDragIgnoredViews.put(dropdownList, Boolean.TRUE);
         dropdownList.setOrientation(LinearLayout.VERTICAL);
         dropdownList.setVisibility(View.GONE);
         dropdownList.setBackground(ModxTheme.roundRect(

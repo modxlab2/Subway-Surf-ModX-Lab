@@ -124,6 +124,22 @@ public class Preferences {
         FeatureStateStore.resetTabOrder(context);
     }
 
+    public static List<Integer> getTabItemOrder(String tabName) {
+        return FeatureStateStore.getTabItemOrder(tabName);
+    }
+
+    public static void setTabItemOrder(String tabName, List<Integer> order) {
+        FeatureStateStore.setTabItemOrder(context, tabName, order);
+    }
+
+    public static void resetTabItemOrders() {
+        FeatureStateStore.resetTabItemOrders(context);
+    }
+
+    public static void resetLayout() {
+        FeatureStateStore.resetLayout(context);
+    }
+
     public static boolean isFocusMode() {
         return FeatureStateStore.isFocusMode();
     }
