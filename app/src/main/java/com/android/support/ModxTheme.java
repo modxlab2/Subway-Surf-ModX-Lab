@@ -27,9 +27,9 @@ public final class ModxTheme {
     // Website Dark Palette Tokens (modxlab.vercel.app theme.css)
     // =========================================================================
     public static final int PAGE            = 0xFF131312; // #131312
-    public static final int SURFACE         = 0xFF303030; // #303030 (header/footer/sidebar band)
+    public static final int SURFACE         = 0xFF0E0E0D; // #0E0E0D (header/footer/sidebar band)
     public static final int CARD            = 0xFF303030; // #303030
-    public static final int CARD_HOVER      = 0xFF383838; // #383838
+    public static final int CARD_HOVER      = 0xFF3A3A3A; // #3A3A3A
     public static final int RAISED          = 0xFF303030; // #303030
     public static final int INPUT           = 0xFF303030; // #303030
 
