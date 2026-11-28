@@ -65,13 +65,7 @@ public final class ModxTheme {
     public static final int TELEGRAM        = 0xFF229ED9; // #229ED9
     public static final int TELEGRAM_DEEP   = 0xFF1A7EB0; // #1A7EB0
 
-    // System FloatingToolbar fallback tokens (used only when device theme attr is absent)
-    public static final int TOOLBAR_DARK_BG         = 0xFF2D2E30;
-    public static final int TOOLBAR_LIGHT_BG        = 0xFFFFFFFF;
-    public static final int TOOLBAR_DARK_FG         = 0xFFF1F3F4;
-    public static final int TOOLBAR_LIGHT_FG        = 0xFF1F1F1F;
-    public static final int TOOLBAR_DARK_HIGHLIGHT  = 0x33FFFFFF;
-    public static final int TOOLBAR_LIGHT_HIGHLIGHT = 0x1F000000;
+    // System FloatingToolbar ripple mask fallback
     public static final int TOOLBAR_RIPPLE_MASK     = 0xFFFFFFFF;
 
     // Geometry
@@ -379,6 +373,27 @@ public final class ModxTheme {
 
         GradientDrawable normal = new GradientDrawable();
         normal.setColor(RAISED);
+        normal.setStroke(b, LINE_STRONG);
+        normal.setCornerRadius(r);
+
+        GradientDrawable pressed = new GradientDrawable();
+        pressed.setColor(CARD_HOVER);
+        pressed.setStroke(b, LINE_HOVER);
+        pressed.setCornerRadius(r);
+
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[]{android.R.attr.state_pressed}, pressed);
+        states.addState(new int[0], normal);
+
+        return withInteractiveRipple(ctx, states, 0x1AFFFFFF, RADIUS_DP);
+    }
+
+    public static Drawable cardButtonBg(Context ctx) {
+        float r = dpf(ctx, RADIUS_DP);
+        int b = Math.max(1, dp(ctx, 1f));
+
+        GradientDrawable normal = new GradientDrawable();
+        normal.setColor(CARD);
         normal.setStroke(b, LINE_STRONG);
         normal.setCornerRadius(r);
 

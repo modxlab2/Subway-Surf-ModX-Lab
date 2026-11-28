@@ -1565,10 +1565,10 @@ final class TextActionModeHost {
             tv.setGravity(verticalRow ? (Gravity.CENTER_VERTICAL | Gravity.START) : Gravity.CENTER);
             tv.setSingleLine(true);
             tv.setIncludeFontPadding(false);
-            int hPad = dp(16, density);
+            int hPad = dp(12, density);
             tv.setPadding(hPad, 0, hPad, 0);
-            int minW = dp(verticalRow ? 140 : 48, density);
-            int minH = dp(48, density);
+            int minW = dp(verticalRow ? 120 : 40, density);
+            int minH = dp(40, density);
             tv.setMinWidth(minW);
             tv.setMinimumWidth(minW);
             tv.setMinHeight(minH);
@@ -1613,10 +1613,10 @@ final class TextActionModeHost {
         }
 
         private View makeOverflowIconButton(final ArrayList<MenuItem> allItems,
-                                            final float density,
-                                            final boolean isBackButton) {
+                                             final float density,
+                                             final boolean isBackButton) {
             FrameLayout btn = new FrameLayout(themedCtx);
-            int size = dp(48, density);
+            int size = dp(40, density);
             btn.setMinimumWidth(size);
             btn.setMinimumHeight(size);
             btn.setClickable(true);
@@ -1650,14 +1650,14 @@ final class TextActionModeHost {
             float density = dm.density > 0f ? dm.density : 2f;
             computeVisibleDisplayFrame(ctx, owner, dm, tmpVisFrame);
 
-            shadowPadSides = dp(12, density);
-            shadowPadTop = dp(8, density);
-            shadowPadBottom = dp(14, density);
+            shadowPadSides = dp(10, density);
+            shadowPadTop = dp(6, density);
+            shadowPadBottom = dp(10, density);
 
             int maxCardW = Math.min(
-                    Math.max(dp(160, density), tmpVisFrame.width() - dp(16, density)),
-                    dp(360, density));
-            int rowH = dp(48, density);
+                    Math.max(dp(140, density), tmpVisFrame.width() - dp(24, density)),
+                    dp(300, density));
+            int rowH = dp(40, density);
 
             ArrayList<TextView> rowButtons = new ArrayList<TextView>(items.size());
             int[] itemWidths = new int[items.size()];
@@ -1668,7 +1668,7 @@ final class TextActionModeHost {
                 MenuItem mi = items.get(i);
                 TextView tv = makeMenuItemView(mi, resolveRealLabel(mi), density, false);
                 tv.measure(wSpec, hSpec);
-                int w = Math.max(dp(48, density), tv.getMeasuredWidth());
+                int w = Math.max(dp(40, density), tv.getMeasuredWidth());
                 rowButtons.add(tv);
                 itemWidths[i] = w;
                 totalItemsW += w;
@@ -1682,8 +1682,8 @@ final class TextActionModeHost {
                 primaryItems.addAll(items);
                 primaryButtons.addAll(rowButtons);
             } else {
-                int overflowBtnW = dp(48, density);
-                int avail = Math.max(dp(64, density), maxCardW - overflowBtnW);
+                int overflowBtnW = dp(40, density);
+                int avail = Math.max(dp(56, density), maxCardW - overflowBtnW);
                 int used = 0;
                 for (int i = 0; i < items.size(); i++) {
                     if (used + itemWidths[i] <= avail || primaryItems.isEmpty()) {
@@ -1711,7 +1711,7 @@ final class TextActionModeHost {
             card.setBackground(cardBg);
             card.setPadding(borderPx, borderPx, borderPx, borderPx);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                card.setElevation(dp(8, density));
+                card.setElevation(dp(6, density));
                 card.setOutlineProvider(new ViewOutlineProvider() {
                     @Override
                     public void getOutline(View view, Outline outline) {
@@ -1730,12 +1730,12 @@ final class TextActionModeHost {
                 }
                 if (!overflowItems.isEmpty()) {
                     card.addView(makeOverflowIconButton(items, density, false),
-                            new LinearLayout.LayoutParams(dp(48, density), rowH));
+                            new LinearLayout.LayoutParams(dp(40, density), rowH));
                 }
             } else {
                 card.setOrientation(LinearLayout.VERTICAL);
                 card.addView(makeOverflowIconButton(items, density, true),
-                        new LinearLayout.LayoutParams(dp(48, density), rowH));
+                        new LinearLayout.LayoutParams(dp(40, density), rowH));
                 for (int i = 0; i < overflowItems.size(); i++) {
                     MenuItem mi = overflowItems.get(i);
                     TextView tv = makeMenuItemView(mi, resolveRealLabel(mi), density, true);

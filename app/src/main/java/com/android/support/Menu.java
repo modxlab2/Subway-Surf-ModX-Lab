@@ -20,7 +20,6 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.ColorFilter;
 import android.graphics.LinearGradient;
-import android.graphics.Matrix;
 import android.graphics.Outline;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -33,7 +32,6 @@ import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
-import android.graphics.drawable.LayerDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -41,7 +39,6 @@ import android.text.Editable;
 import android.text.Html;
 import android.text.InputFilter;
 import android.text.InputType;
-import android.widget.PopupWindow;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.text.method.DigitsKeyListener;
@@ -61,11 +58,8 @@ import android.view.ViewOutlineProvider;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.animation.AccelerateInterpolator;
-import android.view.animation.AlphaAnimation;
-import android.view.animation.Animation;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.LinearInterpolator;
-import android.view.animation.OvershootInterpolator;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.RenderProcessGoneDetail;
@@ -86,7 +80,6 @@ import android.widget.RadioGroup;
 import android.widget.RelativeLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
-import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.view.ViewParent;
@@ -570,8 +563,9 @@ private String activeSessionUser = "";
 private String activeSessionDeviceId = "";
 private boolean sessionReverifyInFlight = false;
 private Runnable sessionReverifyRunnable = null;
-    private static final HashMap<Integer, Integer> SEEK_DEFAULTS = new HashMap<Integer, Integer>();
-    // (empty — no defaults needed for current features)
+private int lastRootScreenW = -1;
+private int lastRootScreenH = -1;
+private android.view.ViewTreeObserver.OnGlobalLayoutListener rootGlobalLayoutListener = null;
     
     native void Init(Context context, TextView title, TextView subTitle);
     native String Icon();
@@ -665,6 +659,7 @@ Preferences.init(context);
                         menuFrame.post(new Runnable() {
                                 @Override
                                 public void run() {
+                                    if (stopChecking || instance == null || menuFrame == null) return;
                                     applyResponsiveScale(menuFrame.getWidth(), menuFrame.getHeight());
                                 }
                             });
@@ -925,7 +920,7 @@ Preferences.init(context);
         hideBtn.setFocusable(true);
         hideBtn.setContentDescription("Hide or hold to kill menu");
         hideBtn.setLayoutParams(new FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
-        hideBtn.setBackground(ModxTheme.secondaryButtonBg(context));
+        hideBtn.setBackground(ModxTheme.cardButtonBg(context));
         hideBtn.setPadding(dp(8), 0, dp(8), 0);
 
         final ImageView hideIcon = new ImageView(context);
@@ -1011,7 +1006,7 @@ Preferences.init(context);
         closeBtn.setFocusable(true);
         closeBtn.setContentDescription("Minimize menu");
         closeBtn.setLayoutParams(new LinearLayout.LayoutParams(0, dp(38), 1f));
-        closeBtn.setBackground(ModxTheme.secondaryButtonBg(context));
+        closeBtn.setBackground(ModxTheme.cardButtonBg(context));
         closeBtn.setPadding(dp(8), 0, dp(8), 0);
 
         final ImageView minIcon = new ImageView(context);
@@ -1180,41 +1175,6 @@ Preferences.init(context);
     // ================================================================
     // Small helpers
     // ================================================================
-    private Typeface loadFont(String[] assetNames, String fallbackFamily, int fallbackStyle) {
-        try {
-            return Typeface.create(fallbackFamily, fallbackStyle);
-        } catch (Exception e) {
-            return Typeface.DEFAULT;
-        }
-    }
-
-    private static int withAlpha(int color, int alpha) {
-        return (color & 0x00FFFFFF) | ((alpha & 0xFF) << 24);
-    }
-
-    private static double linearizeChannel(double c) {
-        return (c <= 0.04045) ? (c / 12.92) : Math.pow((c + 0.055) / 1.055, 2.4);
-    }
-
-    private static double relativeLuminance(int color) {
-        double r = linearizeChannel(Color.red(color) / 255.0);
-        double g = linearizeChannel(Color.green(color) / 255.0);
-        double b = linearizeChannel(Color.blue(color) / 255.0);
-        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    }
-
-    private static double contrastRatio(int c1, int c2) {
-        double l1 = relativeLuminance(c1);
-        double l2 = relativeLuminance(c2);
-        double bright = Math.max(l1, l2);
-        double dark = Math.min(l1, l2);
-        return (bright + 0.05) / (dark + 0.05);
-    }
-
-    private static int bestTextOnColor(int bgColor) {
-        return ModxTheme.onAccent(bgColor);
-    }
-
     private void showMenuToast(final String message) {
         if (TextUtils.isEmpty(message) || mMenuToastView == null) return;
         runOnMainThread(new Runnable() {
@@ -1257,10 +1217,6 @@ Preferences.init(context);
         return ModxTheme.ensureReadableAccent(rawColor);
     }
 
-    private static boolean isLight(int color) {
-        return ModxTheme.isLight(color);
-    }
-
     private static String hex(int color) {
         return ModxTheme.hex6(color);
     }
@@ -1269,22 +1225,6 @@ Preferences.init(context);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
         lp.setMargins(dp(l), dp(t), dp(r), dp(b));
         return lp;
-    }
-
-    private GradientDrawable cardBg(int fill, int stroke, int radiusDp) {
-        GradientDrawable g = new GradientDrawable();
-        g.setColor(fill);
-        g.setCornerRadius(dp(radiusDp));
-        if (stroke != 0) {
-            g.setStroke(dp(1), stroke);
-        }
-        return g;
-    }
-
-    private GradientDrawable gradBg(int c1, int c2, int radiusDp) {
-        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{c1, c2});
-        g.setCornerRadius(dp(radiusDp));
-        return g;
     }
 
     private void flatten(Button b) {
@@ -1400,6 +1340,7 @@ Preferences.init(context);
         menuFrame.post(new Runnable() {
             @Override
             public void run() {
+                if (stopChecking || instance == null || menuFrame == null || isViewCollapsed()) return;
                 applyResponsiveScale(menuFrame.getWidth(), menuFrame.getHeight());
                 if (!isLoggedIn && !loginUserResized) {
                     applyComputedLoginDefaultHeight(false);
@@ -1444,11 +1385,15 @@ Preferences.init(context);
             .withEndAction(new Runnable() {
                 @Override
                 public void run() {
-                    menuFrame.setVisibility(View.GONE);
-                    menuFrame.setAlpha(1f);
-                    menuFrame.setScaleX(1f);
-                    menuFrame.setScaleY(1f);
-                    updateHeaderWaveState();
+                    if (menuFrame != null) {
+                        menuFrame.setVisibility(View.GONE);
+                        menuFrame.setAlpha(1f);
+                        menuFrame.setScaleX(1f);
+                        menuFrame.setScaleY(1f);
+                    }
+                    if (!stopChecking && instance != null) {
+                        updateHeaderWaveState();
+                    }
                 }
             })
             .start();
@@ -1488,8 +1433,12 @@ Preferences.init(context);
             if (lp.height > maxH) { lp.height = maxH; changed = true; }
             if (changed) menuFrame.setLayoutParams(lp);
 
-            int vw = menuFrame.getVisibility() == View.VISIBLE ? lp.width : rootFrame.getWidth();
-            int vh = menuFrame.getVisibility() == View.VISIBLE ? lp.height : rootFrame.getHeight();
+            int vw = (menuFrame.getVisibility() == View.VISIBLE)
+                    ? lp.width
+                    : (rootFrame.getWidth() > 0 ? rootFrame.getWidth() : dp(87));
+            int vh = (menuFrame.getVisibility() == View.VISIBLE)
+                    ? lp.height
+                    : (rootFrame.getHeight() > 0 ? rootFrame.getHeight() : dp(87));
             int nx = Math.max(0, Math.min(vmParams.x, Math.max(0, sw - vw)));
             int ny = Math.max(0, Math.min(vmParams.y, Math.max(0, sh - vh)));
             if (changed || nx != vmParams.x || ny != vmParams.y) {
@@ -1501,6 +1450,7 @@ Preferences.init(context);
                 contentScrollView.post(new Runnable() {
                     @Override
                     public void run() {
+                        if (stopChecking || instance == null || isLoggedIn) return;
                         updateLoginOverflowScroll(false);
                     }
                 });
@@ -3392,6 +3342,11 @@ Preferences.init(context);
             if (sidebarDivider != null) sidebarDivider.setVisibility(View.GONE);
             if (mFocusToggleBtn != null) mFocusToggleBtn.setVisibility(View.GONE);
             if (mFocusMiniPill != null) mFocusMiniPill.setVisibility(View.GONE);
+            if (mHeaderView != null) {
+                ViewGroup.LayoutParams hlp = mHeaderView.getLayoutParams();
+                if (hlp != null) { hlp.height = WRAP_CONTENT; mHeaderView.setLayoutParams(hlp); }
+                mHeaderView.setAlpha(1f);
+            }
             if (mBottomBar != null) {
                 ViewGroup.LayoutParams blp = mBottomBar.getLayoutParams();
                 if (blp != null) { blp.height = WRAP_CONTENT; mBottomBar.setLayoutParams(blp); }
@@ -3572,6 +3527,7 @@ Preferences.init(context);
             contentScrollView.post(new Runnable() {
                 @Override
                 public void run() {
+                    if (stopChecking || instance == null) return;
                     if (contentScrollView != null) {
                         contentScrollView.scrollTo(0, savedScrollY);
                     }
@@ -5310,6 +5266,7 @@ Preferences.init(context);
                 contentScrollView.post(new Runnable() {
                     @Override
                     public void run() {
+                        if (stopChecking || instance == null) return;
                         if (contentScrollView != null) {
                             contentScrollView.scrollTo(0, restoreContentY);
                         }
@@ -5320,6 +5277,7 @@ Preferences.init(context);
                 sidebarScroll.post(new Runnable() {
                     @Override
                     public void run() {
+                        if (stopChecking || instance == null) return;
                         if (sidebarScroll != null) {
                             sidebarScroll.scrollTo(0, restoreSidebarY);
                         }
@@ -5416,6 +5374,35 @@ Preferences.init(context);
 
     public void ShowMenu() {
         rootFrame.addView(mRootContainer);
+        lastRootScreenW = screenW();
+        lastRootScreenH = screenH();
+        if (rootGlobalLayoutListener == null) {
+            rootGlobalLayoutListener = new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
+                @Override
+                public void onGlobalLayout() {
+                    if (stopChecking || instance == null || rootFrame == null) return;
+                    int sw = screenW();
+                    int sh = screenH();
+                    if (sw <= 0 || sh <= 0) return;
+                    if (sw != lastRootScreenW || sh != lastRootScreenH) {
+                        lastRootScreenW = sw;
+                        lastRootScreenH = sh;
+                        keepInsideScreen();
+                        if (isLoggedIn && menuFrame != null && menuFrame.getVisibility() == View.VISIBLE) {
+                            ViewGroup.LayoutParams mlp = menuFrame.getLayoutParams();
+                            int curW = (mlp != null && mlp.width > 0) ? mlp.width : menuFrame.getWidth();
+                            int curH = (mlp != null && mlp.height > 0) ? mlp.height : menuFrame.getHeight();
+                            if (curW > 0 && curH > 0) {
+                                applyResponsiveScale(curW, curH);
+                            }
+                        }
+                    }
+                }
+            };
+            try {
+                rootFrame.getViewTreeObserver().addOnGlobalLayoutListener(rootGlobalLayoutListener);
+            } catch (Exception ignored) { }
+        }
         if (showMenuRunnable != null) {
             mainHandler.removeCallbacks(showMenuRunnable);
         }
@@ -5611,6 +5598,7 @@ private void resetWindowSizeToDefault() {
         contentScrollView.post(new Runnable() {
             @Override
             public void run() {
+                if (stopChecking || instance == null || isLoggedIn) return;
                 applyComputedLoginDefaultHeight(false);
             }
         });
@@ -6434,11 +6422,35 @@ private void setWindowFocusable(boolean focusable) {
         if (mFocusPillHideProgress != null) {
             mFocusPillHideProgress.animate().cancel();
         }
+        if (mFocusToggleBtn != null) {
+            mFocusToggleBtn.animate().cancel();
+        }
+        if (mFocusMiniPill != null) {
+            mFocusMiniPill.animate().cancel();
+        }
+        if (contentLayout != null) {
+            contentLayout.animate().cancel();
+        }
+        if (menuFrame != null) {
+            menuFrame.animate().cancel();
+        }
+        if (mCollapsed != null) {
+            mCollapsed.animate().cancel();
+        }
         dismissAllTrackedDialogs();
         activeSessionToken = "";
         activeSessionUser = "";
         activeSessionDeviceId = "";
         detachLoginScrollListeners();
+        if (rootFrame != null && rootGlobalLayoutListener != null) {
+            try {
+                android.view.ViewTreeObserver vto = rootFrame.getViewTreeObserver();
+                if (vto.isAlive()) {
+                    vto.removeOnGlobalLayoutListener(rootGlobalLayoutListener);
+                }
+            } catch (Exception ignored) { }
+            rootGlobalLayoutListener = null;
+        }
         if (activeLoginHelper != null) {
             activeLoginHelper.cleanup();
             activeLoginHelper = null;
@@ -7041,11 +7053,7 @@ private void setWindowFocusable(boolean focusable) {
     }
 
     private void SeekBar(LinearLayout linLayout, final int featNum, final String featName, final int min, final int max) {
-        Integer def = SEEK_DEFAULTS.get(featNum);
-        int defVal = (def != null) ? def.intValue() : min;
-        if (defVal < min) defVal = min;
-        if (defVal > max) defVal = max;
-        final int defaultVal = defVal;
+        final int defaultVal = min;
 
         int startVal = Preferences.readInitialInt(featName, featNum, defaultVal);
         if (startVal < min) startVal = min;
@@ -7221,10 +7229,6 @@ private void setWindowFocusable(boolean focusable) {
         int sz = dp(16);
         core.setSize(sz, sz);
         return core;
-    }
-
-    private Drawable makeSeekThumb() {
-        return makeSeekThumbDrawable();
     }
 
     private void Button(LinearLayout linLayout, final int featNum, final String featName) {
@@ -8025,12 +8029,6 @@ private void setWindowFocusable(boolean focusable) {
         }
     }
 
-    private void resetAllFeaturesAction(final LinearLayout resetRow, final TextView titleView,
-                                        final TextView subView, final ImageView iconView,
-                                        final String resetName, final Runnable revertRunnable) {
-        resetAllFeaturesActionWithUndo(resetRow, titleView, subView, iconView, resetName, revertRunnable, true);
-    }
-
     private void resetAllFeaturesActionWithUndo(final LinearLayout resetRow, final TextView titleView,
                                                 final TextView subView, final ImageView iconView,
                                                 final String resetName, final Runnable revertRunnable,
@@ -8377,7 +8375,7 @@ private void setWindowFocusable(boolean focusable) {
                 TextView t = (TextView) child;
                 if (j == clamped) {
                     t.setTextColor(COLOR_ACCENT);
-                    t.setBackground(ModxTheme.roundRect(getContext, ModxTheme.accentSoft(COLOR_ACCENT), 0, 0f, 4f));
+                    t.setBackground(ModxTheme.roundRect(getContext, ModxTheme.accentSoft(COLOR_ACCENT), 0, 0f, ModxTheme.RADIUS_DP));
                 } else {
                     t.setTextColor(ModxTheme.FG);
                     t.setBackground(null);
@@ -8553,7 +8551,7 @@ private void setWindowFocusable(boolean focusable) {
 
             if (index == initIdx) {
                 tv.setTextColor(COLOR_ACCENT);
-                tv.setBackground(ModxTheme.roundRect(ctx, ModxTheme.accentSoft(COLOR_ACCENT), 0, 0f, 4f));
+                tv.setBackground(ModxTheme.roundRect(ctx, ModxTheme.accentSoft(COLOR_ACCENT), 0, 0f, ModxTheme.RADIUS_DP));
             }
 
             tv.setOnClickListener(new View.OnClickListener() {
@@ -9425,37 +9423,6 @@ private void setWindowFocusable(boolean focusable) {
         linLayout.addView(wView);
     }
 
-    static String actionName(int a) {
-        switch (a) {
-            case MotionEvent.ACTION_DOWN:    return "DOWN";
-            case MotionEvent.ACTION_UP:      return "UP";
-            case MotionEvent.ACTION_MOVE:    return "MOVE";
-            case MotionEvent.ACTION_CANCEL:  return "CANCEL";
-            case MotionEvent.ACTION_OUTSIDE: return "OUTSIDE";
-            default: return "OTHER_" + a;
-        }
-    }
-
-    private static int darken(int color, float factor) {
-        int r = (int)(Color.red(color) * factor);
-        int g = (int)(Color.green(color) * factor);
-        int b = (int)(Color.blue(color) * factor);
-        return Color.argb(Color.alpha(color),
-            Math.max(0, Math.min(255, r)),
-            Math.max(0, Math.min(255, g)),
-            Math.max(0, Math.min(255, b)));
-    }
-
-    private static int lighten(int color, float factor) {
-        int r = Color.red(color) + (int)((255 - Color.red(color)) * factor);
-        int g = Color.green(color) + (int)((255 - Color.green(color)) * factor);
-        int b = Color.blue(color) + (int)((255 - Color.blue(color)) * factor);
-        return Color.argb(Color.alpha(color),
-            Math.max(0, Math.min(255, r)),
-            Math.max(0, Math.min(255, g)),
-            Math.max(0, Math.min(255, b)));
-    }
-
     /**
      * Live preview — applies accent tokens in-place without rebuilding views or writing to disk.
      */
@@ -9538,7 +9505,7 @@ private void setWindowFocusable(boolean focusable) {
                         TextView tv = (TextView) child;
                         if (j == sp.currentIdx) {
                             tv.setTextColor(COLOR_ACCENT);
-                            tv.setBackground(ModxTheme.roundRect(getContext, ModxTheme.accentSoft(COLOR_ACCENT), 0, 0f, 4f));
+                            tv.setBackground(ModxTheme.roundRect(getContext, ModxTheme.accentSoft(COLOR_ACCENT), 0, 0f, ModxTheme.RADIUS_DP));
                         } else {
                             tv.setTextColor(ModxTheme.FG);
                             tv.setBackground(null);
@@ -9735,7 +9702,7 @@ private void setWindowFocusable(boolean focusable) {
         }
 
         if (mMinimizeBtn != null) {
-            mMinimizeBtn.setBackground(ModxTheme.secondaryButtonBg(getContext));
+            mMinimizeBtn.setBackground(ModxTheme.cardButtonBg(getContext));
         }
         if (mMinimizeLabel != null) {
             mMinimizeLabel.setTextColor(ModxTheme.FG);
@@ -9745,7 +9712,7 @@ private void setWindowFocusable(boolean focusable) {
         }
 
         if (mHideBtn != null) {
-            mHideBtn.setBackground(ModxTheme.secondaryButtonBg(getContext));
+            mHideBtn.setBackground(ModxTheme.cardButtonBg(getContext));
         }
         if (mHideLabel != null) {
             mHideLabel.setTextColor(ModxTheme.FG);
