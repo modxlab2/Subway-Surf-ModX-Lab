@@ -5300,9 +5300,8 @@ Preferences.init(context);
             h.root.setBackground(ModxTheme.withInteractiveRipple(
                     getContext, bg, ModxTheme.withAlpha(COLOR_ACCENT, 0x24), ModxTheme.RADIUS_DP));
         } else {
-            Drawable bg = ModxTheme.roundRect(getContext, 0xFF303030, 0xFF404040, 1f, ModxTheme.RADIUS_DP);
             h.root.setBackground(ModxTheme.withInteractiveRipple(
-                    getContext, bg,
+                    getContext, ModxTheme.transparentBg(),
                     ModxTheme.withAlpha(ModxTheme.FG, 0x16), ModxTheme.RADIUS_DP));
         }
         if (h.indicator != null) {

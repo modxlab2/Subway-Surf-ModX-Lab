@@ -725,7 +725,7 @@ public class LoginHelper {
         LinearLayout box = new LinearLayout(ctx);
         box.setOrientation(LinearLayout.HORIZONTAL);
         box.setGravity(Gravity.CENTER_VERTICAL);
-        box.setBackground(ModxTheme.fieldBoxBg(ctx, COLOR_ACCENT, false));
+        box.setBackground(ModxTheme.roundRect(ctx, 0xFF303030, 0xFF404040, 1f, ModxTheme.RADIUS_DP));
         box.setClipToPadding(false);
         return box;
     }

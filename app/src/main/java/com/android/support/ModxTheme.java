@@ -28,13 +28,13 @@ public final class ModxTheme {
     // =========================================================================
     public static final int PAGE            = 0xFF131312; // #131312
     public static final int SURFACE         = 0xFF0E0E0D; // #0E0E0D (header/footer/sidebar band)
-    public static final int CARD            = 0xFF303030; // #303030
-    public static final int CARD_HOVER      = 0xFF3A3A3A; // #3A3A3A
-    public static final int RAISED          = 0xFF303030; // #303030
-    public static final int INPUT           = 0xFF303030; // #303030
+    public static final int CARD            = 0xFF222220; // #222220
+    public static final int CARD_HOVER      = 0xFF292927; // #292927
+    public static final int RAISED          = 0xFF2F2F2D; // #2F2F2D
+    public static final int INPUT           = 0xFF1A1A19; // #1A1A19
 
-    public static final int LINE            = 0xFF404040; // #404040
-    public static final int LINE_STRONG     = 0xFF404040; // #404040
+    public static final int LINE            = 0xFF31302E; // #31302E
+    public static final int LINE_STRONG     = 0xFF464541; // #464541
     public static final int LINE_HOVER      = 0xFF5A5955; // #5A5955
     public static final int HAIRLINE        = 0x17DEDCD1; // rgba(222,220,209,0.09)
     public static final int INNER_HIGHLIGHT = 0x0AFFFFFF; // rgba(255,255,255,0.04)
