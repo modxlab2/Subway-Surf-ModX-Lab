@@ -7,6 +7,7 @@ import android.content.ClipDescription;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.res.ColorStateList;
+import android.content.res.Configuration;
 import android.content.res.TypedArray;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -871,6 +872,12 @@ final class TextActionModeHost {
             }
         } catch (Throwable ignored) { }
         return android.content.res.Resources.getSystem().getDisplayMetrics();
+    }
+
+    private static boolean isNightMode(Context baseCtx) {
+        int nightMask = baseCtx.getResources().getConfiguration().uiMode
+                & Configuration.UI_MODE_NIGHT_MASK;
+        return (nightMask == Configuration.UI_MODE_NIGHT_YES);
     }
 
     private static Context createDeviceFloatingThemeContext(Context baseCtx) {
