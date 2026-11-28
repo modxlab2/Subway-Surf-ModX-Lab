@@ -51,6 +51,7 @@ import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.TouchDelegate;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
@@ -113,7 +114,8 @@ public class Menu {
     int COLOR_CARD        = ModxTheme.CARD;
     int COLOR_CARD_HI     = ModxTheme.CARD_HOVER;
     int COLOR_CARD_BORDER = ModxTheme.LINE;
-    int COLOR_TRACK       = ModxTheme.RAISED;
+    int COLOR_TRACK       = ModxTheme.CONTROL;
+    int COLOR_SLIDER_TRACK = ModxTheme.CONTROL_STROKE;
     int COLOR_TEXT_MUTED  = ModxTheme.MUTED;
     int BTN_GRAD_1        = ModxTheme.ACCENT;
     int BTN_GRAD_2        = ModxTheme.ACCENT_PRESS;
@@ -256,6 +258,10 @@ public class Menu {
     private FrameLayout mFocusPillHideBtn = null;
     private ImageView mFocusPillHideIcon = null;
     private View mFocusPillHideProgress = null;
+    private FocusTopFadeView mFocusTopFade = null;
+    private MultiTouchDelegate mFocusPillTouchDelegate = null;
+    private int mLastAppliedFocusTopInset = -1;
+    private final Rect mFocusPillTmpRect = new Rect();
     private View mFirstCardSafeTarget = null;
     private int mFirstCardSafeAddedR = 0;
 
@@ -430,6 +436,7 @@ public class Menu {
         String featName;
         ToggleView toggle;
         GradientDrawable rowBg;
+        GradientDrawable pressedBg;
         boolean[] state;
         boolean defaultVal;
     }
@@ -470,6 +477,7 @@ public class Menu {
         String featName;
         CheckBox checkBox;
         GradientDrawable bg;
+        GradientDrawable pressedBg;
         boolean defaultVal;
     }
     private final HashMap<Integer, CheckBoxHolder> mCheckBoxes =
@@ -882,10 +890,12 @@ Preferences.init(context);
         ctScroll.setAccentColor(COLOR_ACCENT);
         ctScroll.setVerticalFadingEdgeEnabled(true);
         ctScroll.setFadingEdgeLength(dp(12));
+        ctScroll.setClipToPadding(false);
         contentScrollView = ctScroll;
 
         contentLayout = new LinearLayout(context);
         contentLayout.setOrientation(LinearLayout.VERTICAL);
+        contentLayout.setClipToPadding(false);
         contentLayout.setPadding(0, 0, 0, 0);
         contentScrollView.addView(contentLayout);
         contentStage.addView(contentScrollView);
@@ -920,7 +930,7 @@ Preferences.init(context);
         hideBtn.setFocusable(true);
         hideBtn.setContentDescription("Hide or hold to kill menu");
         hideBtn.setLayoutParams(new FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
-        hideBtn.setBackground(ModxTheme.cardButtonBg(context));
+        hideBtn.setBackground(ModxTheme.secondaryButtonBg(context));
         hideBtn.setPadding(dp(8), 0, dp(8), 0);
 
         final ImageView hideIcon = new ImageView(context);
@@ -1006,7 +1016,7 @@ Preferences.init(context);
         closeBtn.setFocusable(true);
         closeBtn.setContentDescription("Minimize menu");
         closeBtn.setLayoutParams(new LinearLayout.LayoutParams(0, dp(38), 1f));
-        closeBtn.setBackground(ModxTheme.cardButtonBg(context));
+        closeBtn.setBackground(ModxTheme.secondaryButtonBg(context));
         closeBtn.setPadding(dp(8), 0, dp(8), 0);
 
         final ImageView minIcon = new ImageView(context);
@@ -1055,6 +1065,7 @@ Preferences.init(context);
         mBottomDivider = makeDivider(false);
         mExpanded.addView(mBottomDivider);
         mExpanded.addView(bottomBar);
+        updateBottomDividerVisibility();
 
         mRootContainer.addView(mCollapsed);
         mRootContainer.addView(menuFrame);
@@ -1277,6 +1288,23 @@ Preferences.init(context);
         return v;
     }
 
+    private int updateBottomDividerVisibility() {
+        int vis = (isLoggedIn && !focusMode) ? View.VISIBLE : View.GONE;
+        if (mBottomDivider != null && mBottomDivider.getVisibility() != vis) {
+            mBottomDivider.setVisibility(vis);
+        }
+        if (mShimmerView != null && mShimmerView.getVisibility() != vis) {
+            mShimmerView.setVisibility(vis);
+        }
+        if (sidebarDivider != null) {
+            int sbVis = isLoggedIn ? View.VISIBLE : View.GONE;
+            if (sidebarDivider.getVisibility() != sbVis) {
+                sidebarDivider.setVisibility(sbVis);
+            }
+        }
+        return vis;
+    }
+
     private static DisplayMetrics safeDisplayMetrics(Context ctx) {
         DisplayMetrics dm = new DisplayMetrics();
         try {
@@ -1336,11 +1364,13 @@ Preferences.init(context);
             .setDuration(220)
             .setInterpolator(new DecelerateInterpolator(1.6f))
             .start();
+        updateBottomDividerVisibility();
         updateHeaderWaveState();
         menuFrame.post(new Runnable() {
             @Override
             public void run() {
                 if (stopChecking || instance == null || menuFrame == null || isViewCollapsed()) return;
+                updateBottomDividerVisibility();
                 applyResponsiveScale(menuFrame.getWidth(), menuFrame.getHeight());
                 if (!isLoggedIn && !loginUserResized) {
                     applyComputedLoginDefaultHeight(false);
@@ -1363,6 +1393,7 @@ Preferences.init(context);
 
     private void collapseMenu(float iconAlpha) {
         cancelAllDrags();
+        updateBottomDividerVisibility();
         Preferences.flush("menu_collapse");
         if (mTitleTitanic != null) {
             mTitleTitanic.setPaused(true);
@@ -1631,7 +1662,7 @@ Preferences.init(context);
 
             if (tc < 0.99f) {
                 borderPaint.setStrokeWidth(1f * s);
-                borderPaint.setColor(ModxTheme.withAlpha(ModxTheme.LINE_STRONG, Math.round(255f * (1f - tc))));
+                borderPaint.setColor(ModxTheme.withAlpha(ModxTheme.CONTROL_STROKE, Math.round(255f * (1f - tc))));
                 canvas.drawRoundRect(rect, r, r, borderPaint);
             }
 
@@ -2176,12 +2207,7 @@ Preferences.init(context);
                 lastSidebarW = targetSidebarW;
             }
         }
-        if (sidebarDivider != null) {
-            int desiredDivVis = isLoggedIn ? View.VISIBLE : View.GONE;
-            if (sidebarDivider.getVisibility() != desiredDivVis) {
-                sidebarDivider.setVisibility(desiredDivVis);
-            }
-        }
+        updateBottomDividerVisibility();
 
         clearFirstCardSafeZone();
         applyHeaderMetrics(tokens);
@@ -2613,6 +2639,7 @@ Preferences.init(context);
         private final Rect tmpRect = new Rect();
         private final Rect hitRect = new Rect();
         private boolean gripDragActive = false;
+        private boolean delegatedActionActive = false;
         private boolean itemDragTracking = false;
 
         ContentStageFrameLayout(Context ctx) {
@@ -2632,11 +2659,38 @@ Preferences.init(context);
             }
         }
 
+        private boolean isPointInExpandedActionBtn(View child, int fx, int fy, boolean extendRight) {
+            if (child == null || child.getVisibility() != View.VISIBLE
+                    || child.getWidth() <= 0 || child.getHeight() <= 0) {
+                return false;
+            }
+            try {
+                tmpRect.set(0, 0, child.getWidth(), child.getHeight());
+                offsetDescendantRectToMyCoords(child, tmpRect);
+                int minTarget = dp(36);
+                int cy = tmpRect.centerY();
+                int halfH = Math.max(minTarget / 2, tmpRect.height() / 2);
+                int left = tmpRect.left;
+                int right = extendRight ? Math.max(tmpRect.right, tmpRect.left + minTarget) : tmpRect.right;
+                hitRect.set(left, cy - halfH, right, cy + halfH);
+                return hitRect.contains(fx, fy);
+            } catch (IllegalArgumentException ignored) {
+                return false;
+            }
+        }
+
+        private boolean isPointInAnyFocusActionBtn(int fx, int fy) {
+            return isPointInExpandedActionBtn(mFocusPillExitBtn, fx, fy, false)
+                    || isPointInExpandedActionBtn(mFocusPillMinBtn, fx, fy, false)
+                    || isPointInExpandedActionBtn(mFocusPillHideBtn, fx, fy, true);
+        }
+
         @Override
         public boolean dispatchTouchEvent(MotionEvent ev) {
             int action = ev.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN) {
                 gripDragActive = false;
+                delegatedActionActive = false;
                 itemDragTracking = false;
                 int fx = Math.round(ev.getX());
                 int fy = Math.round(ev.getY());
@@ -2644,9 +2698,18 @@ Preferences.init(context);
                         && mFocusMiniPill != null && mFocusMiniPill.getVisibility() == View.VISIBLE
                         && mFocusPillGripWrap != null && mFocusPillGripWrap.getVisibility() == View.VISIBLE
                         && mFocusPillDragListener != null) {
-                    boolean onActionBtn = isPointInChild(mFocusPillExitBtn, fx, fy)
-                            || isPointInChild(mFocusPillMinBtn, fx, fy)
-                            || isPointInChild(mFocusPillHideBtn, fx, fy);
+                    boolean onActionBtn = isPointInAnyFocusActionBtn(fx, fy);
+                    if (onActionBtn && !isPointInChild(mFocusMiniPill, fx, fy)
+                            && mFocusPillTouchDelegate != null) {
+                        if (mFocusPillTouchDelegate.onTouchEvent(ev)) {
+                            delegatedActionActive = true;
+                            if (contentScrollView != null) {
+                                contentScrollView.requestDisallowInterceptTouchEvent(true);
+                            }
+                            requestDisallowInterceptTouchEvent(true);
+                            return true;
+                        }
+                    }
                     if (!onActionBtn && mFocusPillGripWrap.getWidth() > 0 && mFocusPillGripWrap.getHeight() > 0) {
                         try {
                             tmpRect.set(0, 0, mFocusPillGripWrap.getWidth(), mFocusPillGripWrap.getHeight());
@@ -2670,6 +2733,7 @@ Preferences.init(context);
                 }
                 boolean onFloatingOverlay = isPointInChild(mFocusToggleBtn, fx, fy)
                         || isPointInChild(mFocusMiniPill, fx, fy)
+                        || (isLoggedIn && focusMode && isPointInAnyFocusActionBtn(fx, fy))
                         || isPointInChild(mUndoSnackbar, fx, fy);
                 if (!onFloatingOverlay && itemReorderController != null) {
                     itemDragTracking = true;
@@ -2678,6 +2742,18 @@ Preferences.init(context);
                     }
                 }
                 return super.dispatchTouchEvent(ev);
+            }
+
+            if (delegatedActionActive && mFocusPillTouchDelegate != null) {
+                boolean handled = mFocusPillTouchDelegate.onTouchEvent(ev);
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    delegatedActionActive = false;
+                    if (contentScrollView != null) {
+                        contentScrollView.requestDisallowInterceptTouchEvent(false);
+                    }
+                    requestDisallowInterceptTouchEvent(false);
+                }
+                return handled;
             }
 
             if (gripDragActive && mFocusPillGripWrap != null && mFocusPillDragListener != null) {
@@ -2928,9 +3004,170 @@ Preferences.init(context);
     }
 
     // ================================================================
-    // Feature B: Focus Mode overlay controls (Expand toggle & Mini pill)
+    // Feature B: Focus Mode overlay controls (Expand toggle, Top fade & Mini pill)
     // ================================================================
+    private static final class FocusTopFadeView extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final float fadeHeightPx;
+        private int lastW = -1;
+        private int lastH = -1;
+
+        FocusTopFadeView(Context ctx, float fadeHeightPx) {
+            super(ctx);
+            this.fadeHeightPx = fadeHeightPx;
+            setClickable(false);
+            setFocusable(false);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+                setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
+            }
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            int w = getWidth();
+            int h = getHeight();
+            if (w <= 0 || h <= 0) return;
+            if (w != lastW || h != lastH || paint.getShader() == null) {
+                lastW = w;
+                lastH = h;
+                int topColor = ModxTheme.withAlphaFraction(ModxTheme.PAGE, 0.92f);
+                int botColor = ModxTheme.withAlpha(ModxTheme.PAGE, 0);
+                float fadeStart = Math.max(0f, Math.min(0.95f, (h - fadeHeightPx) / (float) h));
+                paint.setShader(new LinearGradient(
+                        0f, 0f, 0f, h,
+                        new int[]{topColor, topColor, botColor},
+                        new float[]{0f, fadeStart, 1f},
+                        Shader.TileMode.CLAMP));
+            }
+            canvas.drawRect(0f, 0f, w, h, paint);
+        }
+    }
+
+    private static final class MultiTouchDelegate extends TouchDelegate {
+        private final ArrayList<TouchDelegate> delegates = new ArrayList<TouchDelegate>();
+
+        MultiTouchDelegate(View host) {
+            super(new Rect(), host);
+        }
+
+        void clear() {
+            delegates.clear();
+        }
+
+        void addDelegate(TouchDelegate td) {
+            if (td != null) delegates.add(td);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            boolean handled = false;
+            float x = event.getX();
+            float y = event.getY();
+            for (int i = 0; i < delegates.size(); i++) {
+                MotionEvent copy = MotionEvent.obtain(event);
+                copy.setLocation(x, y);
+                boolean res = delegates.get(i).onTouchEvent(copy);
+                copy.recycle();
+                if (res) handled = true;
+            }
+            return handled;
+        }
+    }
+
+    private void setFocusHideIconColor(int color) {
+        if (mFocusPillHideIcon == null) return;
+        Drawable d = mFocusPillHideIcon.getDrawable();
+        if (d instanceof SvgIcon) {
+            ((SvgIcon) d).setColor(color);
+        } else {
+            mFocusPillHideIcon.setImageDrawable(ModxIcons.power(color, dp(18)));
+        }
+    }
+
+    private int computeFocusTopInsetPx() {
+        if (!isLoggedIn || !focusMode) return 0;
+        int pillTopMargin = dp(6);
+        int pillBottomGap = dp(6);
+        int pillH = dp(32);
+        if (mFocusMiniPill != null) {
+            ViewGroup.LayoutParams lp = mFocusMiniPill.getLayoutParams();
+            if (lp instanceof FrameLayout.LayoutParams) {
+                pillTopMargin = ((FrameLayout.LayoutParams) lp).topMargin;
+            }
+            if (mFocusMiniPill.getHeight() > 0) {
+                pillH = mFocusMiniPill.getHeight();
+            } else if (mFocusMiniPill.getMeasuredHeight() > 0) {
+                pillH = mFocusMiniPill.getMeasuredHeight();
+            } else if (lp != null && lp.height > 0) {
+                pillH = lp.height;
+            }
+        }
+        return pillTopMargin + pillH + pillBottomGap;
+    }
+
+    private void updateFocusTopFadeMetrics() {
+        if (mFocusTopFade == null) return;
+        boolean show = isLoggedIn && focusMode;
+        mFocusTopFade.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (!show) return;
+        int inset = computeFocusTopInsetPx();
+        ViewGroup.LayoutParams lp = mFocusTopFade.getLayoutParams();
+        if (lp != null && lp.height != inset) {
+            lp.height = inset;
+            mFocusTopFade.setLayoutParams(lp);
+        }
+    }
+
+    private void addButtonTouchDelegate(MultiTouchDelegate group, View btn, boolean extendRight) {
+        if (group == null || contentStage == null || btn == null
+                || btn.getVisibility() != View.VISIBLE || btn.getWidth() <= 0 || btn.getHeight() <= 0) {
+            return;
+        }
+        try {
+            mFocusPillTmpRect.set(0, 0, btn.getWidth(), btn.getHeight());
+            contentStage.offsetDescendantRectToMyCoords(btn, mFocusPillTmpRect);
+            int minTarget = dp(36);
+            int cy = mFocusPillTmpRect.centerY();
+            int halfH = Math.max(minTarget / 2, mFocusPillTmpRect.height() / 2);
+            int left = mFocusPillTmpRect.left;
+            int right = extendRight ? Math.max(mFocusPillTmpRect.right, mFocusPillTmpRect.left + minTarget) : mFocusPillTmpRect.right;
+            Rect expanded = new Rect(left, cy - halfH, right, cy + halfH);
+            group.addDelegate(new TouchDelegate(expanded, btn));
+        } catch (IllegalArgumentException ignored) { }
+    }
+
+    private void updateFocusPillTouchDelegates() {
+        if (contentStage == null) return;
+        if (!isLoggedIn || !focusMode || mFocusMiniPill == null || mFocusMiniPill.getVisibility() != View.VISIBLE) {
+            if (mFocusPillTouchDelegate != null) {
+                mFocusPillTouchDelegate.clear();
+                mFocusPillTouchDelegate = null;
+            }
+            contentStage.setTouchDelegate(null);
+            return;
+        }
+        if (mFocusPillTouchDelegate == null) {
+            mFocusPillTouchDelegate = new MultiTouchDelegate(contentStage);
+        } else {
+            mFocusPillTouchDelegate.clear();
+        }
+        addButtonTouchDelegate(mFocusPillTouchDelegate, mFocusPillExitBtn, false);
+        addButtonTouchDelegate(mFocusPillTouchDelegate, mFocusPillMinBtn, false);
+        addButtonTouchDelegate(mFocusPillTouchDelegate, mFocusPillHideBtn, true);
+        contentStage.setTouchDelegate(mFocusPillTouchDelegate);
+    }
+
     private void buildFocusOverlayControls(Context ctx) {
+        FocusTopFadeView topFade = new FocusTopFadeView(ctx, dpf(12f));
+        topFade.setLayoutParams(new FrameLayout.LayoutParams(MATCH_PARENT, dp(44), Gravity.TOP));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            topFade.setOutlineProvider(null);
+            topFade.setElevation(dpf(7.5f));
+        }
+        topFade.setVisibility(View.GONE);
+        mFocusTopFade = topFade;
+        contentStage.addView(topFade);
+
         FrameLayout toggleBtn = new FrameLayout(ctx);
         toggleBtn.setBackground(ModxTheme.floatingIconBg(ctx, COLOR_ACCENT));
         toggleBtn.setClickable(true);
@@ -2961,47 +3198,52 @@ Preferences.init(context);
         mFocusToggleIcon = toggleIcon;
         contentStage.addView(toggleBtn);
 
-        // Floating Mini Pill in Focus Mode (TOP | END): Drag Grip + Exit + Minimize + Hide/Kill
+        // Floating Mini Pill in Focus Mode (TOP | END): 32dp compact opaque pill, 18dp icons, 36dp touch targets
         LinearLayout pill = new LinearLayout(ctx);
         pill.setOrientation(LinearLayout.HORIZONTAL);
         pill.setGravity(Gravity.CENTER_VERTICAL);
-        pill.setBackground(ModxTheme.pillBadgeBg(
-                ctx, ModxTheme.withAlphaFraction(ModxTheme.SURFACE, 0.85f), ModxTheme.LINE));
-        pill.setPadding(dp(3), dp(2), dp(3), dp(2));
-        FrameLayout.LayoutParams pLp = new FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT, Gravity.TOP | Gravity.END);
+        pill.setClickable(true);
+        pill.setClipChildren(false);
+        pill.setClipToPadding(false);
+        pill.setBackground(ModxTheme.pillBadgeBg(ctx, ModxTheme.SURFACE, ModxTheme.CONTROL_STROKE));
+        pill.setPadding(dp(3), 0, dp(3), 0);
+        FrameLayout.LayoutParams pLp = new FrameLayout.LayoutParams(WRAP_CONTENT, dp(32), Gravity.TOP | Gravity.END);
         pLp.setMargins(0, dp(6), dp(6), 0);
         pill.setLayoutParams(pLp);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             pill.setElevation(dp(8));
         }
 
+        final int iconPx = dp(18);
+        final int pillSlotH = dp(32);
+
         // 1. Drag Grip
         mFocusPillDragListener = onTouchListener();
         FrameLayout gripWrap = new FrameLayout(ctx);
-        gripWrap.setLayoutParams(new LinearLayout.LayoutParams(dp(26), dp(30)));
+        gripWrap.setLayoutParams(new LinearLayout.LayoutParams(dp(24), pillSlotH));
         gripWrap.setClickable(true);
         gripWrap.setContentDescription("Drag menu");
         gripWrap.setOnTouchListener(mFocusPillDragListener);
         ImageView gripIcon = new ImageView(ctx);
-        gripIcon.setImageDrawable(ModxIcons.gripVertical(ModxTheme.MUTED, dp(14)));
+        gripIcon.setImageDrawable(ModxIcons.gripVertical(ModxTheme.MUTED, iconPx));
         gripIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        gripIcon.setLayoutParams(new FrameLayout.LayoutParams(dp(14), dp(14), Gravity.CENTER));
+        gripIcon.setLayoutParams(new FrameLayout.LayoutParams(iconPx, iconPx, Gravity.CENTER));
         gripWrap.addView(gripIcon);
         mFocusPillGripWrap = gripWrap;
         mFocusPillGripIcon = gripIcon;
 
-        // 2. Exit Focus
+        // 2. Exit Focus (primary action -> COLOR_ACCENT)
         FrameLayout exitBtn = new FrameLayout(ctx);
-        exitBtn.setLayoutParams(new LinearLayout.LayoutParams(dp(28), dp(28)));
+        exitBtn.setLayoutParams(new LinearLayout.LayoutParams(dp(28), pillSlotH));
         exitBtn.setClickable(true);
         exitBtn.setFocusable(true);
         exitBtn.setContentDescription("Exit focus mode");
         exitBtn.setBackground(ModxTheme.withInteractiveRipple(
                 ctx, ModxTheme.transparentBg(), ModxTheme.withAlpha(COLOR_ACCENT, 0x26), ModxTheme.RADIUS_DP));
         ImageView exitIcon = new ImageView(ctx);
-        exitIcon.setImageDrawable(ModxIcons.minimize2(COLOR_ACCENT, dp(14)));
+        exitIcon.setImageDrawable(ModxIcons.minimize2(COLOR_ACCENT, iconPx));
         exitIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        exitIcon.setLayoutParams(new FrameLayout.LayoutParams(dp(14), dp(14), Gravity.CENTER));
+        exitIcon.setLayoutParams(new FrameLayout.LayoutParams(iconPx, iconPx, Gravity.CENTER));
         exitBtn.addView(exitIcon);
         addPressAnim(exitBtn);
         exitBtn.setOnClickListener(new View.OnClickListener() {
@@ -3016,16 +3258,16 @@ Preferences.init(context);
 
         // 3. Minimize
         FrameLayout minBtn = new FrameLayout(ctx);
-        minBtn.setLayoutParams(new LinearLayout.LayoutParams(dp(28), dp(28)));
+        minBtn.setLayoutParams(new LinearLayout.LayoutParams(dp(28), pillSlotH));
         minBtn.setClickable(true);
         minBtn.setFocusable(true);
         minBtn.setContentDescription("Minimize menu");
         minBtn.setBackground(ModxTheme.withInteractiveRipple(
                 ctx, ModxTheme.transparentBg(), ModxTheme.withAlpha(ModxTheme.FG, 0x1A), ModxTheme.RADIUS_DP));
         ImageView minIcon = new ImageView(ctx);
-        minIcon.setImageDrawable(ModxIcons.minimize(ModxTheme.MUTED, dp(14)));
+        minIcon.setImageDrawable(ModxIcons.minimize(ModxTheme.MUTED, iconPx));
         minIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        minIcon.setLayoutParams(new FrameLayout.LayoutParams(dp(14), dp(14), Gravity.CENTER));
+        minIcon.setLayoutParams(new FrameLayout.LayoutParams(iconPx, iconPx, Gravity.CENTER));
         minBtn.addView(minIcon);
         addPressAnim(minBtn);
         minBtn.setOnClickListener(new View.OnClickListener() {
@@ -3038,18 +3280,18 @@ Preferences.init(context);
         mFocusPillMinBtn = minBtn;
         mFocusPillMinIcon = minIcon;
 
-        // 4. Hide / Hold to Kill
+        // 4. Hide / Hold to Kill (MUTED idle, DANGER only while pressed)
         FrameLayout hideBtn = new FrameLayout(ctx);
-        hideBtn.setLayoutParams(new LinearLayout.LayoutParams(dp(28), dp(28)));
+        hideBtn.setLayoutParams(new LinearLayout.LayoutParams(dp(28), pillSlotH));
         hideBtn.setClickable(true);
         hideBtn.setFocusable(true);
         hideBtn.setContentDescription("Hide or hold to kill menu");
         hideBtn.setBackground(ModxTheme.withInteractiveRipple(
-                ctx, ModxTheme.transparentBg(), ModxTheme.withAlpha(ModxTheme.FG, 0x1A), ModxTheme.RADIUS_DP));
+                ctx, ModxTheme.transparentBg(), ModxTheme.withAlpha(ModxTheme.DANGER, 0x26), ModxTheme.RADIUS_DP));
         ImageView hideIcon = new ImageView(ctx);
-        hideIcon.setImageDrawable(ModxIcons.power(ModxTheme.MUTED, dp(14)));
+        hideIcon.setImageDrawable(ModxIcons.power(ModxTheme.MUTED, iconPx));
         hideIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        hideIcon.setLayoutParams(new FrameLayout.LayoutParams(dp(14), dp(14), Gravity.CENTER));
+        hideIcon.setLayoutParams(new FrameLayout.LayoutParams(iconPx, iconPx, Gravity.CENTER));
 
         final View holdProg = new View(ctx);
         FrameLayout.LayoutParams hpLp = new FrameLayout.LayoutParams(MATCH_PARENT, dp(2), Gravity.BOTTOM);
@@ -3067,6 +3309,7 @@ Preferences.init(context);
             public boolean onTouch(View view, MotionEvent e) {
                 switch (e.getActionMasked()) {
                     case MotionEvent.ACTION_DOWN:
+                        setFocusHideIconColor(ModxTheme.DANGER);
                         view.animate().scaleX(0.92f).scaleY(0.92f).setDuration(100)
                                 .setInterpolator(new DecelerateInterpolator()).start();
                         holdProg.animate().cancel();
@@ -3078,6 +3321,7 @@ Preferences.init(context);
                         break;
                     case MotionEvent.ACTION_UP:
                     case MotionEvent.ACTION_CANCEL:
+                        setFocusHideIconColor(ModxTheme.MUTED);
                         view.animate().scaleX(1f).scaleY(1f).setDuration(100)
                                 .setInterpolator(new DecelerateInterpolator()).start();
                         holdProg.animate().cancel();
@@ -3112,6 +3356,26 @@ Preferences.init(context);
         pill.addView(exitBtn);
         pill.addView(minBtn);
         pill.addView(hideBtn);
+        pill.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+            @Override
+            public void onLayoutChange(View v, int left, int top, int right, int bottom,
+                                       int oldLeft, int oldTop, int oldRight, int oldBottom) {
+                if (isLoggedIn && focusMode) {
+                    updateFocusTopFadeMetrics();
+                    updateFocusPillTouchDelegates();
+                    if (computeFocusTopInsetPx() != mLastAppliedFocusTopInset && contentStage != null) {
+                        contentStage.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!stopChecking && instance != null && isLoggedIn && focusMode) {
+                                    applyContentStagePadding(ensureScaleTokens());
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+        });
         pill.setVisibility(View.GONE);
         mFocusMiniPill = pill;
         contentStage.addView(pill);
@@ -3123,10 +3387,10 @@ Preferences.init(context);
         boolean compact = (tokens.sizeClass == ModxTheme.SizeClass.COMPACT);
         int toggleBoxPx = mini ? dp(24) : (compact ? dp(28) : dp(32));
         int toggleIconPx = mini ? dp(13) : (compact ? dp(14) : dp(16));
-        int pillBtnW = mini ? dp(22) : (compact ? dp(25) : dp(28));
-        int pillBtnH = mini ? dp(26) : (compact ? dp(28) : dp(30));
-        int pillGripW = mini ? dp(22) : (compact ? dp(24) : dp(26));
-        int pillIconPx = mini ? dp(12) : (compact ? dp(13) : dp(14));
+        int pillBtnW = mini ? dp(26) : dp(28);
+        int pillBtnH = dp(32);
+        int pillGripW = mini ? dp(22) : dp(24);
+        int pillIconPx = dp(18);
 
         if (mFocusToggleBtn != null) {
             ViewGroup.LayoutParams lp = mFocusToggleBtn.getLayoutParams();
@@ -3154,11 +3418,13 @@ Preferences.init(context);
             ViewGroup.LayoutParams lp = mFocusMiniPill.getLayoutParams();
             if (lp instanceof FrameLayout.LayoutParams) {
                 FrameLayout.LayoutParams flp = (FrameLayout.LayoutParams) lp;
+                flp.width = WRAP_CONTENT;
+                flp.height = pillBtnH;
                 flp.gravity = Gravity.TOP | Gravity.END;
                 flp.setMargins(0, dp(6), dp(6), 0);
                 mFocusMiniPill.setLayoutParams(flp);
             }
-            mFocusMiniPill.setPadding(dp(mini ? 2 : 3), dp(2), dp(mini ? 2 : 3), dp(2));
+            mFocusMiniPill.setPadding(dp(mini ? 2 : 3), 0, dp(mini ? 2 : 3), 0);
             mFocusMiniPill.setVisibility(isLoggedIn && focusMode ? View.VISIBLE : View.GONE);
         }
 
@@ -3166,6 +3432,17 @@ Preferences.init(context);
         setFocusPillSlotSize(mFocusPillExitBtn, mFocusPillExitIcon, pillBtnW, pillBtnH, pillIconPx);
         setFocusPillSlotSize(mFocusPillMinBtn, mFocusPillMinIcon, pillBtnW, pillBtnH, pillIconPx);
         setFocusPillSlotSize(mFocusPillHideBtn, mFocusPillHideIcon, pillBtnW, pillBtnH, pillIconPx);
+        setFocusHideIconColor(ModxTheme.MUTED);
+        updateFocusTopFadeMetrics();
+        if (contentStage != null) {
+            contentStage.post(new Runnable() {
+                @Override
+                public void run() {
+                    if (stopChecking || instance == null) return;
+                    updateFocusPillTouchDelegates();
+                }
+            });
+        }
     }
 
     private void setFocusPillSlotSize(View container, ImageView iconView, int w, int h, int iconPx) {
@@ -3293,13 +3570,15 @@ Preferences.init(context);
     private void applyContentStagePadding(ModxTheme.MenuScaleTokens tokens) {
         if (contentLayout == null) return;
         if (!isLoggedIn) {
+            mLastAppliedFocusTopInset = 0;
             if (contentLayout.getPaddingLeft() != 0 || contentLayout.getPaddingTop() != 0
                     || contentLayout.getPaddingRight() != 0 || contentLayout.getPaddingBottom() != 0) {
                 contentLayout.setPadding(0, 0, 0, 0);
             }
             return;
         }
-        int topPad = dp(4);
+        int topPad = focusMode ? computeFocusTopInsetPx() : dp(4);
+        mLastAppliedFocusTopInset = topPad;
         boolean undoVisible = (mUndoSnackbar != null && mUndoSnackbar.getVisibility() == View.VISIBLE);
         int botPad = undoVisible ? dp(50) : (focusMode ? dp(20) : dp(10));
         if (contentLayout.getPaddingLeft() != dp(2) || contentLayout.getPaddingTop() != topPad
@@ -3339,13 +3618,15 @@ Preferences.init(context);
                 lastSidebarW = 0;
             }
             if (sidebarScroll != null) sidebarScroll.setVisibility(View.GONE);
-            if (sidebarDivider != null) sidebarDivider.setVisibility(View.GONE);
             if (mFocusToggleBtn != null) mFocusToggleBtn.setVisibility(View.GONE);
             if (mFocusMiniPill != null) mFocusMiniPill.setVisibility(View.GONE);
+            if (mFocusTopFade != null) mFocusTopFade.setVisibility(View.GONE);
+            updateFocusPillTouchDelegates();
             if (mHeaderView != null) {
                 ViewGroup.LayoutParams hlp = mHeaderView.getLayoutParams();
                 if (hlp != null) { hlp.height = WRAP_CONTENT; mHeaderView.setLayoutParams(hlp); }
                 mHeaderView.setAlpha(1f);
+                mHeaderView.setVisibility(View.GONE);
             }
             if (mBottomBar != null) {
                 ViewGroup.LayoutParams blp = mBottomBar.getLayoutParams();
@@ -3353,7 +3634,7 @@ Preferences.init(context);
                 mBottomBar.setAlpha(1f);
                 mBottomBar.setVisibility(View.VISIBLE);
             }
-            if (mBottomDivider != null) mBottomDivider.setVisibility(View.VISIBLE);
+            updateBottomDividerVisibility();
             applyContentStagePadding(ensureScaleTokens());
             applyFirstCardSafeZone(ensureScaleTokens());
             return;
@@ -3386,6 +3667,7 @@ Preferences.init(context);
         final int fullFooterH = cachedFooterFullHeight > 0 ? cachedFooterFullHeight : measureViewFullHeight(mBottomBar, dp(50));
 
         applyFocusControlsMetrics(tokens);
+        applyContentStagePadding(tokens);
         applyFirstCardSafeZone(tokens);
         if (mFocusToggleBtn != null && !enabled && animate) {
             mFocusToggleBtn.setAlpha(0f);
@@ -3404,6 +3686,7 @@ Preferences.init(context);
 
         if (enabled) {
             // Entering Focus Mode: hide labels upfront so width shrink stays clean
+            updateBottomDividerVisibility();
             applyTabMetrics(tokens);
         } else {
             // Exiting Focus Mode: prepare header & footer at height 0 before expanding
@@ -3413,8 +3696,7 @@ Preferences.init(context);
                 mHeaderView.setAlpha(0f);
                 mHeaderView.setVisibility(View.VISIBLE);
             }
-            if (mShimmerView != null) mShimmerView.setVisibility(View.VISIBLE);
-            if (mBottomDivider != null) mBottomDivider.setVisibility(View.VISIBLE);
+            updateBottomDividerVisibility();
             if (mBottomBar != null) {
                 ViewGroup.LayoutParams lp = mBottomBar.getLayoutParams();
                 if (lp != null) { lp.height = 0; mBottomBar.setLayoutParams(lp); }
@@ -3491,12 +3773,7 @@ Preferences.init(context);
             mHeaderView.setAlpha(1f);
             mHeaderView.setVisibility(enabled ? View.GONE : View.VISIBLE);
         }
-        if (mShimmerView != null) {
-            mShimmerView.setVisibility(enabled ? View.GONE : View.VISIBLE);
-        }
-        if (mBottomDivider != null) {
-            mBottomDivider.setVisibility(enabled ? View.GONE : View.VISIBLE);
-        }
+        updateBottomDividerVisibility();
         if (mBottomBar != null) {
             ViewGroup.LayoutParams lp = mBottomBar.getLayoutParams();
             if (lp != null) { lp.height = WRAP_CONTENT; mBottomBar.setLayoutParams(lp); }
@@ -3923,6 +4200,7 @@ Preferences.init(context);
         boolean isEnabled();
         LinearLayout getListLayout();
         int getDragGroup(View itemView);
+        int getTopInsetPx();
         boolean isInteractiveSubTarget(View itemRoot, float frameX, float frameY);
         void onShouldCancelOtherGestures();
         void onDragLifted(View itemView);
@@ -4083,18 +4361,21 @@ Preferences.init(context);
                 case MotionEvent.ACTION_MOVE: {
                     if (active) {
                         float dy = ev.getRawY() - downRawY;
+                        int topInset = Math.max(0, delegate.getTopInsetPx());
                         if (draggedView != null) {
-                            float maxTy = Math.max(0f, overlayHost.getHeight() - draggedView.getHeight());
-                            float nextTy = Math.max(0f, Math.min(maxTy, startProxyY + dy));
+                            float maxTy = Math.max((float) topInset, (float) (overlayHost.getHeight() - draggedView.getHeight()));
+                            float minTy = Math.min(startProxyY, (float) topInset);
+                            float nextTy = Math.max(minTy, Math.min(maxTy, startProxyY + dy));
                             draggedView.setTranslationY(nextTy);
                             updateDropPosition(nextTy + draggedView.getHeight() * 0.5f);
                         } else {
                             updateDropPosition(ev.getY());
                         }
                         int hostH = overlayHost.getHeight();
-                        int edgePx = Math.min(dp(26), Math.max(dp(14), hostH / 5));
+                        int availH = Math.max(1, hostH - topInset);
+                        int edgePx = Math.min(dp(26), Math.max(dp(14), availH / 5));
                         int nextDir = 0;
-                        if (ev.getY() < edgePx) {
+                        if (ev.getY() < topInset + edgePx) {
                             nextDir = -1;
                         } else if (ev.getY() > hostH - edgePx) {
                             nextDir = 1;
@@ -4473,6 +4754,11 @@ Preferences.init(context);
                         }
 
                         @Override
+                        public int getTopInsetPx() {
+                            return 0;
+                        }
+
+                        @Override
                         public boolean isInteractiveSubTarget(View itemRoot, float frameX, float frameY) {
                             return false;
                         }
@@ -4536,6 +4822,11 @@ Preferences.init(context);
                                 return ITEM_DRAG_GROUP_FIXED;
                             }
                             return meta.dragGroup;
+                        }
+
+                        @Override
+                        public int getTopInsetPx() {
+                            return computeFocusTopInsetPx();
                         }
 
                         @Override
@@ -4780,7 +5071,7 @@ Preferences.init(context);
         row.setClickable(true);
         row.setFocusable(true);
         row.setBackground(ModxTheme.withInteractiveRipple(
-                getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                getContext, ModxTheme.cardInteractiveSurface(getContext, ModxTheme.LINE),
                 ModxTheme.withAlpha(COLOR_ACCENT, 0x1F), ModxTheme.RADIUS_DP));
 
         LinearLayout textCol = new LinearLayout(getContext);
@@ -5455,7 +5746,7 @@ private int getLoginChromeHeightPx(int menuWidthPx) {
             ? (menuFrame.getPaddingTop() + menuFrame.getPaddingBottom())
             : dp(BORDER_DP * 2);
     int dividerH = 0;
-    if (mBottomDivider != null && mBottomDivider.getVisibility() != View.GONE) {
+    if (updateBottomDividerVisibility() == View.VISIBLE && mBottomDivider != null) {
         dividerH = mBottomDivider.getHeight() > 0 ? mBottomDivider.getHeight() : dp(1);
     }
     int barH = 0;
@@ -5587,6 +5878,7 @@ private void resetWindowSizeToDefault() {
     lp.width = targetW;
     lp.height = targetH;
     menuFrame.setLayoutParams(lp);
+    updateBottomDividerVisibility();
     applyResponsiveScale(targetW, targetH);
     keepInsideScreen();
     if (mWindowManager != null && rootFrame != null && vmParams != null) {
@@ -5808,6 +6100,7 @@ private void forceLogoutToLogin(final String reason) {
             activeSessionDeviceId = "";
             isLoggedIn = false;
             setFocusModeEnabled(false, false);
+            updateBottomDividerVisibility();
             updateHeaderWaveState();
             setTeleportPadVisible(false);
             showLoginScreen(reason);
@@ -5835,7 +6128,6 @@ private void showLoginScreen(final String forcedLogoutReason) {
     lastLoginAppliedScale = -1f;
 
     if (mHeaderView  != null) mHeaderView.setVisibility(View.GONE);
-    if (mShimmerView != null) mShimmerView.setVisibility(View.GONE);
     if (sidebarFrame != null) {
         sidebarFrame.setVisibility(View.GONE);
         ViewGroup.LayoutParams slp = sidebarFrame.getLayoutParams();
@@ -5846,16 +6138,17 @@ private void showLoginScreen(final String forcedLogoutReason) {
         lastSidebarW = 0;
     }
     if (sidebarScroll != null) sidebarScroll.setVisibility(View.GONE);
-    if (sidebarDivider != null) sidebarDivider.setVisibility(View.GONE);
     if (mFocusToggleBtn != null) mFocusToggleBtn.setVisibility(View.GONE);
     if (mFocusMiniPill != null) mFocusMiniPill.setVisibility(View.GONE);
-    if (mBottomDivider != null) mBottomDivider.setVisibility(View.VISIBLE);
+    if (mFocusTopFade != null) mFocusTopFade.setVisibility(View.GONE);
+    updateFocusPillTouchDelegates();
     if (mBottomBar != null) {
         ViewGroup.LayoutParams blp = mBottomBar.getLayoutParams();
         if (blp != null) { blp.height = WRAP_CONTENT; mBottomBar.setLayoutParams(blp); }
         mBottomBar.setAlpha(1f);
         mBottomBar.setVisibility(View.VISIBLE);
     }
+    updateBottomDividerVisibility();
 
     applyContentStagePadding(ensureScaleTokens());
     contentLayout.removeAllViews();
@@ -5904,7 +6197,6 @@ private void showLoginScreen(final String forcedLogoutReason) {
             }
 
             if (mHeaderView  != null) mHeaderView.setVisibility(View.VISIBLE);
-            if (mShimmerView != null) mShimmerView.setVisibility(View.VISIBLE);
             if (sidebarFrame != null) {
                 ModxTheme.MenuScaleTokens tokens = ensureScaleTokens();
                 int targetW = effectiveSidebarWidthPx(tokens);
@@ -5917,7 +6209,7 @@ private void showLoginScreen(final String forcedLogoutReason) {
                 sidebarFrame.setVisibility(View.VISIBLE);
             }
             if (sidebarScroll != null) sidebarScroll.setVisibility(View.VISIBLE);
-            if (sidebarDivider != null) sidebarDivider.setVisibility(View.VISIBLE);
+            updateBottomDividerVisibility();
 
             if (contentScrollView instanceof SlimScrollView) {
                 ((SlimScrollView) contentScrollView).setOnUserVerticalScrollListener(null);
@@ -6428,6 +6720,16 @@ private void setWindowFocusable(boolean focusable) {
         if (mFocusMiniPill != null) {
             mFocusMiniPill.animate().cancel();
         }
+        if (mFocusTopFade != null) {
+            mFocusTopFade.setVisibility(View.GONE);
+        }
+        if (mFocusPillTouchDelegate != null) {
+            mFocusPillTouchDelegate.clear();
+            mFocusPillTouchDelegate = null;
+        }
+        if (contentStage != null) {
+            contentStage.setTouchDelegate(null);
+        }
         if (contentLayout != null) {
             contentLayout.animate().cancel();
         }
@@ -6660,7 +6962,7 @@ private void setWindowFocusable(boolean focusable) {
         row.setLayoutParams(rowLp(6, 4, 6, 4));
         row.setPadding(dp(12), dp(12), dp(12), dp(12));
         row.setBackground(ModxTheme.withInteractiveRipple(
-                getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                getContext, ModxTheme.cardInteractiveSurface(getContext, ModxTheme.LINE),
                 ModxTheme.withAlpha(ModxTheme.FG, 0x1A), ModxTheme.RADIUS_DP));
         addPressAnim(row);
 
@@ -6892,17 +7194,27 @@ private void setWindowFocusable(boolean focusable) {
         card.setLayoutParams(rowLp(6, 4, 6, 4));
 
         boolean initial = Preferences.readInitialBool(featName, featNum, swiOn);
+        int initStroke = initial ? ModxTheme.accentLine(ToggleON) : ModxTheme.LINE;
         final GradientDrawable rowBg = ModxTheme.roundRect(
                 getContext,
                 ModxTheme.CARD,
-                initial ? ModxTheme.accentLine(ToggleON) : ModxTheme.LINE,
+                initStroke,
+                1f,
+                ModxTheme.RADIUS_DP);
+        final GradientDrawable pressedBg = ModxTheme.roundRect(
+                getContext,
+                ModxTheme.CARD_HOVER,
+                initStroke,
                 1f,
                 ModxTheme.RADIUS_DP);
         if (hasDetail) {
             card.setBackground(rowBg);
         } else {
             card.setBackground(ModxTheme.withInteractiveRipple(
-                    getContext, rowBg, ModxTheme.withAlpha(COLOR_ACCENT, 0x1F), ModxTheme.RADIUS_DP));
+                    getContext,
+                    ModxTheme.cardToggleRowBg(getContext, rowBg, pressedBg),
+                    ModxTheme.withAlpha(COLOR_ACCENT, 0x1F),
+                    ModxTheme.RADIUS_DP));
         }
 
         final LinearLayout topRow;
@@ -6916,7 +7228,7 @@ private void setWindowFocusable(boolean focusable) {
             topRow.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
             topRow.setBackground(ModxTheme.withInteractiveRipple(
                     getContext,
-                    ModxTheme.roundRect(getContext, Color.TRANSPARENT, 0, 0f, ModxTheme.RADIUS_DP),
+                    ModxTheme.transparentPressedCardBg(getContext),
                     ModxTheme.withAlpha(COLOR_ACCENT, 0x1F),
                     ModxTheme.RADIUS_DP));
         } else {
@@ -6965,6 +7277,7 @@ private void setWindowFocusable(boolean focusable) {
         holder.featName   = featName;
         holder.toggle     = toggle;
         holder.rowBg      = rowBg;
+        holder.pressedBg  = pressedBg;
         holder.state      = new boolean[]{ initial };
         holder.defaultVal = swiOn;
         mToggles.put(featNum, holder);
@@ -6973,9 +7286,11 @@ private void setWindowFocusable(boolean focusable) {
             @Override
             public void onChanged(boolean bool) {
                 holder.state[0] = bool;
+                int targetStroke = bool ? ModxTheme.accentLine(ToggleON) : ModxTheme.LINE;
                 animateStroke(rowBg,
                         bool ? ModxTheme.LINE : ModxTheme.accentLine(ToggleON),
-                        bool ? ModxTheme.accentLine(ToggleON) : ModxTheme.LINE);
+                        targetStroke);
+                pressedBg.setStroke(Math.max(1, dp(1)), targetStroke);
 
                 if (!isProgrammaticUpdate()) {
                     onUserEditedWhileUndoPending();
@@ -7119,7 +7434,7 @@ private void setWindowFocusable(boolean focusable) {
         seekBar.setMax(max);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) seekBar.setMin(min);
         SeekTrackDrawable trackDrawable = new SeekTrackDrawable(
-                dpf(4f), COLOR_TRACK, COLOR_ACCENT, COLOR_ACCENT_3);
+                dpf(4f), COLOR_SLIDER_TRACK, COLOR_ACCENT, COLOR_ACCENT_3);
         seekBar.setProgressDrawable(trackDrawable);
 
         GradientDrawable thumbCore = makeSeekThumbDrawable();
@@ -7334,7 +7649,7 @@ private void setWindowFocusable(boolean focusable) {
         row.setClickable(true);
         row.setFocusable(true);
         row.setBackground(ModxTheme.withInteractiveRipple(
-                getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                getContext, ModxTheme.cardInteractiveSurface(getContext, ModxTheme.LINE),
                 ModxTheme.withAlpha(COLOR_ACCENT, 0x1F), ModxTheme.RADIUS_DP));
 
         LinearLayout textCol = new LinearLayout(getContext);
@@ -7414,7 +7729,7 @@ private void setWindowFocusable(boolean focusable) {
         row.setClickable(true);
         row.setFocusable(true);
         row.setBackground(ModxTheme.withInteractiveRipple(
-                getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                getContext, ModxTheme.cardInteractiveSurface(getContext, ModxTheme.LINE),
                 ModxTheme.withAlpha(COLOR_ACCENT, 0x1F), ModxTheme.RADIUS_DP));
 
         LinearLayout textCol = new LinearLayout(getContext);
@@ -7517,7 +7832,7 @@ private void setWindowFocusable(boolean focusable) {
         } else {
             button.setBackground(ModxTheme.withInteractiveRipple(
                     getContext,
-                    ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                    ModxTheme.cardInteractiveSurface(getContext, ModxTheme.LINE),
                     ModxTheme.withAlpha(ModxTheme.FG, 0x1A), ModxTheme.RADIUS_DP));
             button.setText(Html.fromHtml(name + "  <font color='" + hex(ModxTheme.SUBTLE) + "'><b>OFF</b></font>"));
         }
@@ -7653,7 +7968,7 @@ private void setWindowFocusable(boolean focusable) {
                     getContext, bg, ModxTheme.withAlpha(COLOR_ACCENT, 0x24), ModxTheme.RADIUS_DP));
         } else {
             h.row.setBackground(ModxTheme.withInteractiveRipple(
-                    getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                    getContext, ModxTheme.cardInteractiveSurface(getContext, ModxTheme.LINE),
                     ModxTheme.withAlpha(ModxTheme.FG, 0x1A), ModxTheme.RADIUS_DP));
         }
         if (h.checkCircle != null) {
@@ -7823,7 +8138,7 @@ private void setWindowFocusable(boolean focusable) {
             row.setClickable(true);
             row.setFocusable(true);
             row.setBackground(ModxTheme.withInteractiveRipple(
-                    getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                    getContext, ModxTheme.cardInteractiveSurface(getContext, ModxTheme.LINE),
                     ModxTheme.withAlpha(ModxTheme.FG, 0x1A), ModxTheme.RADIUS_DP));
             addPressAnim(row);
 
@@ -7869,7 +8184,7 @@ private void setWindowFocusable(boolean focusable) {
                 public void run() {
                     if (row.getParent() != null) {
                         row.setBackground(ModxTheme.withInteractiveRipple(
-                                getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                                getContext, ModxTheme.cardInteractiveSurface(getContext, ModxTheme.LINE),
                                 ModxTheme.withAlpha(ModxTheme.FG, 0x1A), ModxTheme.RADIUS_DP));
                         titleView.setText(finalfeatName);
                         titleView.setTextColor(ModxTheme.FG);
@@ -8246,12 +8561,16 @@ private void setWindowFocusable(boolean focusable) {
             } else {
                 h.toggle.setChecked(newState, false);
             }
+            int targetStroke = newState ? ModxTheme.accentLine(ToggleON) : ModxTheme.LINE;
             if (prev != newState) {
                 animateStroke(h.rowBg,
                         newState ? ModxTheme.LINE : ModxTheme.accentLine(ToggleON),
-                        newState ? ModxTheme.accentLine(ToggleON) : ModxTheme.LINE);
+                        targetStroke);
             } else if (h.rowBg != null) {
-                h.rowBg.setStroke(dp(1), newState ? ModxTheme.accentLine(ToggleON) : ModxTheme.LINE);
+                h.rowBg.setStroke(Math.max(1, dp(1)), targetStroke);
+            }
+            if (h.pressedBg != null) {
+                h.pressedBg.setStroke(Math.max(1, dp(1)), targetStroke);
             }
             if (featNum == 710) setTeleportPadVisible(newState);
         } finally {
@@ -8297,12 +8616,16 @@ private void setWindowFocusable(boolean focusable) {
         try {
             boolean prev = h.checkBox.isChecked();
             h.checkBox.setChecked(newState);
+            int targetStroke = newState ? ModxTheme.accentLine(CheckBoxColor) : ModxTheme.LINE;
             if (prev != newState) {
                 animateStroke(h.bg,
                         newState ? ModxTheme.LINE : ModxTheme.accentLine(CheckBoxColor),
-                        newState ? ModxTheme.accentLine(CheckBoxColor) : ModxTheme.LINE);
+                        targetStroke);
             } else if (h.bg != null) {
-                h.bg.setStroke(dp(1), newState ? ModxTheme.accentLine(CheckBoxColor) : ModxTheme.LINE);
+                h.bg.setStroke(Math.max(1, dp(1)), targetStroke);
+            }
+            if (h.pressedBg != null) {
+                h.pressedBg.setStroke(Math.max(1, dp(1)), targetStroke);
             }
         } finally {
             endProgrammaticUpdate();
@@ -8492,7 +8815,7 @@ private void setWindowFocusable(boolean focusable) {
         final LinearLayout spinnerRow = new LinearLayout(ctx);
         spinnerRow.setTag("first_card_safe_target");
         spinnerRow.setBackground(ModxTheme.withInteractiveRipple(
-                ctx, ModxTheme.cardSurface(ctx, ModxTheme.LINE),
+                ctx, ModxTheme.cardInteractiveSurface(ctx, ModxTheme.LINE),
                 ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
         spinnerRow.setGravity(Gravity.CENTER_VERTICAL);
         spinnerRow.setMinimumHeight(dp(48));
@@ -8613,7 +8936,7 @@ private void setWindowFocusable(boolean focusable) {
         button.setIncludeFontPadding(false);
         button.setPadding(dp(12), dp(12), dp(12), dp(12));
         button.setBackground(ModxTheme.withInteractiveRipple(
-                getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                getContext, ModxTheme.cardInteractiveSurface(getContext, ModxTheme.LINE),
                 ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
         button.setTextColor(ModxTheme.FG);
         flatten(button);
@@ -8686,7 +9009,7 @@ private void setWindowFocusable(boolean focusable) {
         button.setIncludeFontPadding(false);
         button.setPadding(dp(12), dp(12), dp(12), dp(12));
         button.setBackground(ModxTheme.withInteractiveRipple(
-                getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                getContext, ModxTheme.cardInteractiveSurface(getContext, ModxTheme.LINE),
                 ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
         button.setTextColor(ModxTheme.FG);
         flatten(button);
@@ -8761,7 +9084,7 @@ private void setWindowFocusable(boolean focusable) {
         button.setIncludeFontPadding(false);
         button.setPadding(dp(12), dp(12), dp(12), dp(12));
         button.setBackground(ModxTheme.withInteractiveRipple(
-                getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                getContext, ModxTheme.cardInteractiveSurface(getContext, ModxTheme.LINE),
                 ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
         button.setTextColor(ModxTheme.FG);
         flatten(button);
@@ -8800,13 +9123,19 @@ private void setWindowFocusable(boolean focusable) {
     private void CheckBox(LinearLayout linLayout, final int featNum, final String featName, boolean switchedOn) {
         final CheckBox checkBox = new CheckBox(getContext);
         boolean initial = Preferences.readInitialBool(featName, featNum, switchedOn);
+        int initStroke = initial ? ModxTheme.accentLine(CheckBoxColor) : ModxTheme.LINE;
         final GradientDrawable cbBg = ModxTheme.roundRect(
                 getContext, ModxTheme.CARD,
-                initial ? ModxTheme.accentLine(CheckBoxColor) : ModxTheme.LINE,
+                initStroke,
+                1f, ModxTheme.RADIUS_DP);
+        final GradientDrawable pressedBg = ModxTheme.roundRect(
+                getContext, ModxTheme.CARD_HOVER,
+                initStroke,
                 1f, ModxTheme.RADIUS_DP);
         checkBox.setLayoutParams(rowLp(6, 4, 6, 4));
         checkBox.setBackground(ModxTheme.withInteractiveRipple(
-                getContext, cbBg, ModxTheme.withAlpha(CheckBoxColor, 0x1A), ModxTheme.RADIUS_DP));
+                getContext, ModxTheme.cardToggleRowBg(getContext, cbBg, pressedBg),
+                ModxTheme.withAlpha(CheckBoxColor, 0x1A), ModxTheme.RADIUS_DP));
         checkBox.setText(featName);
         checkBox.setTextColor(ModxTheme.FG);
         checkBox.setTypeface(fontBold);
@@ -8825,9 +9154,11 @@ private void setWindowFocusable(boolean focusable) {
                     if (!isProgrammaticUpdate()) {
                         ModxTheme.hapticTap(bv);
                         onUserEditedWhileUndoPending();
+                        int targetStroke = isChecked ? ModxTheme.accentLine(CheckBoxColor) : ModxTheme.LINE;
                         animateStroke(cbBg,
                                 isChecked ? ModxTheme.LINE : ModxTheme.accentLine(CheckBoxColor),
-                                isChecked ? ModxTheme.accentLine(CheckBoxColor) : ModxTheme.LINE);
+                                targetStroke);
+                        pressedBg.setStroke(Math.max(1, dp(1)), targetStroke);
                         Preferences.changeFeatureBool(featName, featNum, isChecked);
                     }
                 }
@@ -8837,6 +9168,7 @@ private void setWindowFocusable(boolean focusable) {
         cbHolder.featName   = featName;
         cbHolder.checkBox   = checkBox;
         cbHolder.bg         = cbBg;
+        cbHolder.pressedBg  = pressedBg;
         cbHolder.defaultVal = switchedOn;
         mCheckBoxes.put(featNum, cbHolder);
         linLayout.addView(checkBox);
@@ -8974,7 +9306,7 @@ private void setWindowFocusable(boolean focusable) {
         headRow.setMinimumHeight(dp(48));
         headRow.setPadding(dp(12), dp(12), dp(12), dp(12));
         headRow.setBackground(ModxTheme.withInteractiveRipple(
-                getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                getContext, ModxTheme.cardInteractiveSurface(getContext, ModxTheme.LINE),
                 ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
 
         final TextView textView = new TextView(getContext);
@@ -9462,8 +9794,14 @@ private void setWindowFocusable(boolean focusable) {
             if (th.toggle != null) {
                 th.toggle.setColors(COLOR_ACCENT, COLOR_ACCENT_3, COLOR_TRACK);
             }
-            if (th.rowBg != null && th.state != null && th.state[0]) {
-                th.rowBg.setStroke(Math.max(1, dp(1)), ModxTheme.accentLine(ToggleON));
+            if (th.state != null && th.state[0]) {
+                int stroke = ModxTheme.accentLine(ToggleON);
+                if (th.rowBg != null) {
+                    th.rowBg.setStroke(Math.max(1, dp(1)), stroke);
+                }
+                if (th.pressedBg != null) {
+                    th.pressedBg.setStroke(Math.max(1, dp(1)), stroke);
+                }
             }
         }
         for (ModeButtonHolder mh : mModeButtons.values()) {
@@ -9519,8 +9857,14 @@ private void setWindowFocusable(boolean focusable) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     cb.checkBox.setButtonTintList(ColorStateList.valueOf(CheckBoxColor));
                 }
-                if (cb.bg != null && cb.checkBox.isChecked()) {
-                    cb.bg.setStroke(Math.max(1, dp(1)), ModxTheme.accentLine(CheckBoxColor));
+                if (cb.checkBox.isChecked()) {
+                    int stroke = ModxTheme.accentLine(CheckBoxColor);
+                    if (cb.bg != null) {
+                        cb.bg.setStroke(Math.max(1, dp(1)), stroke);
+                    }
+                    if (cb.pressedBg != null) {
+                        cb.pressedBg.setStroke(Math.max(1, dp(1)), stroke);
+                    }
                 }
             }
         }
@@ -9555,7 +9899,7 @@ private void setWindowFocusable(boolean focusable) {
         for (CollapseHolder ch : mCollapseHolders) {
             if (ch.headRow != null) {
                 ch.headRow.setBackground(ModxTheme.withInteractiveRipple(
-                        getContext, ModxTheme.cardSurface(getContext, ModxTheme.LINE),
+                        getContext, ModxTheme.cardInteractiveSurface(getContext, ModxTheme.LINE),
                         ModxTheme.withAlpha(COLOR_ACCENT, 0x1A), ModxTheme.RADIUS_DP));
             }
             if (ch.titleView != null) {
@@ -9677,17 +10021,35 @@ private void setWindowFocusable(boolean focusable) {
                     : ((tokens.sizeClass == ModxTheme.SizeClass.COMPACT) ? dp(14) : dp(16));
             mFocusToggleIcon.setImageDrawable(ModxIcons.maximize2(COLOR_ACCENT, toggleIconPx));
         }
+        if (mFocusMiniPill != null) {
+            mFocusMiniPill.setBackground(
+                    ModxTheme.pillBadgeBg(getContext, ModxTheme.SURFACE, ModxTheme.CONTROL_STROKE));
+        }
+        if (mFocusPillGripIcon != null) {
+            mFocusPillGripIcon.setImageDrawable(ModxIcons.gripVertical(ModxTheme.MUTED, dp(18)));
+        }
         if (mFocusPillExitBtn != null) {
             mFocusPillExitBtn.setBackground(ModxTheme.withInteractiveRipple(
                     getContext, ModxTheme.transparentBg(), ModxTheme.withAlpha(COLOR_ACCENT, 0x26), ModxTheme.RADIUS_DP));
         }
         if (mFocusPillExitIcon != null) {
-            int pillIconPx = (tokens.sizeClass == ModxTheme.SizeClass.MINI) ? dp(12)
-                    : ((tokens.sizeClass == ModxTheme.SizeClass.COMPACT) ? dp(13) : dp(14));
-            mFocusPillExitIcon.setImageDrawable(ModxIcons.minimize2(COLOR_ACCENT, pillIconPx));
+            mFocusPillExitIcon.setImageDrawable(ModxIcons.minimize2(COLOR_ACCENT, dp(18)));
+        }
+        if (mFocusPillMinIcon != null) {
+            mFocusPillMinIcon.setImageDrawable(ModxIcons.minimize(ModxTheme.MUTED, dp(18)));
+        }
+        if (mFocusPillHideBtn != null) {
+            mFocusPillHideBtn.setBackground(ModxTheme.withInteractiveRipple(
+                    getContext, ModxTheme.transparentBg(), ModxTheme.withAlpha(ModxTheme.DANGER, 0x26), ModxTheme.RADIUS_DP));
+        }
+        if (mFocusPillHideIcon != null) {
+            mFocusPillHideIcon.setImageDrawable(ModxIcons.power(ModxTheme.MUTED, dp(18)));
         }
         if (mFocusPillHideProgress != null) {
             mFocusPillHideProgress.setBackgroundColor(COLOR_ACCENT);
+        }
+        if (mFocusTopFade != null) {
+            mFocusTopFade.invalidate();
         }
         if (mUndoBtnView != null) {
             mUndoBtnView.setTextColor(COLOR_ACCENT);
@@ -9702,7 +10064,7 @@ private void setWindowFocusable(boolean focusable) {
         }
 
         if (mMinimizeBtn != null) {
-            mMinimizeBtn.setBackground(ModxTheme.cardButtonBg(getContext));
+            mMinimizeBtn.setBackground(ModxTheme.secondaryButtonBg(getContext));
         }
         if (mMinimizeLabel != null) {
             mMinimizeLabel.setTextColor(ModxTheme.FG);
@@ -9712,7 +10074,7 @@ private void setWindowFocusable(boolean focusable) {
         }
 
         if (mHideBtn != null) {
-            mHideBtn.setBackground(ModxTheme.cardButtonBg(getContext));
+            mHideBtn.setBackground(ModxTheme.secondaryButtonBg(getContext));
         }
         if (mHideLabel != null) {
             mHideLabel.setTextColor(ModxTheme.FG);

@@ -76,8 +76,8 @@ public class LoginHelper {
     }
 
     // ================= MODX LAB WEBSITE DARK THEME =================
-    private static final int COLOR_FIELD_BG    = ModxTheme.INPUT;
-    private static final int COLOR_FIELD_BORD  = ModxTheme.LINE_STRONG;
+    private static final int COLOR_FIELD_BG    = ModxTheme.CONTROL;
+    private static final int COLOR_FIELD_BORD  = ModxTheme.CONTROL_STROKE;
     private static final int COLOR_ACCENT      = ModxTheme.ACCENT;
     private static final int COLOR_ACCENT_HI   = ModxTheme.ACCENT_HOVER;
     private static final int COLOR_ACCENT_DEEP = ModxTheme.ACCENT_PRESS;
@@ -725,7 +725,7 @@ public class LoginHelper {
         LinearLayout box = new LinearLayout(ctx);
         box.setOrientation(LinearLayout.HORIZONTAL);
         box.setGravity(Gravity.CENTER_VERTICAL);
-        box.setBackground(ModxTheme.roundRect(ctx, 0xFF303030, 0xFF404040, 1f, ModxTheme.RADIUS_DP));
+        box.setBackground(ModxTheme.roundRect(ctx, COLOR_FIELD_BG, COLOR_FIELD_BORD, 1f, ModxTheme.RADIUS_DP));
         box.setClipToPadding(false);
         return box;
     }
@@ -1980,8 +1980,8 @@ public class LoginHelper {
         boolean isDangerTone = (mainColor == COLOR_DANGER);
         iconHolder.setBackground(ModxTheme.pillBadgeBg(
                 ctx,
-                isDangerTone ? ModxTheme.RAISED : ModxTheme.badgeBg(mainColor),
-                isDangerTone ? ModxTheme.LINE_STRONG : ModxTheme.badgeBorder(mainColor)));
+                isDangerTone ? ModxTheme.CONTROL : ModxTheme.badgeBg(mainColor),
+                isDangerTone ? ModxTheme.CONTROL_STROKE : ModxTheme.badgeBorder(mainColor)));
 
         ImageView icon = new ImageView(ctx);
         icon.setImageDrawable(glyph);
@@ -2258,8 +2258,8 @@ public class LoginHelper {
 
             boxBg = new GradientDrawable();
             boxBg.setCornerRadius(dp(4));
-            boxBg.setStroke(dp(1.5f), initial ? COLOR_ACCENT : COLOR_FIELD_BORD);
-            boxBg.setColor(initial ? withAlpha(COLOR_ACCENT, 0x22) : ModxTheme.INPUT);
+            boxBg.setStroke(dp(initial ? 1.5f : 1f), initial ? COLOR_ACCENT : COLOR_FIELD_BORD);
+            boxBg.setColor(initial ? withAlpha(COLOR_ACCENT, 0x22) : COLOR_FIELD_BG);
             box.setBackground(boxBg);
 
             checkmark = new View(ctx);
@@ -2318,8 +2318,8 @@ public class LoginHelper {
         private void toggle() {
             checked = !checked;
             checkmark.setVisibility(checked ? View.VISIBLE : View.GONE);
-            boxBg.setStroke(dp(1.5f), checked ? COLOR_ACCENT : COLOR_FIELD_BORD);
-            boxBg.setColor(checked ? withAlpha(COLOR_ACCENT, 0x22) : ModxTheme.INPUT);
+            boxBg.setStroke(dp(checked ? 1.5f : 1f), checked ? COLOR_ACCENT : COLOR_FIELD_BORD);
+            boxBg.setColor(checked ? withAlpha(COLOR_ACCENT, 0x22) : COLOR_FIELD_BG);
             labelView.setTextColor(checked ? COLOR_TEXT : COLOR_TEXT_MUTED);
             if (listener != null) listener.onChanged(checked);
         }

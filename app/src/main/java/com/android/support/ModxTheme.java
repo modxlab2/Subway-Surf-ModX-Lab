@@ -32,6 +32,10 @@ public final class ModxTheme {
     public static final int CARD_HOVER      = 0xFF292927; // #292927
     public static final int RAISED          = 0xFF2F2F2D; // #2F2F2D
     public static final int INPUT           = 0xFF1A1A19; // #1A1A19
+    public static final int CONTROL         = 0xFF303030; // control / input background
+    public static final int CONTROL_HOVER   = 0xFF383838; // pressed state
+    public static final int CONTROL_STROKE  = 0xFF404040; // 1dp stroke
+    public static final int CONTROL_STROKE_HOVER = 0xFF4D4D4D;
 
     public static final int LINE            = 0xFF31302E; // #31302E
     public static final int LINE_STRONG     = 0xFF464541; // #464541
@@ -295,11 +299,15 @@ public final class ModxTheme {
      * Standard card surface with 1dp neutral border + subtle top highlight (rgba 255,255,255,0.04).
      */
     public static Drawable cardSurface(Context ctx, int strokeColor) {
+        return cardSurfaceWithFill(ctx, CARD, strokeColor);
+    }
+
+    public static Drawable cardSurfaceWithFill(Context ctx, int fillColor, int strokeColor) {
         float r = dpf(ctx, RADIUS_DP);
         int borderPx = Math.max(1, dp(ctx, 1f));
 
         GradientDrawable base = new GradientDrawable();
-        base.setColor(CARD);
+        base.setColor(fillColor);
         base.setCornerRadius(r);
         base.setStroke(borderPx, strokeColor);
 
@@ -311,6 +319,31 @@ public final class ModxTheme {
         LayerDrawable ld = new LayerDrawable(new Drawable[]{base, topHighlight});
         ld.setLayerInset(1, borderPx, borderPx, borderPx, borderPx);
         return ld;
+    }
+
+    public static Drawable cardInteractiveSurface(Context ctx, int strokeColor) {
+        StateListDrawable states = new StateListDrawable();
+        states.addState(
+                new int[]{android.R.attr.state_pressed},
+                cardSurfaceWithFill(ctx, CARD_HOVER, strokeColor));
+        states.addState(new int[0], cardSurfaceWithFill(ctx, CARD, strokeColor));
+        return states;
+    }
+
+    public static Drawable cardToggleRowBg(Context ctx, Drawable normalBg, Drawable pressedBg) {
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[]{android.R.attr.state_pressed}, pressedBg);
+        states.addState(new int[0], normalBg);
+        return states;
+    }
+
+    public static Drawable transparentPressedCardBg(Context ctx) {
+        StateListDrawable states = new StateListDrawable();
+        states.addState(
+                new int[]{android.R.attr.state_pressed},
+                roundRect(ctx, CARD_HOVER, 0, 0f, RADIUS_DP));
+        states.addState(new int[0], transparentBg());
+        return states;
     }
 
     /**
@@ -372,13 +405,13 @@ public final class ModxTheme {
         int b = Math.max(1, dp(ctx, 1f));
 
         GradientDrawable normal = new GradientDrawable();
-        normal.setColor(RAISED);
-        normal.setStroke(b, LINE_STRONG);
+        normal.setColor(CONTROL);
+        normal.setStroke(b, CONTROL_STROKE);
         normal.setCornerRadius(r);
 
         GradientDrawable pressed = new GradientDrawable();
-        pressed.setColor(CARD_HOVER);
-        pressed.setStroke(b, LINE_HOVER);
+        pressed.setColor(CONTROL_HOVER);
+        pressed.setStroke(b, CONTROL_STROKE_HOVER);
         pressed.setCornerRadius(r);
 
         StateListDrawable states = new StateListDrawable();
